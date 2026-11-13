@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, 2016 SAP SE. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,14 +26,15 @@
 #ifndef CPU_PPC_TEMPLATETABLE_PPC_HPP
 #define CPU_PPC_TEMPLATETABLE_PPC_HPP
 
-  static void prepare_invoke(int byte_no, Register Rmethod, Register Rret_addr, Register Rindex, Register Rrecv, Register Rflags,
-                             Register Rscratch1, Register Rscratch2);
-  static void invokevfinal_helper(Register Rmethod, Register Rflags, Register Rscratch1, Register Rscratch2);
+  static void prepare_invoke(Register Rcache, Register Rret_addr, Register Rrecv, Register Rscratch);
+  static void invokevfinal_helper(Register Rcache, Register Rscratch1, Register Rscratch2, Register Rscratch3, Register Rscratch4);
   static void generate_vtable_call(Register Rrecv_klass, Register Rindex, Register Rret, Register Rtemp);
-  static void invokeinterface_object_method(Register Rrecv_klass, Register Rret, Register Rflags, Register Rindex, Register Rtemp, Register Rtemp2);
+  static void invokeinterface_object_method(Register Rrecv_klass, Register Rret, Register Rflags, Register Rcache, Register Rtemp, Register Rtemp2);
+
+  static void invoke_is_substitutable(Register aobj, Register bobj, Label& is_subst, Label& not_subst);
 
   // Branch_conditional which takes TemplateTable::Condition.
   static void branch_conditional(ConditionRegister crx, TemplateTable::Condition cc, Label& L, bool invert = false);
-  static void if_cmp_common(Register Rfirst, Register Rsecond, Register Rscratch1, Register Rscratch2, Condition cc, bool is_jint, bool cmp0);
+  static void if_cmp_common(Register Rfirst, Register Rsecond, Register Rscratch1, Register Rscratch2, Condition cc, bool is_jint, bool is_acmp = false);
 
 #endif // CPU_PPC_TEMPLATETABLE_PPC_HPP

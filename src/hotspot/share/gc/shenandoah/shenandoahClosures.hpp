@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2019, 2022, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,18 +24,112 @@
 #ifndef SHARE_GC_SHENANDOAH_SHENANDOAHCLOSURES_HPP
 #define SHARE_GC_SHENANDOAH_SHENANDOAHCLOSURES_HPP
 
+#include "gc/shared/stringdedup/stringDedup.hpp"
+#include "gc/shenandoah/shenandoahGenerationType.hpp"
+#include "gc/shenandoah/shenandoahTaskqueue.hpp"
 #include "memory/iterator.hpp"
-#include "oops/accessDecorators.hpp"
-#include "runtime/handshake.hpp"
+#include "runtime/javaThread.hpp"
 
 class BarrierSetNMethod;
 class ShenandoahBarrierSet;
 class ShenandoahHeap;
 class ShenandoahMarkingContext;
-class ShenandoahHeapRegionSet;
-class Thread;
+class ShenandoahReferenceProcessor;
+class SATBMarkQueueSet;
 
-class ShenandoahForwardedIsAliveClosure: public BoolObjectClosure {
+//
+// ========= Super
+//
+
+class ShenandoahSuperClosure : public MetadataVisitingOopIterateClosure {
+protected:
+  ShenandoahHeap* const _heap;
+
+public:
+  inline ShenandoahSuperClosure();
+  inline ShenandoahSuperClosure(ShenandoahReferenceProcessor* rp);
+  inline void do_nmethod(nmethod* nm);
+};
+
+//
+// ========= Marking
+//
+
+class ShenandoahFlushSATBHandshakeClosure : public HandshakeClosure {
+private:
+  SATBMarkQueueSet& _qset;
+public:
+  inline explicit ShenandoahFlushSATBHandshakeClosure(SATBMarkQueueSet& qset);
+  inline void do_thread(Thread* thread) override;
+};
+
+class ShenandoahMarkRefsSuperClosure : public ShenandoahSuperClosure {
+private:
+  ShenandoahObjToScanQueue* _queue;
+  ShenandoahObjToScanQueue* _old_queue;
+  ShenandoahMarkingContext* const _mark_context;
+  bool _weak;
+
+protected:
+  template <class T, ShenandoahGenerationType GENERATION, bool REDIRTY>
+  void work(T *p);
+
+public:
+  inline ShenandoahMarkRefsSuperClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp, ShenandoahObjToScanQueue* old_q);
+
+  bool is_weak() const {
+    return _weak;
+  }
+
+  void set_weak(bool weak) {
+    _weak = weak;
+  }
+
+  inline void do_cld(ClassLoaderData* cld) override;
+  inline void do_klass(Klass* k) override;
+
+  void do_nmethod(nmethod* nm) override {
+    assert(!is_weak(), "Can't handle weak marking of nmethods");
+    ShenandoahSuperClosure::do_nmethod(nm);
+  }
+};
+
+template <ShenandoahGenerationType GENERATION>
+class ShenandoahMarkRefsClosure : public ShenandoahMarkRefsSuperClosure {
+private:
+  template <class T>
+  ALWAYSINLINE
+  void do_oop_work(T* p) { work<T, GENERATION, false>(p); }
+
+public:
+  ShenandoahMarkRefsClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp, ShenandoahObjToScanQueue* old_q) :
+          ShenandoahMarkRefsSuperClosure(q, rp, old_q) {};
+
+  ALWAYSINLINE
+  void do_oop(narrowOop* p) override { do_oop_work(p); }
+
+  ALWAYSINLINE
+  void do_oop(oop* p) override { do_oop_work(p); }
+};
+
+class ShenandoahRedirtyCardsMarkClosure : public ShenandoahMarkRefsSuperClosure {
+private:
+  template <class T>
+  ALWAYSINLINE
+  void do_oop_work(T* p) { work<T, YOUNG, true>(p); }
+
+public:
+  ShenandoahRedirtyCardsMarkClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp)
+    : ShenandoahMarkRefsSuperClosure(q, rp, nullptr) {}
+
+  ALWAYSINLINE
+  void do_oop(narrowOop* p) override { do_oop_work(p); }
+
+  ALWAYSINLINE
+  void do_oop(oop* p) override { do_oop_work(p); }
+};
+
+class ShenandoahForwardedIsAliveClosure : public BoolObjectClosure {
 private:
   ShenandoahMarkingContext* const _mark_context;
 public:
@@ -43,7 +137,7 @@ public:
   inline bool do_object_b(oop obj);
 };
 
-class ShenandoahIsAliveClosure: public BoolObjectClosure {
+class ShenandoahIsAliveClosure : public BoolObjectClosure {
 private:
   ShenandoahMarkingContext* const _mark_context;
 public:
@@ -62,63 +156,40 @@ public:
 class ShenandoahKeepAliveClosure : public OopClosure {
 private:
   ShenandoahBarrierSet* const _bs;
-public:
-  inline ShenandoahKeepAliveClosure();
-  inline void do_oop(oop* p);
-  inline void do_oop(narrowOop* p);
-private:
   template <typename T>
   void do_oop_work(T* p);
+
+public:
+  inline ShenandoahKeepAliveClosure();
+  inline void do_oop(oop* p)       { do_oop_work(p); }
+  inline void do_oop(narrowOop* p) { do_oop_work(p); }
 };
 
-class ShenandoahUpdateRefsClosure: public OopClosure {
-private:
-  ShenandoahHeap* _heap;
-public:
-  inline ShenandoahUpdateRefsClosure();
-  inline void do_oop(oop* p);
-  inline void do_oop(narrowOop* p);
-private:
-  template <class T>
-  inline void do_oop_work(T* p);
-};
 
-template <DecoratorSet MO = MO_UNORDERED>
-class ShenandoahEvacuateUpdateMetadataClosure: public BasicOopIterateClosure {
-private:
-  ShenandoahHeap* const _heap;
-  Thread* const         _thread;
-public:
-  inline ShenandoahEvacuateUpdateMetadataClosure();
-  inline void do_oop(oop* p);
-  inline void do_oop(narrowOop* p);
+//
+// ========= Evacuating + Roots
+//
 
-private:
-  template <class T>
-  inline void do_oop_work(T* p);
-};
-
-// Context free version, cannot cache calling thread
-class ShenandoahEvacuateUpdateRootsClosure : public BasicOopIterateClosure {
-private:
-  ShenandoahHeap* const _heap;
+template <bool CONCURRENT, bool STABLE_THREAD>
+class ShenandoahEvacuateUpdateRootClosureBase : public ShenandoahSuperClosure {
+protected:
+  Thread* const _thread;
 public:
-  inline ShenandoahEvacuateUpdateRootsClosure();
+  inline ShenandoahEvacuateUpdateRootClosureBase() :
+    ShenandoahSuperClosure(),
+    _thread(STABLE_THREAD ? Thread::current() : nullptr) {}
+
   inline void do_oop(oop* p);
   inline void do_oop(narrowOop* p);
 protected:
-  template <typename T>
-  inline void do_oop_work(T* p, Thread* thr);
+  template <class T>
+  inline void do_oop_work(T* p);
 };
 
-class ShenandoahContextEvacuateUpdateRootsClosure : public ShenandoahEvacuateUpdateRootsClosure {
-private:
-  Thread* const _thread;
-public:
-  inline ShenandoahContextEvacuateUpdateRootsClosure();
-  inline void do_oop(oop* p);
-  inline void do_oop(narrowOop* p);
-};
+using ShenandoahEvacuateUpdateMetadataClosure     = ShenandoahEvacuateUpdateRootClosureBase<false, true>;
+using ShenandoahEvacuateUpdateRootsClosure        = ShenandoahEvacuateUpdateRootClosureBase<true, false>;
+using ShenandoahContextEvacuateUpdateRootsClosure = ShenandoahEvacuateUpdateRootClosureBase<true, true>;
+
 
 template <bool CONCURRENT, typename IsAlive, typename KeepAlive>
 class ShenandoahCleanUpdateWeakOopsClosure : public OopClosure {
@@ -132,13 +203,40 @@ public:
   inline void do_oop(narrowOop* p);
 };
 
-class ShenandoahCodeBlobAndDisarmClosure: public CodeBlobToOopClosure {
+//
+// ========= Update References
+//
+
+template <bool CONCURRENT>
+class ShenandoahUpdateRefsClosure : public ShenandoahSuperClosure {
 private:
-  BarrierSetNMethod* const _bs;
+  template<class T>
+  inline void work(T* p);
 
 public:
-  inline ShenandoahCodeBlobAndDisarmClosure(OopClosure* cl);
-  inline void do_code_blob(CodeBlob* cb);
+  virtual void do_oop(narrowOop* p) { work(p); }
+  virtual void do_oop(oop* p)       { work(p); }
+};
+
+class ShenandoahFlushSATB : public ThreadClosure {
+private:
+  SATBMarkQueueSet& _satb_qset;
+
+public:
+  explicit ShenandoahFlushSATB(SATBMarkQueueSet& satb_qset) : _satb_qset(satb_qset) {}
+
+  inline void do_thread(Thread* thread) override;
+};
+
+
+//
+// ========= Utilities
+//
+
+class ShenandoahNoOpClosure : public OopClosure {
+public:
+  inline void do_oop(oop* p)       { }
+  inline void do_oop(narrowOop* p) { }
 };
 
 #ifdef ASSERT
@@ -152,5 +250,17 @@ public:
   inline void do_oop(oop* p);
 };
 #endif // ASSERT
+
+class ShenandoahMultiThreadClosure : public ThreadClosure {
+  ThreadClosure& _cl1;
+  ThreadClosure& _cl2;
+public:
+  ShenandoahMultiThreadClosure(ThreadClosure& cl1, ThreadClosure& cl2) :
+    _cl1(cl1), _cl2(cl2) {}
+  inline void do_thread(Thread* thread) override {
+    _cl1.do_thread(thread);
+    _cl2.do_thread(thread);
+  }
+};
 
 #endif // SHARE_GC_SHENANDOAH_SHENANDOAHCLOSURES_HPP

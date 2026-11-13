@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,17 +27,21 @@
 
 #include "ci/ciClassList.hpp"
 #include "ci/ciObjectFactory.hpp"
-#include "ci/ciReplay.hpp"
 #include "classfile/vmClassMacros.hpp"
 #include "code/debugInfoRec.hpp"
 #include "code/dependencies.hpp"
 #include "code/exceptionHandlerTable.hpp"
+#include "compiler/cHeapStringHolder.hpp"
+#include "compiler/compiler_globals.hpp"
 #include "compiler/compilerThread.hpp"
+#include "oops/methodCounters.hpp"
 #include "oops/methodData.hpp"
-#include "runtime/thread.hpp"
+#include "runtime/javaThread.hpp"
 
 class CompileTask;
 class OopMapSet;
+class AOTCodeEntry;
+class AOTCodeReader;
 
 // ciEnv
 //
@@ -57,10 +61,11 @@ private:
   OopRecorder*     _oop_recorder;
   DebugInformationRecorder* _debug_info;
   Dependencies*    _dependencies;
-  const char*      _failure_reason;
+  CHeapStringHolder _failure_reason;
+  bool             _codecache_full;
   bool             _inc_decompile_count_on_failure;
-  int              _compilable;
   bool             _break_at_compile;
+  int              _compilable;
   int              _num_inlined_bytecodes;
   CompileTask*     _task;           // faster access to CompilerThread::task
   CompileLog*      _log;            // faster access to CompilerThread::log
@@ -79,7 +84,6 @@ private:
   bool  _jvmti_can_walk_any_space;
 
   // Cache DTrace flags
-  bool  _dtrace_extended_probes;
   bool  _dtrace_method_probes;
   bool  _dtrace_alloc_probes;
 
@@ -94,10 +98,6 @@ private:
   static ciInstanceKlass* _unloaded_ciinstance_klass;
   static ciObjArrayKlass* _unloaded_ciobjarrayklass;
 
-  static jobject _ArrayIndexOutOfBoundsException_handle;
-  static jobject _ArrayStoreException_handle;
-  static jobject _ClassCastException_handle;
-
   ciInstance* _NullPointerException_instance;
   ciInstance* _ArithmeticException_instance;
   ciInstance* _ArrayIndexOutOfBoundsException_instance;
@@ -108,7 +108,7 @@ private:
   ciInstance* _the_min_jint_string; // The Java string "-2147483648"
 
   // Look up a klass by name from a particular class loader (the accessor's).
-  // If require_local, result must be defined in that class loader, or NULL.
+  // If require_local, result must be defined in that class loader, or null.
   // If !require_local, a result from remote class loader may be reported,
   // if sufficient class loader constraints exist such that initiating
   // a class loading request from the given loader is bound to return
@@ -132,7 +132,7 @@ private:
                                    int pool_index, int cache_index,
                                    ciInstanceKlass* accessor);
   ciField*   get_field_by_index(ciInstanceKlass* loading_klass,
-                                int field_index);
+                                int field_index, Bytecodes::Code bc);
   ciMethod*  get_method_by_index(const constantPoolHandle& cpool,
                                  int method_index, Bytecodes::Code bc,
                                  ciInstanceKlass* loading_klass);
@@ -150,7 +150,7 @@ private:
                                         int pool_index, int cache_index,
                                         ciInstanceKlass* loading_klass);
   ciField*   get_field_by_index_impl(ciInstanceKlass* loading_klass,
-                                     int field_index);
+                                     int field_index, Bytecodes::Code bc);
   ciMethod*  get_method_by_index_impl(const constantPoolHandle& cpool,
                                       int method_index, Bytecodes::Code bc,
                                       ciInstanceKlass* loading_klass);
@@ -165,10 +165,13 @@ private:
                            Bytecodes::Code  bc,
                            constantTag      tag);
 
+  ciConstant unbox_primitive_value(ciObject* cibox, BasicType expected_bt = T_ILLEGAL);
+  ciConstant get_resolved_constant(const constantPoolHandle& cpool, int obj_index);
+
   // Get a ciObject from the object factory.  Ensures uniqueness
   // of ciObjects.
   ciObject* get_object(oop o) {
-    if (o == NULL) {
+    if (o == nullptr) {
       return _null_object_instance;
     } else {
       return _factory->get(o);
@@ -176,27 +179,18 @@ private:
   }
 
   ciSymbol* get_symbol(Symbol* o) {
-    if (o == NULL) {
+    if (o == nullptr) {
       ShouldNotReachHere();
-      return NULL;
+      return nullptr;
     } else {
       return _factory->get_symbol(o);
     }
   }
 
   ciMetadata* get_metadata(Metadata* o) {
-    if (o == NULL) {
-      return NULL;
+    if (o == nullptr) {
+      return nullptr;
     } else {
-#ifndef PRODUCT
-      if (ReplayCompiles && o->is_klass()) {
-        Klass* k = (Klass*)o;
-        if (k->is_instance_klass() && ciReplay::is_klass_unresolved((InstanceKlass*)k)) {
-          // Klass was unresolved at replay dump time. Simulate this case.
-          return ciEnv::_unloaded_ciinstance_klass;
-        }
-      }
-#endif
       return _factory->get_metadata(o);
     }
   }
@@ -206,37 +200,48 @@ private:
   }
 
   ciInstance* get_instance(oop o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
     return get_object(o)->as_instance();
   }
   ciObjArrayKlass* get_obj_array_klass(Klass* o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
+    assert(o->is_unrefined_objArray_klass(), "must be exact");
     return get_metadata(o)->as_obj_array_klass();
   }
+  ciFlatArrayKlass* get_flat_array_klass(Klass* o) {
+    if (o == nullptr) return nullptr;
+    return get_metadata(o)->as_flat_array_klass();
+  }
+  ciRefArrayKlass* get_ref_array_klass(Klass* o) {
+    if (o == nullptr) return nullptr;
+    return get_metadata(o)->as_ref_array_klass();
+  }
   ciTypeArrayKlass* get_type_array_klass(Klass* o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
     return get_metadata(o)->as_type_array_klass();
   }
   ciKlass* get_klass(Klass* o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
     return get_metadata(o)->as_klass();
   }
   ciInstanceKlass* get_instance_klass(Klass* o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
     return get_metadata(o)->as_instance_klass();
   }
   ciMethod* get_method(Method* o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
     return get_metadata(o)->as_method();
   }
   ciMethodData* get_method_data(MethodData* o) {
-    if (o == NULL) return NULL;
+    if (o == nullptr) return nullptr;
     return get_metadata(o)->as_method_data();
+  }
+  ciMetadata* get_method_counters(MethodCounters* o) {
+    if (o == nullptr) return nullptr;
+    return get_metadata((Metadata*)o);
   }
 
   ciMethod* get_method_from_handle(Method* method);
-
-  ciInstance* get_or_create_exception(jobject& handle, Symbol* name);
 
   // Get a ciMethod representing either an unfound method or
   // a method with an unloaded holder.  Ensures uniqueness of
@@ -247,6 +252,10 @@ private:
                                 ciInstanceKlass* accessor) {
     ciInstanceKlass* declared_holder = get_instance_klass_for_declared_method_holder(holder);
     return _factory->get_unloaded_method(declared_holder, name, signature, accessor);
+  }
+
+  InstanceKlass::ClassState get_cached_init_state(uint id) {
+    return (InstanceKlass::ClassState)_factory->cached_init_state(id);
   }
 
   // Get a ciKlass representing an unloaded klass.
@@ -276,7 +285,7 @@ private:
   }
 
   // See if we already have an unloaded klass for the given name
-  // or return NULL if not.
+  // or return null if not.
   ciKlass *check_get_unloaded_klass(ciKlass*  accessing_klass, ciSymbol* name) {
     return _factory->get_unloaded_klass(accessing_klass, name, false);
   }
@@ -303,6 +312,12 @@ private:
   // Helper routine for determining the validity of a compilation with
   // respect to method dependencies (e.g. concurrent class loading).
   void validate_compile_task_dependencies(ciMethod* target);
+
+  // Helper routines to factor out common code used by routines that register a method
+  // i.e. register_aot_method() and register_method()
+  bool is_compilation_valid(JavaThread* thread, ciMethod* target, bool install_code, bool is_loading_aot_code, bool aot_preload);
+  void make_code_usable(JavaThread* thread, ciMethod* target, bool aot_preload, int entry_bci, AOTCodeEntry* aot_code_entry, nmethod* nm);
+
 public:
   enum {
     MethodCompilable,
@@ -326,12 +341,14 @@ public:
 
   // This is true if the compilation is not going to produce code.
   // (It is reasonable to retry failed compilations.)
-  bool failing() { return _failure_reason != NULL; }
+  bool failing() const { return _failure_reason.get() != nullptr; }
 
   // Reason this compilation is failing, such as "too many basic blocks".
-  const char* failure_reason() { return _failure_reason; }
+  const char* failure_reason() const { return _failure_reason.get(); }
 
-  // Return state of appropriate compilability
+  bool codecache_full() const { return _codecache_full; }
+
+  // Return state of appropriate compatibility
   int compilable() { return _compilable; }
 
   const char* retry_message() const {
@@ -341,10 +358,10 @@ public:
       case ciEnv::MethodCompilable_never:
         return "not retryable";
       case ciEnv::MethodCompilable:
-        return NULL;
+        return nullptr;
       default:
         ShouldNotReachHere();
-        return NULL;
+        return nullptr;
     }
   }
 
@@ -357,6 +374,8 @@ public:
   bool  should_retain_local_variables() const {
     return _jvmti_can_access_local_variables || _jvmti_can_pop_frame;
   }
+  bool  jvmti_can_access_local_variables()     const { return _jvmti_can_access_local_variables; }
+  bool  jvmti_can_pop_frame()                  const { return _jvmti_can_pop_frame; }
   bool  jvmti_can_hotswap_or_post_breakpoint() const { return _jvmti_can_hotswap_or_post_breakpoint; }
   bool  jvmti_can_post_on_exceptions()         const { return _jvmti_can_post_on_exceptions; }
   bool  jvmti_can_get_owned_monitor_info()     const { return _jvmti_can_get_owned_monitor_info; }
@@ -364,18 +383,26 @@ public:
 
   // Cache DTrace flags
   void  cache_dtrace_flags();
-  bool  dtrace_extended_probes() const { return _dtrace_extended_probes; }
   bool  dtrace_method_probes()   const { return _dtrace_method_probes; }
   bool  dtrace_alloc_probes()    const { return _dtrace_alloc_probes; }
 
   // The compiler task which has created this env.
   // May be useful to find out compile_id, comp_level, etc.
-  CompileTask* task() { return _task; }
+  CompileTask* task() const { return _task; }
 
   // Handy forwards to the task:
   int comp_level();   // task()->comp_level()
-  uint compile_id();  // task()->compile_id()
+  int compile_id();  // task()->compile_id()
 
+#if INCLUDE_CDS
+  // Register method loaded from AOT code cache
+  nmethod* register_aot_method(JavaThread* thread,
+                               ciMethod* target,
+                               AbstractCompiler* compiler,
+                               nmethod* archived_nm,
+                               AOTCodeReader* aot_code_reader,
+                               bool install_code);
+#endif
   // Register the result of a compilation.
   void register_method(ciMethod*                 target,
                        int                       entry_bci,
@@ -386,12 +413,16 @@ public:
                        OopMapSet*                oop_map_set,
                        ExceptionHandlerTable*    handler_table,
                        ImplicitExceptionTable*   inc_table,
+                       GrowableArray<ciMethod*>* java_callees,
                        AbstractCompiler*         compiler,
+                       bool                      has_clinit_barriers,
+                       bool                      for_aot_preload,
                        bool                      has_unsafe_access,
                        bool                      has_wide_vectors,
-                       RTMState                  rtm_state = NoRTM,
-                       const GrowableArrayView<RuntimeStub*>& native_invokers = GrowableArrayView<RuntimeStub*>::EMPTY);
-
+                       bool                      has_monitors,
+                       bool                      has_scoped_access,
+                       int                       immediate_oops_patched,
+                       bool                      install_code);
 
   // Access to certain well known ciObjects.
 #define VM_CLASS_FUNC(name, ignore_s) \
@@ -402,18 +433,25 @@ public:
 #undef VM_CLASS_FUNC
 
   ciInstance* NullPointerException_instance() {
-    assert(_NullPointerException_instance != NULL, "initialization problem");
+    assert(_NullPointerException_instance != nullptr, "initialization problem");
     return _NullPointerException_instance;
   }
   ciInstance* ArithmeticException_instance() {
-    assert(_ArithmeticException_instance != NULL, "initialization problem");
+    assert(_ArithmeticException_instance != nullptr, "initialization problem");
     return _ArithmeticException_instance;
   }
-
-  // Lazy constructors:
-  ciInstance* ArrayIndexOutOfBoundsException_instance();
-  ciInstance* ArrayStoreException_instance();
-  ciInstance* ClassCastException_instance();
+  ciInstance* ArrayIndexOutOfBoundsException_instance() {
+    assert(_ArrayIndexOutOfBoundsException_instance != nullptr, "initialization problem");
+    return _ArrayIndexOutOfBoundsException_instance;
+  }
+  ciInstance* ArrayStoreException_instance() {
+    assert(_ArrayStoreException_instance != nullptr, "initialization problem");
+    return _ArrayStoreException_instance;
+  }
+  ciInstance* ClassCastException_instance() {
+    assert(_ClassCastException_instance != nullptr, "initialization problem");
+    return _ClassCastException_instance;
+  }
 
   ciInstance* the_null_string();
   ciInstance* the_min_jint_string();
@@ -428,6 +466,10 @@ public:
     return _unloaded_ciinstance_klass;
   }
   ciInstance* unloaded_ciinstance();
+
+  ciInstanceKlass* get_box_klass_for_primitive_type(BasicType type);
+
+  ciKlass*  find_system_klass(ciSymbol* klass_name);
 
   // Note:  To find a class from its name string, use ciSymbol::make,
   // but consider adding to vmSymbols.hpp instead.
@@ -448,7 +490,7 @@ public:
   static ciEnv* current(CompilerThread *thread) { return thread->env(); }
 
   // Per-compiler data.  (Used by C2 to publish the Compile* pointer.)
-  void* compiler_data() { return _compiler_data; }
+  void* compiler_data() const { return _compiler_data; }
   void set_compiler_data(void* x) { _compiler_data = x; }
 
   // Notice that a method has been inlined in the current compile;
@@ -466,6 +508,7 @@ public:
   void report_failure(const char* reason);      // Report failure immediately
   void record_method_not_compilable(const char* reason, bool all_tiers = false);
   void record_out_of_memory_failure();
+  void record_codecache_full();
 
   // RedefineClasses support
   void metadata_do(MetadataClosure* f) { _factory->metadata_do(f); }
@@ -500,6 +543,15 @@ public:
   void dump_replay_data_unsafe(outputStream* out);
   void dump_replay_data_helper(outputStream* out);
   void dump_compile_data(outputStream* out);
+  void dump_replay_data_version(outputStream* out);
+
+  ciWrapper* make_early_larval_wrapper(ciType* type) const {
+    return _factory->make_early_larval_wrapper(type);
+  }
+
+  ciWrapper* make_null_free_wrapper(ciType* type) const {
+    return _factory->make_null_free_wrapper(type);
+  }
 
   const char *dyno_name(const InstanceKlass* ik) const;
   const char *replay_name(const InstanceKlass* ik) const;
@@ -513,6 +565,9 @@ public:
   void process_invokedynamic(const constantPoolHandle &cp, int index, JavaThread* thread);
   void process_invokehandle(const constantPoolHandle &cp, int index, JavaThread* thread);
   void find_dynamic_call_sites();
+
+  bool is_aot_compile() const NOT_CDS_RETURN_(false);
+  InstanceKlass::ClassState compute_init_state_for_aot_compile(InstanceKlass* ik) NOT_CDS_RETURN_((InstanceKlass::ClassState)0);
 };
 
 #endif // SHARE_CI_CIENV_HPP

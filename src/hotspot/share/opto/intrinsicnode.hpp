@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,10 @@
 #ifndef SHARE_OPTO_INTRINSICNODE_HPP
 #define SHARE_OPTO_INTRINSICNODE_HPP
 
+#include "opto/connode.hpp"
 #include "opto/node.hpp"
 #include "opto/opcodes.hpp"
-#include "opto/connode.hpp"
+#include "opto/type.hpp"
 
 
 //----------------------PartialSubtypeCheckNode--------------------------------
@@ -41,11 +42,14 @@ class PartialSubtypeCheckNode : public Node {
   virtual int Opcode() const;
   virtual const Type* bottom_type() const { return TypeRawPtr::BOTTOM; }
   virtual uint ideal_reg() const { return Op_RegP; }
+
+private:
+  virtual bool depends_only_on_test_impl() const { return false; }
 };
 
 //------------------------------StrIntrinsic-------------------------------
 // Base class for Ideal nodes used in String intrinsic code.
-class StrIntrinsicNode: public Node {
+class StrIntrinsicNode : public Node {
  public:
   // Possible encodings of the parameters passed to the string intrinsic.
   // 'L' stands for Latin1 and 'U' stands for UTF16. For example, 'LU' means that
@@ -56,7 +60,11 @@ class StrIntrinsicNode: public Node {
  protected:
   // Encoding of strings. Used to select the right version of the intrinsic.
   const ArgEncoding _encoding;
-  virtual uint size_of() const;
+  virtual uint size_of() const override { return sizeof(StrIntrinsicNode); }
+  virtual uint hash() const override { return Node::hash() + _encoding; }
+  virtual bool cmp(const Node& n) const override {
+    return Node::cmp(n) && _encoding == static_cast<const StrIntrinsicNode&>(n)._encoding;
+  }
 
  public:
   StrIntrinsicNode(Node* control, Node* char_array_mem,
@@ -74,116 +82,201 @@ class StrIntrinsicNode: public Node {
   Node(control, char_array_mem, s1, s2), _encoding(encoding) {
   }
 
-  virtual bool depends_only_on_test() const { return false; }
-  virtual const TypePtr* adr_type() const { return TypeAryPtr::BYTES; }
-  virtual uint match_edge(uint idx) const;
-  virtual uint ideal_reg() const { return Op_RegI; }
-  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
-  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual uint match_edge(uint idx) const override;
+  virtual uint ideal_reg() const override { return Op_RegI; }
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape) override;
+  virtual const Type* Value(PhaseGVN* phase) const override;
   ArgEncoding encoding() const { return _encoding; }
+
+private:
+  virtual bool depends_only_on_test_impl() const override { return false; }
 };
 
 //------------------------------StrComp-------------------------------------
-class StrCompNode: public StrIntrinsicNode {
+class StrCompNode final : public StrIntrinsicNode {
  public:
   StrCompNode(Node* control, Node* char_array_mem,
               Node* s1, Node* c1, Node* s2, Node* c2, ArgEncoding encoding):
   StrIntrinsicNode(control, char_array_mem, s1, c1, s2, c2, encoding) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::INT; }
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::INT; }
+
+private:
+  const TypePtr* in_adr_type_impl() const final { return TypeAryPtr::BYTES; }
 };
 
 //------------------------------StrEquals-------------------------------------
-class StrEqualsNode: public StrIntrinsicNode {
+class StrEqualsNode final : public StrIntrinsicNode {
  public:
   StrEqualsNode(Node* control, Node* char_array_mem,
                 Node* s1, Node* s2, Node* c, ArgEncoding encoding):
   StrIntrinsicNode(control, char_array_mem, s1, s2, c, encoding) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::BOOL; }
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::BOOL; }
+
+private:
+  const TypePtr* in_adr_type_impl() const final { return TypeAryPtr::BYTES; }
 };
 
 //------------------------------StrIndexOf-------------------------------------
-class StrIndexOfNode: public StrIntrinsicNode {
+class StrIndexOfNode final : public StrIntrinsicNode {
  public:
   StrIndexOfNode(Node* control, Node* char_array_mem,
                  Node* s1, Node* c1, Node* s2, Node* c2, ArgEncoding encoding):
   StrIntrinsicNode(control, char_array_mem, s1, c1, s2, c2, encoding) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::INT; }
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::INT; }
+
+private:
+  const TypePtr* in_adr_type_impl() const final { return TypeAryPtr::BYTES; }
 };
 
 //------------------------------StrIndexOfChar-------------------------------------
-class StrIndexOfCharNode: public StrIntrinsicNode {
+class StrIndexOfCharNode final : public StrIntrinsicNode {
  public:
   StrIndexOfCharNode(Node* control, Node* char_array_mem,
                      Node* s1, Node* c1, Node* c, ArgEncoding encoding):
   StrIntrinsicNode(control, char_array_mem, s1, c1, c, encoding) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::INT; }
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::INT; }
+
+private:
+  const TypePtr* in_adr_type_impl() const final { return TypeAryPtr::BYTES; }
 };
 
 //--------------------------StrCompressedCopy-------------------------------
-class StrCompressedCopyNode: public StrIntrinsicNode {
- public:
-  StrCompressedCopyNode(Node* control, Node* arymem,
+class StrCompressedCopyNode final : public StrIntrinsicNode {
+private:
+  const TypePtr* const _in_adr_type;
+
+public:
+  StrCompressedCopyNode(Node* control, Node* arymem, const TypePtr* in_adr_type,
                         Node* s1, Node* s2, Node* c):
-  StrIntrinsicNode(control, arymem, s1, s2, c, none) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::INT; }
-  virtual const TypePtr* adr_type() const { return TypePtr::BOTTOM; }
-  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+  StrIntrinsicNode(control, arymem, s1, s2, c, none), _in_adr_type(in_adr_type) {};
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::INT; }
+
+private:
+  virtual uint size_of() const override { return sizeof(StrCompressedCopyNode); }
+  virtual uint hash() const override { return StrIntrinsicNode::hash() + (uint)(uintptr_t) _in_adr_type; }
+  virtual bool cmp(const Node& n) const override {
+    return StrIntrinsicNode::cmp(n) && _in_adr_type == static_cast<const StrCompressedCopyNode&>(n)._in_adr_type;
+  }
+  const TypePtr* out_adr_type_impl() const final { return TypeAryPtr::BYTES; }
+  const TypePtr* in_adr_type_impl() const final { return _in_adr_type; }
 };
 
 //--------------------------StrInflatedCopy---------------------------------
-class StrInflatedCopyNode: public StrIntrinsicNode {
- public:
-  StrInflatedCopyNode(Node* control, Node* arymem,
+class StrInflatedCopyNode final : public StrIntrinsicNode {
+private:
+  const TypePtr* const _out_adr_type;
+  const TypePtr* const _in_adr_type;
+
+public:
+  StrInflatedCopyNode(Node* control, Node* arymem, const TypePtr* out_adr_type, const TypePtr* in_adr_type,
                       Node* s1, Node* s2, Node* c):
-  StrIntrinsicNode(control, arymem, s1, s2, c, none) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return Type::MEMORY; }
-  virtual const TypePtr* adr_type() const { return TypePtr::BOTTOM; }
-  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+  StrIntrinsicNode(control, arymem, s1, s2, c, none), _out_adr_type(out_adr_type), _in_adr_type(in_adr_type) {};
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return Type::MEMORY; }
+
+private:
+  virtual uint size_of() const override { return sizeof(StrInflatedCopyNode); }
+  virtual uint hash() const override { return StrIntrinsicNode::hash() + (uint)(uintptr_t) _out_adr_type + (uint)(uintptr_t) _in_adr_type; }
+  virtual bool cmp(const Node& n) const override {
+    auto& other = static_cast<const StrInflatedCopyNode&>(n);
+    return StrIntrinsicNode::cmp(n) && _out_adr_type == other._out_adr_type && _in_adr_type == other._in_adr_type;
+  }
+  const TypePtr* out_adr_type_impl() const final { return _out_adr_type; }
+  const TypePtr* in_adr_type_impl() const final { return _in_adr_type; }
 };
 
 //------------------------------AryEq---------------------------------------
-class AryEqNode: public StrIntrinsicNode {
- public:
-  AryEqNode(Node* control, Node* char_array_mem,
+class AryEqNode final : public StrIntrinsicNode {
+private:
+  const TypeAryPtr* const _in_adr_type;
+
+public:
+  AryEqNode(Node* control, Node* char_array_mem, const TypeAryPtr* in_adr_type,
             Node* s1, Node* s2, ArgEncoding encoding):
-  StrIntrinsicNode(control, char_array_mem, s1, s2, encoding) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::BOOL; }
+  StrIntrinsicNode(control, char_array_mem, s1, s2, encoding), _in_adr_type(in_adr_type) {};
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::BOOL; }
+
+private:
+  virtual uint size_of() const override { return sizeof(AryEqNode); }
+  virtual uint hash() const override { return StrIntrinsicNode::hash() + (uint)(uintptr_t) _in_adr_type; }
+  virtual bool cmp(const Node& n) const override {
+    return StrIntrinsicNode::cmp(n) && _in_adr_type == static_cast<const AryEqNode&>(n)._in_adr_type;
+  }
+  const TypePtr* in_adr_type_impl() const final { return _in_adr_type; }
 };
 
-//------------------------------HasNegatives---------------------------------
-class HasNegativesNode: public StrIntrinsicNode {
+//------------------------------CountPositives------------------------------
+class CountPositivesNode final : public StrIntrinsicNode {
  public:
-  HasNegativesNode(Node* control, Node* char_array_mem, Node* s1, Node* c1):
+  CountPositivesNode(Node* control, Node* char_array_mem, Node* s1, Node* c1):
   StrIntrinsicNode(control, char_array_mem, s1, c1, none) {};
-  virtual int Opcode() const;
-  virtual const Type* bottom_type() const { return TypeInt::BOOL; }
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::POS; }
+
+private:
+  const TypePtr* in_adr_type_impl() const final { return TypeAryPtr::BYTES; }
 };
 
+//------------------------------VectorizedHashCodeNode----------------------
+class VectorizedHashCodeNode final : public Node {
+private:
+  const TypeAryPtr* const _in_adr_type;
+
+public:
+  VectorizedHashCodeNode(Node* control, Node* ary_mem, const TypeAryPtr* in_adr_type, Node* arg1, Node* cnt1, Node* result, Node* basic_type)
+    : Node(control, ary_mem, arg1, cnt1, result, basic_type), _in_adr_type(in_adr_type) {};
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::INT; }
+  virtual uint match_edge(uint idx) const override;
+  virtual uint ideal_reg() const override { return Op_RegI; }
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape) override;
+  virtual const Type* Value(PhaseGVN* phase) const override;
+
+private:
+  virtual uint size_of() const override { return sizeof(VectorizedHashCodeNode); }
+  virtual uint hash() const override { return Node::hash() + (uint)(uintptr_t) _in_adr_type; }
+  virtual bool cmp(const Node& n) const override {
+    return Node::cmp(n) && _in_adr_type == static_cast<const VectorizedHashCodeNode&>(n)._in_adr_type;
+  }
+  virtual bool depends_only_on_test_impl() const override { return false; }
+  const TypePtr* in_adr_type_impl() const final { return _in_adr_type; }
+};
 
 //------------------------------EncodeISOArray--------------------------------
 // encode char[] to byte[] in ISO_8859_1 or ASCII
-class EncodeISOArrayNode: public Node {
-  bool ascii;
- public:
-  EncodeISOArrayNode(Node* control, Node* arymem, Node* s1, Node* s2, Node* c, bool ascii)
-    : Node(control, arymem, s1, s2, c), ascii(ascii) {}
+class EncodeISOArrayNode final : public Node {
+private:
+  const TypePtr* const _in_adr_type;
+  bool _ascii;
 
-  bool is_ascii() { return ascii; }
-  virtual int Opcode() const;
-  virtual bool depends_only_on_test() const { return false; }
-  virtual const Type* bottom_type() const { return TypeInt::INT; }
-  virtual const TypePtr* adr_type() const { return TypePtr::BOTTOM; }
-  virtual uint match_edge(uint idx) const;
-  virtual uint ideal_reg() const { return Op_RegI; }
-  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
-  virtual const Type* Value(PhaseGVN* phase) const;
+public:
+  EncodeISOArrayNode(Node* control, Node* arymem, const TypePtr* in_adr_type, Node* s1, Node* s2, Node* c, bool ascii)
+    : Node(control, arymem, s1, s2, c), _in_adr_type(in_adr_type), _ascii(ascii) {}
+
+  bool is_ascii() { return _ascii; }
+  virtual int Opcode() const override;
+  virtual const Type* bottom_type() const override { return TypeInt::INT; }
+  virtual uint match_edge(uint idx) const override;
+  virtual uint ideal_reg() const override { return Op_RegI; }
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape) override;
+  virtual const Type* Value(PhaseGVN* phase) const override;
+
+private:
+  virtual uint size_of() const override { return sizeof(EncodeISOArrayNode); }
+  virtual uint hash() const override { return Node::hash() + (uint)(uintptr_t) _in_adr_type + _ascii; }
+  virtual bool cmp(const Node& n) const override {
+    const EncodeISOArrayNode& e = static_cast<const EncodeISOArrayNode&>(n);
+    return Node::cmp(n) && _ascii == e._ascii && _in_adr_type == e._in_adr_type;
+  }
+  virtual bool depends_only_on_test_impl() const override { return false; }
+  const TypePtr* out_adr_type_impl() const override { return TypeAryPtr::BYTES; }
+  const TypePtr* in_adr_type_impl() const override { return _in_adr_type; }
 };
 
 //-------------------------------DigitNode----------------------------------------
@@ -193,6 +286,9 @@ public:
   virtual int Opcode() const;
   const Type* bottom_type() const { return TypeInt::BOOL; }
   virtual uint ideal_reg() const { return Op_RegI; }
+
+private:
+  virtual bool depends_only_on_test_impl() const { return false; }
 };
 
 //------------------------------LowerCaseNode------------------------------------
@@ -202,6 +298,9 @@ public:
   virtual int Opcode() const;
   const Type* bottom_type() const { return TypeInt::BOOL; }
   virtual uint ideal_reg() const { return Op_RegI; }
+
+private:
+  virtual bool depends_only_on_test_impl() const { return false; }
 };
 
 //------------------------------UpperCaseNode------------------------------------
@@ -211,6 +310,9 @@ public:
   virtual int Opcode() const;
   const Type* bottom_type() const { return TypeInt::BOOL; }
   virtual uint ideal_reg() const { return Op_RegI; }
+
+private:
+  virtual bool depends_only_on_test_impl() const { return false; }
 };
 
 //------------------------------WhitespaceCode-----------------------------------
@@ -220,12 +322,15 @@ public:
   virtual int Opcode() const;
   const Type* bottom_type() const { return TypeInt::BOOL; }
   virtual uint ideal_reg() const { return Op_RegI; }
+
+private:
+  virtual bool depends_only_on_test_impl() const { return false; }
 };
 
 //------------------------------CopySign-----------------------------------------
 class CopySignDNode : public Node {
  protected:
-  CopySignDNode(Node* in1, Node* in2, Node* in3) : Node(0, in1, in2, in3) {}
+  CopySignDNode(Node* in1, Node* in2, Node* in3) : Node(nullptr, in1, in2, in3) {}
  public:
   static CopySignDNode* make(PhaseGVN& gvn, Node* in1, Node* in2);
   virtual int Opcode() const;
@@ -235,7 +340,7 @@ class CopySignDNode : public Node {
 
 class CopySignFNode : public Node {
  public:
-  CopySignFNode(Node* in1, Node* in2) : Node(0, in1, in2) {}
+  CopySignFNode(Node* in1, Node* in2) : Node(nullptr, in1, in2) {}
   virtual int Opcode() const;
   const Type* bottom_type() const { return TypeLong::FLOAT; }
   virtual uint ideal_reg() const { return Op_RegF; }
@@ -244,7 +349,7 @@ class CopySignFNode : public Node {
 //------------------------------Signum-------------------------------------------
 class SignumDNode : public Node {
  protected:
-  SignumDNode(Node* in1, Node* in2, Node* in3) : Node(0, in1, in2, in3) {}
+  SignumDNode(Node* in1, Node* in2, Node* in3) : Node(nullptr, in1, in2, in3) {}
  public:
   static SignumDNode* make(PhaseGVN& gvn, Node* in);
   virtual int Opcode() const;
@@ -254,12 +359,75 @@ class SignumDNode : public Node {
 
 class SignumFNode : public Node {
  protected:
-  SignumFNode(Node* in1, Node* in2, Node* in3) : Node(0, in1, in2, in3) {}
+  SignumFNode(Node* in1, Node* in2, Node* in3) : Node(nullptr, in1, in2, in3) {}
  public:
   static SignumFNode* make(PhaseGVN& gvn, Node* in);
   virtual int Opcode() const;
   virtual const Type* bottom_type() const { return Type::FLOAT; }
   virtual uint ideal_reg() const { return Op_RegF; }
+};
+
+//----------------------------CompressBits/ExpandBits---------------------------
+class CompressBitsNode : public TypeNode {
+ public:
+  CompressBitsNode(Node* in1, Node* in2, const Type* type) : TypeNode(type, 3) {
+    init_req(1, in1);
+    init_req(2, in2);
+  }
+  virtual int Opcode() const;
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+  virtual Node* Identity(PhaseGVN* phase);
+  virtual const Type* Value(PhaseGVN* phase) const;
+  static jlong compress_bits(jlong src, jlong mask, int bit_size);
+};
+
+class ExpandBitsNode : public TypeNode {
+ public:
+  ExpandBitsNode(Node* in1, Node* in2, const Type* type) : TypeNode(type, 3) {
+    init_req(1, in1);
+    init_req(2, in2);
+  }
+  virtual int Opcode() const;
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+  virtual Node* Identity(PhaseGVN* phase);
+  virtual const Type* Value(PhaseGVN* phase) const;
+  static jlong expand_bits(jlong src, jlong mask, int bit_size);
+};
+
+//---------- IsInfiniteFNode -----------------------------------------------------
+class IsInfiniteFNode : public Node {
+  public:
+  IsInfiniteFNode(Node* in1) : Node(nullptr, in1) {}
+  virtual int   Opcode() const;
+  const Type* bottom_type() const { return TypeInt::BOOL; }
+  virtual uint ideal_reg() const { return Op_RegI; }
+};
+
+//---------- IsInfiniteDNode -----------------------------------------------------
+class IsInfiniteDNode : public Node {
+  public:
+  IsInfiniteDNode(Node* in1) : Node(nullptr, in1) {}
+  virtual int   Opcode() const;
+  const Type* bottom_type() const { return TypeInt::BOOL; }
+  virtual uint ideal_reg() const { return Op_RegI; }
+};
+
+//---------- IsFiniteFNode -----------------------------------------------------
+class IsFiniteFNode : public Node {
+  public:
+  IsFiniteFNode(Node* in1) : Node(nullptr, in1) {}
+  virtual int   Opcode() const;
+  const Type* bottom_type() const { return TypeInt::BOOL; }
+  virtual uint ideal_reg() const { return Op_RegI; }
+};
+
+//---------- IsFiniteDNode -----------------------------------------------------
+class IsFiniteDNode : public Node {
+  public:
+  IsFiniteDNode(Node* in1) : Node(nullptr, in1) {}
+  virtual int   Opcode() const;
+  const Type* bottom_type() const { return TypeInt::BOOL; }
+  virtual uint ideal_reg() const { return Op_RegI; }
 };
 
 #endif // SHARE_OPTO_INTRINSICNODE_HPP

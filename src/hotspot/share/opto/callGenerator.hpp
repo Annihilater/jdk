@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,7 @@
 // The subclasses of this class handle generation of ideal nodes for
 // call sites and method entry points.
 
-class CallGenerator : public ResourceObj {
+class CallGenerator : public ArenaObj {
  private:
   ciMethod*             _method;                // The method being called.
 
@@ -45,8 +45,9 @@ class CallGenerator : public ResourceObj {
   void do_late_inline_helper();
 
   virtual bool           do_late_inline_check(Compile* C, JVMState* jvms) { ShouldNotReachHere(); return false; }
-  virtual CallGenerator* inline_cg()    const                             { ShouldNotReachHere(); return NULL;  }
   virtual bool           is_pure_call() const                             { ShouldNotReachHere(); return false; }
+
+  void mark_projs_not_dead_loop_safe(Node* ret) const;
 
  public:
   // Accessors
@@ -74,19 +75,24 @@ class CallGenerator : public ResourceObj {
   virtual bool      is_late_inline() const         { return false; }
   // same but for method handle calls
   virtual bool      is_mh_late_inline() const      { return false; }
-  virtual bool      is_boxing_late_inline() const  { return false; }
   virtual bool      is_string_late_inline() const  { return false; }
+  virtual bool      is_vector_late_inline() const  { return false; }
+  virtual bool      is_boxing_late_inline() const  { return false; }
+  virtual bool      is_vector_reboxing_late_inline() const  { return false; }
   virtual bool      is_virtual_late_inline() const { return false; }
 
   // Replace the call with an inline version of the code
   virtual void do_late_inline() { ShouldNotReachHere(); }
 
-  virtual CallNode* call_node() const { return NULL; }
+  virtual CallNode* call_node() const { return nullptr; }
   virtual CallGenerator* with_call_node(CallNode* call)  { return this; }
 
   virtual void set_unique_id(jlong id)          { fatal("unique id only for late inlines"); };
   virtual jlong unique_id() const               { fatal("unique id only for late inlines"); return 0; };
 
+  virtual CallGenerator* inline_cg()    const                             { ShouldNotReachHere(); return nullptr;  }
+
+  virtual ciMethod* callee_method() { ShouldNotReachHere(); }
   virtual void set_callee_method(ciMethod* callee) { ShouldNotReachHere(); }
 
   // Note:  It is possible for a CG to be both inline and virtual.
@@ -95,7 +101,7 @@ class CallGenerator : public ResourceObj {
   // Allocate CallGenerators only in Compile arena since some of them are referenced from CallNodes.
   void* operator new(size_t size) throw() {
     Compile* C = Compile::current();
-    return ResourceObj::operator new(size, C->comp_arena());
+    return ArenaObj::operator new(size, C->comp_arena());
   }
 
   // Utilities:
@@ -120,7 +126,7 @@ class CallGenerator : public ResourceObj {
   // If the call traps, the returned map must have a control edge of top.
   // If the call can throw, the returned map must report has_exceptions().
   //
-  // If the result is NULL, it means that this CallGenerator was unable
+  // If the result is null, it means that this CallGenerator was unable
   // to handle the given call, and another CallGenerator should be consulted.
   virtual JVMState* generate(JVMState* jvms) = 0;
 
@@ -140,6 +146,7 @@ class CallGenerator : public ResourceObj {
   static CallGenerator* for_late_inline(ciMethod* m, CallGenerator* inline_cg);
   static CallGenerator* for_mh_late_inline(ciMethod* caller, ciMethod* callee, bool input_not_const);
   static CallGenerator* for_string_late_inline(ciMethod* m, CallGenerator* inline_cg);
+  static CallGenerator* for_vector_late_inline(ciMethod* m, CallGenerator* intrinsic_cg, CallGenerator* fallback_cg);
   static CallGenerator* for_boxing_late_inline(ciMethod* m, CallGenerator* inline_cg);
   static CallGenerator* for_vector_reboxing_late_inline(ciMethod* m, CallGenerator* inline_cg);
   static CallGenerator* for_late_inline_virtual(ciMethod* m, int vtable_index, float expected_uses);
@@ -154,34 +161,18 @@ class CallGenerator : public ResourceObj {
                                          CallGenerator* if_missed,
                                          CallGenerator* if_hit);
 
-  // How to make a call that optimistically assumes a MethodHandle target:
-  static CallGenerator* for_predicted_dynamic_call(ciMethodHandle* predicted_method_handle,
-                                                   CallGenerator* if_missed,
-                                                   CallGenerator* if_hit,
-                                                   float hit_prob);
-
   // How to make a call that gives up and goes back to the interpreter:
   static CallGenerator* for_uncommon_trap(ciMethod* m,
                                           Deoptimization::DeoptReason reason,
                                           Deoptimization::DeoptAction action);
 
   // Registry for intrinsics:
-  static CallGenerator* for_intrinsic(ciMethod* m);
-  static void register_intrinsic(ciMethod* m, CallGenerator* cg);
   static CallGenerator* for_predicated_intrinsic(CallGenerator* intrinsic,
                                                  CallGenerator* cg);
-  virtual Node* generate_predicate(JVMState* jvms, int predicate) { return NULL; };
+  virtual Node* generate_predicate(JVMState* jvms, int predicate) { return nullptr; };
 
-  virtual void print_inlining_late(const char* msg) { ShouldNotReachHere(); }
-
-  static void print_inlining(Compile* C, ciMethod* callee, int inline_level, int bci, const char* msg) {
-    if (C->print_inlining()) {
-      C->print_inlining(callee, inline_level, bci, msg);
-    }
-  }
-
-  static void print_inlining_failure(Compile* C, ciMethod* callee, int inline_level, int bci, const char* msg) {
-    print_inlining(C, callee, inline_level, bci, msg);
+  static void print_inlining_failure(Compile* C, ciMethod* callee, JVMState* jvms, const char* msg) {
+    C->inline_printer()->record(callee, jvms, InliningResult::FAILURE, msg);
     C->log_inline_failure(msg);
   }
 

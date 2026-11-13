@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,63 +26,20 @@
 #define SHARE_CLASSFILE_JAVACLASSES_HPP
 
 #include "classfile/vmClasses.hpp"
-#include "oops/oop.hpp"
 #include "oops/instanceKlass.hpp"
+#include "oops/oopsHierarchy.hpp"
 #include "oops/symbol.hpp"
+#include "runtime/handles.hpp"
 #include "runtime/os.hpp"
+#include "utilities/macros.hpp"
+#include "utilities/utf8.hpp"
 #include "utilities/vmEnums.hpp"
 
+class JvmtiThreadState;
 class RecordComponent;
-
-// Interface for manipulating the basic Java classes.
-
-#define BASIC_JAVA_CLASSES_DO_PART1(f) \
-  f(java_lang_Class) \
-  f(java_lang_String) \
-  f(java_lang_ref_Reference) \
-  //end
-
-#define BASIC_JAVA_CLASSES_DO_PART2(f) \
-  f(java_lang_System) \
-  f(java_lang_ClassLoader) \
-  f(java_lang_Throwable) \
-  f(java_lang_Thread) \
-  f(java_lang_ThreadGroup) \
-  f(java_lang_InternalError) \
-  f(java_lang_AssertionStatusDirectives) \
-  f(java_lang_ref_SoftReference) \
-  f(java_lang_invoke_MethodHandle) \
-  f(java_lang_invoke_DirectMethodHandle) \
-  f(java_lang_invoke_MemberName) \
-  f(java_lang_invoke_ResolvedMethodName) \
-  f(java_lang_invoke_LambdaForm) \
-  f(java_lang_invoke_MethodType) \
-  f(java_lang_invoke_CallSite) \
-  f(java_lang_invoke_ConstantCallSite) \
-  f(java_lang_invoke_MethodHandleNatives_CallSiteContext) \
-  f(java_security_AccessControlContext) \
-  f(java_lang_reflect_AccessibleObject) \
-  f(java_lang_reflect_Method) \
-  f(java_lang_reflect_Constructor) \
-  f(java_lang_reflect_Field) \
-  f(java_lang_reflect_RecordComponent) \
-  f(reflect_ConstantPool) \
-  f(reflect_UnsafeStaticFieldAccessorImpl) \
-  f(java_lang_reflect_Parameter) \
-  f(java_lang_Module) \
-  f(java_lang_StackTraceElement) \
-  f(java_lang_StackFrameInfo) \
-  f(java_lang_LiveStackFrameInfo) \
-  f(java_util_concurrent_locks_AbstractOwnableSynchronizer) \
-  f(jdk_internal_invoke_NativeEntryPoint) \
-  f(jdk_internal_misc_UnsafeConstants) \
-  f(java_lang_boxing_object) \
-  f(vector_VectorPayload) \
-  //end
-
-#define BASIC_JAVA_CLASSES_DO(f) \
-        BASIC_JAVA_CLASSES_DO_PART1(f) \
-        BASIC_JAVA_CLASSES_DO_PART2(f)
+class SerializeClosure;
+class ObjectWaiter;
+class ObjectMonitor;
 
 #define CHECK_INIT(offset)  assert(offset != 0, "should be initialized"); return offset;
 
@@ -145,7 +102,7 @@ class java_lang_String : AllStatic {
   static oop    create_oop_from_unicode(const jchar* unicode, int len, TRAPS);
   static Handle create_from_str(const char* utf8_str, TRAPS);
   static oop    create_oop_from_str(const char* utf8_str, TRAPS);
-  static Handle create_from_symbol(Symbol* symbol, TRAPS);
+  static Handle create_from_symbol(const Symbol* symbol, TRAPS);
   static Handle create_from_platform_dependent_str(const char* str, TRAPS);
 
   static void set_compact_strings(bool value);
@@ -153,7 +110,6 @@ class java_lang_String : AllStatic {
   static int value_offset() { CHECK_INIT(_value_offset); }
   static int coder_offset() { CHECK_INIT(_coder_offset); }
 
-  static inline void set_value_raw(oop string, typeArrayOop buffer);
   static inline void set_value(oop string, typeArrayOop buffer);
 
   // Set the deduplication_forbidden flag true.  This flag is sticky; once
@@ -176,19 +132,24 @@ class java_lang_String : AllStatic {
   static inline bool is_latin1(oop java_string);
   static inline bool deduplication_forbidden(oop java_string);
   static inline bool deduplication_requested(oop java_string);
+  static inline bool deduplication_requested_or_forbidden(oop java_string);
   static inline int length(oop java_string);
   static inline int length(oop java_string, typeArrayOop string_value);
-  static int utf8_length(oop java_string);
-  static int utf8_length(oop java_string, typeArrayOop string_value);
+  static size_t utf8_length(oop java_string);
+  static size_t utf8_length(oop java_string, typeArrayOop string_value);
+  // Legacy variants that truncate the length if needed
+  static int    utf8_length_as_int(oop java_string);
+  static int    utf8_length_as_int(oop java_string, typeArrayOop string_value);
 
   // String converters
   static char*  as_utf8_string(oop java_string);
-  static char*  as_utf8_string(oop java_string, int& length);
-  static char*  as_utf8_string_full(oop java_string, char* buf, int buflen, int& length);
-  static char*  as_utf8_string(oop java_string, char* buf, int buflen);
+  // `length` is set to the length of the utf8 sequence.
+  static char*  as_utf8_string(oop java_string, size_t& length);
+  static char*  as_utf8_string_full(oop java_string, char* buf, size_t buflen, size_t& length);
+  static char*  as_utf8_string(oop java_string, char* buf, size_t buflen);
   static char*  as_utf8_string(oop java_string, int start, int len);
-  static char*  as_utf8_string(oop java_string, typeArrayOop value, char* buf, int buflen);
-  static char*  as_utf8_string(oop java_string, typeArrayOop value, int start, int len, char* buf, int buflen);
+  static char*  as_utf8_string(oop java_string, typeArrayOop value, char* buf, size_t buflen);
+  static char*  as_utf8_string(oop java_string, typeArrayOop value, int start, int len, char* buf, size_t buflen);
   static char*  as_platform_dependent_str(Handle java_string, TRAPS);
   static jchar* as_unicode_string(oop java_string, int& length, TRAPS);
   static jchar* as_unicode_string_or_null(oop java_string, int& length);
@@ -223,10 +184,24 @@ class java_lang_String : AllStatic {
     return h;
   }
 
+  static unsigned int hash_code(const char* utf8_str, size_t utf8_len) {
+    unsigned int h = 0;
+    int unicode_length = UTF8::unicode_length(utf8_str, utf8_len);
+
+    jchar c;
+    while (unicode_length-- > 0) {
+      utf8_str = UTF8::next(utf8_str, &c);
+      h = 31 * h + ((unsigned int)c);
+    }
+    return h;
+  }
+
   static unsigned int hash_code(oop java_string);
   static unsigned int hash_code_noupdate(oop java_string);
 
+  // Compare strings (of different types/encodings), length is the string (array) length
   static bool equals(oop java_string, const jchar* chars, int len);
+  static bool equals(oop java_string, const char* utf8_str, size_t utf8_len);
   static bool equals(oop str1, oop str2);
   static inline bool value_equals(typeArrayOop str_value1, typeArrayOop str_value2);
 
@@ -241,7 +216,7 @@ class java_lang_String : AllStatic {
   static inline bool is_instance(oop obj);
 
   // Debugging
-  static void print(oop java_string, outputStream* st);
+  static void print(oop java_string, outputStream* st, int max_length = MaxStringPrintSize);
   friend class JavaClasses;
   friend class StringTable;
 };
@@ -254,13 +229,12 @@ class java_lang_String : AllStatic {
   macro(java_lang_Class, array_klass,            intptr_signature,  false) \
   macro(java_lang_Class, oop_size,               int_signature,     false) \
   macro(java_lang_Class, static_oop_field_count, int_signature,     false) \
-  macro(java_lang_Class, protection_domain,      object_signature,  false) \
-  macro(java_lang_Class, signers,                object_signature,  false) \
   macro(java_lang_Class, source_file,            object_signature,  false) \
+  macro(java_lang_Class, init_lock,              object_signature,  false)
 
 class java_lang_Class : AllStatic {
   friend class VMStructs;
-  friend class JVMCIVMStructs;
+  friend class AOTHeap;
 
  private:
 
@@ -282,6 +256,10 @@ class java_lang_Class : AllStatic {
   static int _source_file_offset;
   static int _classData_offset;
   static int _classRedefinedCount_offset;
+  static int _reflectionData_offset;
+  static int _modifiers_offset;
+  static int _is_primitive_offset;
+  static int _raw_access_flags_offset;
 
   static bool _offsets_computed;
 
@@ -292,37 +270,42 @@ class java_lang_Class : AllStatic {
   static void set_protection_domain(oop java_class, oop protection_domain);
   static void set_class_loader(oop java_class, oop class_loader);
   static void set_component_mirror(oop java_class, oop comp_mirror);
-  static void initialize_mirror_fields(Klass* k, Handle mirror, Handle protection_domain,
+  static void initialize_mirror_fields(InstanceKlass* ik, Handle mirror, Handle protection_domain,
                                        Handle classData, TRAPS);
   static void set_mirror_module_field(JavaThread* current, Klass* K, Handle mirror, Handle module);
+
+  static void set_modifiers(oop java_class, u2 value);
+  static void set_raw_access_flags(oop java_class, u2 value);
+  static void set_is_primitive(oop java_class);
+  static void release_set_array_klass(oop java_class, Klass* klass);
+
  public:
   static void allocate_fixup_lists();
   static void compute_offsets();
 
   // Instance creation
+  static void allocate_mirror(Klass* k, bool is_scratch, Handle protection_domain, Handle classData,
+                              Handle& mirror, Handle& comp_mirror, TRAPS); // returns mirror and comp_mirror
   static void create_mirror(Klass* k, Handle class_loader, Handle module,
                             Handle protection_domain, Handle classData, TRAPS);
   static void fixup_mirror(Klass* k, TRAPS);
   static oop  create_basic_type_mirror(const char* basic_type_name, BasicType type, TRAPS);
-  static void update_archived_primitive_mirror_native_pointers(oop archived_mirror) NOT_CDS_JAVA_HEAP_RETURN;
-  static void update_archived_mirror_native_pointers(oop archived_mirror) NOT_CDS_JAVA_HEAP_RETURN;
 
   // Archiving
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-  static void archive_basic_type_mirrors() NOT_CDS_JAVA_HEAP_RETURN;
-  static oop  archive_mirror(Klass* k) NOT_CDS_JAVA_HEAP_RETURN_(NULL);
-  static oop  process_archived_mirror(Klass* k, oop mirror, oop archived_mirror)
-                                      NOT_CDS_JAVA_HEAP_RETURN_(NULL);
+  static void create_scratch_mirror(Klass* k, TRAPS) NOT_CDS_JAVA_HEAP_RETURN;
   static bool restore_archived_mirror(Klass *k, Handle class_loader, Handle module,
                                       Handle protection_domain,
                                       TRAPS) NOT_CDS_JAVA_HEAP_RETURN_(false);
 
   static void fixup_module_field(Klass* k, Handle module);
 
-  // Conversion
+  // Conversion -- java_class must not be null. The return value is null only if java_class is a primitive type.
   static Klass* as_Klass(oop java_class);
+  static InstanceKlass* as_InstanceKlass(oop java_class);
+
   static void set_klass(oop java_class, Klass* klass);
-  static BasicType as_BasicType(oop java_class, Klass** reference_klass = NULL);
+  static BasicType as_BasicType(oop java_class, Klass** reference_klass = nullptr);
   static Symbol* as_signature(oop java_class, bool intern_if_not_found);
   static void print_signature(oop java_class, outputStream *st);
   static const char* as_external_name(oop java_class);
@@ -332,12 +315,12 @@ class java_lang_Class : AllStatic {
   static bool is_primitive(oop java_class);
   static BasicType primitive_type(oop java_class);
   static oop primitive_mirror(BasicType t);
-  // JVM_NewArray support
   static Klass* array_klass_acquire(oop java_class);
-  static void release_set_array_klass(oop java_class, Klass* klass);
+
   // compiler support for class operations
   static int klass_offset()                { CHECK_INIT(_klass_offset); }
   static int array_klass_offset()          { CHECK_INIT(_array_klass_offset); }
+
   // Support for classRedefinedCount field
   static int classRedefinedCount(oop the_class_mirror);
   static void set_classRedefinedCount(oop the_class_mirror, int value);
@@ -346,15 +329,14 @@ class java_lang_Class : AllStatic {
   static oop  protection_domain(oop java_class);
   static oop  init_lock(oop java_class);
   static void clear_init_lock(oop java_class) {
-    set_init_lock(java_class, NULL);
+    set_init_lock(java_class, nullptr);
   }
   static oop  component_mirror(oop java_class);
-  static objArrayOop  signers(oop java_class);
-  static void set_signers(oop java_class, objArrayOop signers);
+  static int component_mirror_offset() { return _component_mirror_offset; }
+  static objArrayOop signers(oop java_class);
   static oop  class_data(oop java_class);
   static void set_class_data(oop java_class, oop classData);
-
-  static int component_mirror_offset() { return _component_mirror_offset; }
+  static int reflection_data_offset() { return _reflectionData_offset; }
 
   static oop class_loader(oop java_class);
   static void set_module(oop java_class, oop module);
@@ -364,6 +346,8 @@ class java_lang_Class : AllStatic {
 
   static oop source_file(oop java_class);
   static void set_source_file(oop java_class, oop source_file);
+
+  static int modifiers(oop java_class);
 
   static size_t oop_size(oop java_class);
   static void set_oop_size(HeapWord* java_class, size_t size);
@@ -390,23 +374,31 @@ class java_lang_Class : AllStatic {
 
 // Interface to java.lang.Thread objects
 
+#define THREAD_INJECTED_FIELDS(macro)                                  \
+  macro(java_lang_Thread, jvmti_thread_state, intptr_signature, false) \
+  macro(java_lang_Thread, vthread_transition_disable_count, int_signature, false) \
+  macro(java_lang_Thread, is_in_vthread_transition, bool_signature, false) \
+  JFR_ONLY(macro(java_lang_Thread, jfr_epoch, short_signature, false))
+
 class java_lang_Thread : AllStatic {
+  friend class java_lang_VirtualThread;
  private:
   // Note that for this class the layout changed between JDK1.2 and JDK1.3,
   // so we compute the offsets at startup rather than hard-wiring them.
+  static int _holder_offset;
   static int _name_offset;
-  static int _group_offset;
   static int _contextClassLoader_offset;
-  static int _inheritedAccessControlContext_offset;
-  static int _priority_offset;
   static int _eetop_offset;
+  static int _jvmti_thread_state_offset;
+  static int _vthread_transition_disable_count_offset;
+  static int _is_in_vthread_transition_offset;
   static int _interrupted_offset;
-  static int _daemon_offset;
-  static int _stillborn_offset;
-  static int _stackSize_offset;
+  static int _interruptLock_offset;
   static int _tid_offset;
-  static int _thread_status_offset;
+  static int _continuation_offset;
   static int _park_blocker_offset;
+  static int _scopedValueBindings_offset;
+  JFR_ONLY(static int _jfr_epoch_offset;)
 
   static void compute_offsets();
 
@@ -415,8 +407,14 @@ class java_lang_Thread : AllStatic {
 
   // Returns the JavaThread associated with the thread obj
   static JavaThread* thread(oop java_thread);
+  static JavaThread* thread_acquire(oop java_thread);
   // Set JavaThread for instance
   static void set_thread(oop java_thread, JavaThread* thread);
+  static void release_set_thread(oop java_thread, JavaThread* thread);
+  // FieldHolder
+  static oop holder(oop java_thread);
+  // interruptLock
+  static oop interrupt_lock(oop java_thread);
   // Interrupted status
   static bool interrupted(oop java_thread);
   static void set_interrupted(oop java_thread, bool val);
@@ -428,9 +426,6 @@ class java_lang_Thread : AllStatic {
   static void set_priority(oop java_thread, ThreadPriority priority);
   // Thread group
   static oop  threadGroup(oop java_thread);
-  // Stillborn
-  static bool is_stillborn(oop java_thread);
-  static void set_stillborn(oop java_thread);
   // Alive (NOTE: this is not really a field, but provides the correct
   // definition without doing a Java call)
   static bool is_alive(oop java_thread);
@@ -439,12 +434,28 @@ class java_lang_Thread : AllStatic {
   static void set_daemon(oop java_thread);
   // Context ClassLoader
   static oop context_class_loader(oop java_thread);
-  // Control context
-  static oop inherited_access_control_context(oop java_thread);
   // Stack size hint
   static jlong stackSize(oop java_thread);
   // Thread ID
-  static jlong thread_id(oop java_thread);
+  static int64_t thread_id(oop java_thread);
+  static ByteSize thread_id_offset();
+  // Continuation
+  static inline oop continuation(oop java_thread);
+
+  static JvmtiThreadState* jvmti_thread_state(oop java_thread);
+  static void set_jvmti_thread_state(oop java_thread, JvmtiThreadState* state);
+
+  static int  vthread_transition_disable_count(oop java_thread);
+  static void inc_vthread_transition_disable_count(oop java_thread);
+  static void dec_vthread_transition_disable_count(oop java_thread);
+  static int  vthread_transition_disable_count_offset() { return _vthread_transition_disable_count_offset; }
+
+  static bool is_in_vthread_transition(oop java_thread);
+  static void set_is_in_vthread_transition(oop java_thread, bool val);
+  static int  is_in_vthread_transition_offset() { return _is_in_vthread_transition_offset; }
+
+  // Clear all scoped value bindings on error
+  static void clear_scopedValueBindings(oop java_thread);
 
   // Blocker object responsible for thread parking
   static oop park_blocker(oop java_thread);
@@ -456,7 +467,61 @@ class java_lang_Thread : AllStatic {
 
   static const char*  thread_status_name(oop java_thread_oop);
 
+  // Fill in current stack trace, can cause GC
+  static oop async_get_stack_trace(jobject jthread, TRAPS);
+
+  JFR_ONLY(static u2 jfr_epoch(oop java_thread);)
+  JFR_ONLY(static void set_jfr_epoch(oop java_thread, u2 epoch);)
+  JFR_ONLY(static int jfr_epoch_offset() { CHECK_INIT(_jfr_epoch_offset); })
+
   // Debugging
+  friend class JavaClasses;
+};
+
+// Interface to java.lang.Thread$FieldHolder objects
+
+class java_lang_Thread_FieldHolder : AllStatic {
+ private:
+  static int _group_offset;
+  static int _priority_offset;
+  static int _stackSize_offset;
+  static int _daemon_offset;
+  static int _thread_status_offset;
+
+  static void compute_offsets();
+
+ public:
+  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
+
+  static oop threadGroup(oop holder);
+
+  static ThreadPriority priority(oop holder);
+  static void set_priority(oop holder, ThreadPriority priority);
+
+  static jlong stackSize(oop holder);
+
+  static bool is_daemon(oop holder);
+  static void set_daemon(oop holder, bool val);
+
+  static void set_thread_status(oop holder, JavaThreadStatus status);
+  static JavaThreadStatus get_thread_status(oop holder);
+
+  friend class JavaClasses;
+};
+
+// Interface to java.lang.Thread$Constants objects
+
+class java_lang_Thread_Constants : AllStatic {
+ private:
+  static int _static_VTHREAD_GROUP_offset;
+  static int _static_NOT_SUPPORTED_CLASSLOADER_offset;
+
+  static void compute_offsets();
+  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
+
+ public:
+  static oop get_VTHREAD_GROUP();
+
   friend class JavaClasses;
 };
 
@@ -466,116 +531,99 @@ class java_lang_ThreadGroup : AllStatic {
  private:
   static int _parent_offset;
   static int _name_offset;
-  static int _threads_offset;
-  static int _groups_offset;
   static int _maxPriority_offset;
-  static int _destroyed_offset;
   static int _daemon_offset;
-  static int _nthreads_offset;
-  static int _ngroups_offset;
 
   static void compute_offsets();
-
  public:
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 
   // parent ThreadGroup
-  static oop  parent(oop java_thread_group);
+  static oop parent(oop java_thread_group);
   // name
   static const char* name(oop java_thread_group);
-  // ("name as oop" accessor is not necessary)
-  // Number of threads in group
-  static int nthreads(oop java_thread_group);
-  // threads
-  static objArrayOop threads(oop java_thread_group);
-  // Number of threads in group
-  static int ngroups(oop java_thread_group);
-  // groups
-  static objArrayOop groups(oop java_thread_group);
   // maxPriority in group
   static ThreadPriority maxPriority(oop java_thread_group);
-  // Destroyed
-  static bool is_destroyed(oop java_thread_group);
   // Daemon
   static bool is_daemon(oop java_thread_group);
+
   // Debugging
   friend class JavaClasses;
 };
 
 
+// Interface to java.lang.VirtualThread objects
+#define VTHREAD_INJECTED_FIELDS(macro)                                           \
+  macro(java_lang_VirtualThread,   objectWaiter,  intptr_signature,       false)
 
-// Interface to java.lang.Throwable objects
-
-class java_lang_Throwable: AllStatic {
-  friend class BacktraceBuilder;
-  friend class BacktraceIterator;
-
+class java_lang_VirtualThread : AllStatic {
  private:
-  // Trace constants
-  enum {
-    trace_methods_offset = 0,
-    trace_bcis_offset    = 1,
-    trace_mirrors_offset = 2,
-    trace_names_offset   = 3,
-    trace_next_offset    = 4,
-    trace_hidden_offset  = 5,
-    trace_size           = 6,
-    trace_chunk_size     = 32
-  };
-
-  static int _backtrace_offset;
-  static int _detailMessage_offset;
-  static int _stackTrace_offset;
-  static int _depth_offset;
-  static int _cause_offset;
-  static int _static_unassigned_stacktrace_offset;
-
-  // StackTrace (programmatic access, new since 1.4)
-  static void clear_stacktrace(oop throwable);
-  // Stacktrace (post JDK 1.7.0 to allow immutability protocol to be followed)
-  static void set_stacktrace(oop throwable, oop st_element_array);
-  static oop unassigned_stacktrace();
-
+  static int static_vthread_scope_offset;
+  static int _carrierThread_offset;
+  static int _continuation_offset;
+  static int _state_offset;
+  static int _next_offset;
+  static int _onWaitingList_offset;
+  static int _notified_offset;
+  static int _interruptible_wait_offset;
+  static int _recheckInterval_offset;
+  static int _timeout_offset;
+  static int _objectWaiter_offset;
+  JFR_ONLY(static int _jfr_epoch_offset;)
  public:
-  // Backtrace
-  static oop backtrace(oop throwable);
-  static void set_backtrace(oop throwable, oop value);
-  static int depth(oop throwable);
-  static void set_depth(oop throwable, int value);
-  static int get_detailMessage_offset() { CHECK_INIT(_detailMessage_offset); }
-  // Message
-  static oop message(oop throwable);
-  static oop cause(oop throwable);
-  static void set_message(oop throwable, oop value);
-  static Symbol* detail_message(oop throwable);
-  static void print_stack_element(outputStream *st, Method* method, int bci);
+  enum {
+    NEW           = 0,
+    STARTED       = 1,
+    RUNNING       = 2,
+    PARKING       = 3,
+    PARKED        = 4,
+    PINNED        = 5,
+    TIMED_PARKING = 6,
+    TIMED_PARKED  = 7,
+    TIMED_PINNED  = 8,
+    UNPARKED      = 9,
+    YIELDING      = 10,
+    YIELDED       = 11,
+    BLOCKING      = 12,
+    BLOCKED       = 13,
+    UNBLOCKED     = 14,
+    WAITING       = 15,
+    WAIT          = 16,  // waiting in Object.wait
+    TIMED_WAITING = 17,
+    TIMED_WAIT    = 18,  // waiting in timed-Object.wait
+    TERMINATED    = 99,
+  };
 
   static void compute_offsets();
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 
-  // Allocate space for backtrace (created but stack trace not filled in)
-  static void allocate_backtrace(Handle throwable, TRAPS);
-  // Fill in current stack trace for throwable with preallocated backtrace (no GC)
-  static void fill_in_stack_trace_of_preallocated_backtrace(Handle throwable);
-  // Fill in current stack trace, can cause GC
-  static void fill_in_stack_trace(Handle throwable, const methodHandle& method, TRAPS);
-  static void fill_in_stack_trace(Handle throwable, const methodHandle& method = methodHandle());
-  // Programmatic access to stack trace
-  static void get_stack_trace_elements(Handle throwable, objArrayHandle stack_trace, TRAPS);
+  // Testers
+  static bool is_subclass(Klass* klass) {
+    return klass->is_subclass_of(vmClasses::VirtualThread_klass());
+  }
+  static bool is_instance(oop obj);
 
-  // For recreating class initialization error exceptions.
-  static Handle get_cause_with_stack_trace(Handle throwable, TRAPS);
+  static oop vthread_scope();
+  static oop carrier_thread(oop vthread);
+  static oop continuation(oop vthread);
+  static int state(oop vthread);
+  static void set_state(oop vthread, int state);
+  static int cmpxchg_state(oop vthread, int old_state, int new_state);
+  static oop next(oop vthread);
+  static void set_next(oop vthread, oop next_vthread);
+  static bool set_onWaitingList(oop vthread, OopHandle& list_head);
+  static jlong timeout(oop vthread);
+  static void set_timeout(oop vthread, jlong value);
+  static void set_notified(oop vthread, jboolean value);
+  static void set_interruptible_wait(oop vthread, jboolean value);
+  static bool is_preempted(oop vthread);
+  static JavaThreadStatus map_state_to_thread_status(int state);
 
-  // Printing
-  static void print(oop throwable, outputStream* st);
-  static void print_stack_trace(Handle throwable, outputStream* st);
-  static void java_printStackTrace(Handle throwable, TRAPS);
-  // Debugging
-  friend class JavaClasses;
-  // Gets the method and bci of the top frame (TOS). Returns false if this failed.
-  static bool get_top_method_and_bci(oop throwable, Method** method, int* bci);
+  static inline ObjectWaiter* objectWaiter(oop vthread);
+  static inline void set_objectWaiter(oop vthread, ObjectWaiter* waiter);
+  static ObjectMonitor* current_pending_monitor(oop vthread);
+  static ObjectMonitor* current_waiting_monitor(oop vthread);
 };
-
 
 // Interface to java.lang.reflect.AccessibleObject objects
 
@@ -693,6 +741,10 @@ class java_lang_reflect_Constructor : public java_lang_reflect_AccessibleObject 
   friend class JavaClasses;
 };
 
+#if INCLUDE_JFR
+#define FIELD_INJECTED_FIELDS(macro) \
+  macro(java_lang_reflect_Field, jfr_epoch, int_signature, false)
+#endif // INCLUDE_JFR
 
 // Interface to java.lang.reflect.Field objects
 
@@ -705,9 +757,10 @@ class java_lang_reflect_Field : public java_lang_reflect_AccessibleObject {
   static int _type_offset;
   static int _slot_offset;
   static int _modifiers_offset;
-  static int _trusted_final_offset;
+  static int _flags_offset;
   static int _signature_offset;
   static int _annotations_offset;
+  JFR_ONLY(static int _jfr_epoch_offset;)
 
   static void compute_offsets();
 
@@ -733,10 +786,13 @@ class java_lang_reflect_Field : public java_lang_reflect_AccessibleObject {
   static int modifiers(oop field);
   static void set_modifiers(oop field, int value);
 
-  static void set_trusted_final(oop field);
+  static void set_flags(oop field, int value);
 
   static void set_signature(oop constructor, oop value);
   static void set_annotations(oop constructor, oop value);
+
+  JFR_ONLY(static u2 epoch(oop field);)
+  JFR_ONLY(static int epoch_offset() { CHECK_INIT(_jfr_epoch_offset); })
 
   // Debugging
   friend class JavaClasses;
@@ -799,6 +855,9 @@ class java_lang_Module {
     static oop loader(oop module);
     static void set_loader(oop module, oop value);
 
+    // CDS
+    static int module_entry_offset() { return _module_entry_offset; }
+
     static oop name(oop module);
     static void set_name(oop module, oop value);
 
@@ -809,12 +868,16 @@ class java_lang_Module {
   friend class JavaClasses;
 };
 
+#define CONSTANTPOOL_INJECTED_FIELDS(macro)                             \
+  macro(reflect_ConstantPool, vmholder, object_signature, false)
+
 // Interface to jdk.internal.reflect.ConstantPool objects
 class reflect_ConstantPool {
  private:
   // Note that to reduce dependencies on the JDK we compute these
-  // offsets at run-time.
-  static int _oop_offset;
+  // offsets at run-time. This field is the oop offset for the
+  // actual constant pool, previously called constantPoolOop.
+  static int _vmholder_offset;
 
   static void compute_offsets();
 
@@ -826,7 +889,6 @@ class reflect_ConstantPool {
 
   // Accessors
   static void set_cp(oop reflect, ConstantPool* value);
-  static int oop_offset() { CHECK_INIT(_oop_offset); }
 
   static ConstantPool* get_cp(oop reflect);
 
@@ -834,20 +896,6 @@ class reflect_ConstantPool {
   friend class JavaClasses;
 };
 
-// Interface to jdk.internal.reflect.UnsafeStaticFieldAccessorImpl objects
-class reflect_UnsafeStaticFieldAccessorImpl {
- private:
-  static int _base_offset;
-  static void compute_offsets();
-
- public:
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-
-  static int base_offset() { CHECK_INIT(_base_offset); }
-
-  // Debugging
-  friend class JavaClasses;
-};
 
 // Interface to java.lang primitive type boxing objects:
 //  - java.lang.Boolean
@@ -863,13 +911,12 @@ class reflect_UnsafeStaticFieldAccessorImpl {
 
 class java_lang_boxing_object: AllStatic {
  private:
-  static int _value_offset;
-  static int _long_value_offset;
+  static int* _offsets;
 
   static void compute_offsets();
   static oop initialize_and_allocate(BasicType type, TRAPS);
  public:
-  // Allocation. Returns a boxed value, or NULL for invalid type.
+  // Allocation. Returns a boxed value, or null for invalid type.
   static oop create(BasicType type, jvalue* value, TRAPS);
   // Accessors. Returns the basic type being boxed, or T_ILLEGAL for invalid oop.
   static BasicType get_value(oop box, jvalue* value);
@@ -881,7 +928,9 @@ class java_lang_boxing_object: AllStatic {
   static void print(BasicType type, jvalue* value, outputStream* st);
 
   static int value_offset(BasicType type) {
-    return is_double_word_type(type) ? _long_value_offset : _value_offset;
+    assert(type >= T_BOOLEAN && type <= T_LONG, "BasicType out of range");
+    assert(_offsets != nullptr, "Uninitialized offsets");
+    return _offsets[type - T_BOOLEAN];
   }
 
   static void serialize_offsets(SerializeClosure* f);
@@ -905,9 +954,11 @@ class java_lang_ref_Reference: AllStatic {
  public:
   // Accessors
   static inline oop weak_referent_no_keepalive(oop ref);
+  static inline oop weak_referent(oop ref);
   static inline oop phantom_referent_no_keepalive(oop ref);
   static inline oop unknown_referent_no_keepalive(oop ref);
   static inline void clear_referent(oop ref);
+  static inline void clear_referent_raw(oop ref);
   static inline HeapWord* referent_addr_raw(oop ref);
   static inline oop next(oop ref);
   static inline void set_next(oop ref, oop value);
@@ -920,6 +971,8 @@ class java_lang_ref_Reference: AllStatic {
   static bool is_referent_field(oop obj, ptrdiff_t offset);
   static inline bool is_final(oop ref);
   static inline bool is_phantom(oop ref);
+  static inline bool is_weak(oop ref);
+  static inline bool is_soft(oop ref);
 
   static int referent_offset()    { CHECK_INIT(_referent_offset); }
   static int queue_offset()       { CHECK_INIT(_queue_offset); }
@@ -1026,7 +1079,7 @@ class java_lang_invoke_LambdaForm: AllStatic {
 
   // Testers
   static bool is_subclass(Klass* klass) {
-    return vmClasses::LambdaForm_klass() != NULL &&
+    return vmClasses::LambdaForm_klass() != nullptr &&
       klass->is_subclass_of(vmClasses::LambdaForm_klass());
   }
   static bool is_instance(oop obj);
@@ -1038,16 +1091,12 @@ class java_lang_invoke_LambdaForm: AllStatic {
 // Interface to java.lang.invoke.NativeEntryPoint objects
 // (These are a private interface for managing adapter code generation.)
 
-class jdk_internal_invoke_NativeEntryPoint: AllStatic {
+class jdk_internal_foreign_abi_NativeEntryPoint: AllStatic {
   friend class JavaClasses;
 
  private:
-  static int _shadow_space_offset;
-  static int _argMoves_offset;
-  static int _returnMoves_offset;
-  static int _need_transition_offset;
   static int _method_type_offset;
-  static int _name_offset;
+  static int _downcall_stub_address_offset;
 
   static void compute_offsets();
 
@@ -1055,34 +1104,97 @@ class jdk_internal_invoke_NativeEntryPoint: AllStatic {
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 
   // Accessors
-  static jint       shadow_space(oop entry);
-  static oop        argMoves(oop entry);
-  static oop        returnMoves(oop entry);
-  static jboolean   need_transition(oop entry);
   static oop        method_type(oop entry);
-  static oop        name(oop entry);
+  static jlong      downcall_stub_address(oop entry);
+
+  // Accessors for code generation:
+  static int method_type_offset_in_bytes()           { return _method_type_offset; }
+  static int downcall_stub_address_offset_in_bytes() { return _downcall_stub_address_offset; }
+};
+
+class jdk_internal_foreign_abi_ABIDescriptor: AllStatic {
+  friend class JavaClasses;
+
+ private:
+  static int _inputStorage_offset;
+  static int _outputStorage_offset;
+  static int _volatileStorage_offset;
+  static int _stackAlignment_offset;
+  static int _shadowSpace_offset;
+  static int _scratch1_offset;
+  static int _scratch2_offset;
+
+  static void compute_offsets();
+
+ public:
+  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
+
+  // Accessors
+  static refArrayOop inputStorage(oop entry);
+  static refArrayOop outputStorage(oop entry);
+  static refArrayOop volatileStorage(oop entry);
+  static jint        stackAlignment(oop entry);
+  static jint        shadowSpace(oop entry);
+  static oop         scratch1(oop entry);
+  static oop         scratch2(oop entry);
+};
+
+class jdk_internal_foreign_abi_VMStorage: AllStatic {
+  friend class JavaClasses;
+
+ private:
+  static int _type_offset;
+  static int _indexOrOffset_offset;
+  static int _segmentMaskOrSize_offset;
+  static int _debugName_offset;
+
+  static void compute_offsets();
+
+ public:
+  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
+
+  // Accessors
+  static jbyte  type(oop entry);
+  static jint   index_or_offset(oop entry);
+  static jshort segment_mask_or_size(oop entry);
+  static oop    debugName(oop entry);
 
   // Testers
   static bool is_subclass(Klass* klass) {
-    return vmClasses::NativeEntryPoint_klass() != NULL &&
-      klass->is_subclass_of(vmClasses::NativeEntryPoint_klass());
+    return vmClasses::VMStorage_klass() != nullptr &&
+      klass->is_subclass_of(vmClasses::VMStorage_klass());
   }
   static bool is_instance(oop obj);
+};
 
-  // Accessors for code generation:
-  static int shadow_space_offset_in_bytes()    { return _shadow_space_offset;    }
-  static int argMoves_offset_in_bytes()        { return _argMoves_offset;        }
-  static int returnMoves_offset_in_bytes()     { return _returnMoves_offset;     }
-  static int need_transition_offset_in_bytes() { return _need_transition_offset; }
-  static int method_type_offset_in_bytes()     { return _method_type_offset;     }
-  static int name_offset_in_bytes()            { return _name_offset;            }
+class jdk_internal_foreign_abi_CallConv: AllStatic {
+  friend class JavaClasses;
+
+ private:
+  static int _argRegs_offset;
+  static int _retRegs_offset;
+
+  static void compute_offsets();
+
+ public:
+  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
+
+  // Accessors
+  static refArrayOop argRegs(oop entry);
+  static refArrayOop retRegs(oop entry);
+
+  // Testers
+  static bool is_subclass(Klass* klass) {
+    return vmClasses::CallConv_klass() != nullptr &&
+      klass->is_subclass_of(vmClasses::CallConv_klass());
+  }
+  static bool is_instance(oop obj);
 };
 
 // Interface to java.lang.invoke.MemberName objects
 // (These are a private interface for Java code to query the class hierarchy.)
 
 #define RESOLVEDMETHOD_INJECTED_FIELDS(macro)                                   \
-  macro(java_lang_invoke_ResolvedMethodName, vmholder, object_signature, false) \
   macro(java_lang_invoke_ResolvedMethodName, vmtarget, intptr_signature, false)
 
 class java_lang_invoke_ResolvedMethodName : AllStatic {
@@ -1166,16 +1278,17 @@ class java_lang_invoke_MemberName: AllStatic {
   // Relevant integer codes (keep these in synch. with MethodHandleNatives.Constants):
   enum {
     MN_IS_METHOD             = 0x00010000, // method (not constructor)
-    MN_IS_CONSTRUCTOR        = 0x00020000, // constructor
+    MN_IS_OBJECT_CONSTRUCTOR = 0x00020000, // constructor
     MN_IS_FIELD              = 0x00040000, // field
     MN_IS_TYPE               = 0x00080000, // nested type
     MN_CALLER_SENSITIVE      = 0x00100000, // @CallerSensitive annotation detected
     MN_TRUSTED_FINAL         = 0x00200000, // trusted final field
+    MN_HIDDEN_MEMBER         = 0x00400000, // @Hidden annotation detected
+    MN_NULL_RESTRICTED_FIELD = 0x00800000, // null-restricted field
     MN_REFERENCE_KIND_SHIFT  = 24, // refKind
-    MN_REFERENCE_KIND_MASK   = 0x0F000000 >> MN_REFERENCE_KIND_SHIFT,
-    // The SEARCH_* bits are not for MN.flags but for the matchFlags argument of MHN.getMembers:
-    MN_SEARCH_SUPERCLASSES   = 0x00100000, // walk super classes
-    MN_SEARCH_INTERFACES     = 0x00200000, // walk implemented interfaces
+    MN_REFERENCE_KIND_MASK   = 0x0F000000 >> MN_REFERENCE_KIND_SHIFT, // 4 bits
+    MN_LAYOUT_SHIFT          = 28, // field layout
+    MN_LAYOUT_MASK           = 0x70000000 >> MN_LAYOUT_SHIFT, // 3 bits
     MN_NESTMATE_CLASS        = 0x00000001,
     MN_HIDDEN_CLASS          = 0x00000002,
     MN_STRONG_LOADER_LINK    = 0x00000004,
@@ -1210,7 +1323,7 @@ class java_lang_invoke_MethodType: AllStatic {
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
   // Accessors
   static oop            rtype(oop mt);
-  static objArrayOop    ptypes(oop mt);
+  static refArrayOop    ptypes(oop mt);
 
   static oop            ptype(oop mt, int index);
   static int            ptype_count(oop mt);
@@ -1232,13 +1345,17 @@ class java_lang_invoke_MethodType: AllStatic {
 
 
 // Interface to java.lang.invoke.CallSite objects
+#define CALLSITE_INJECTED_FIELDS(macro) \
+  macro(java_lang_invoke_CallSite, vmdependencies, intptr_signature, false) \
+  macro(java_lang_invoke_CallSite, last_cleanup, long_signature, false)
 
 class java_lang_invoke_CallSite: AllStatic {
   friend class JavaClasses;
 
 private:
   static int _target_offset;
-  static int _context_offset;
+  static int _vmdependencies_offset;
+  static int _last_cleanup_offset;
 
   static void compute_offsets();
 
@@ -1249,7 +1366,7 @@ public:
   static void         set_target(          oop site, oop target);
   static void         set_target_volatile( oop site, oop target);
 
-  static oop context_no_keepalive(oop site);
+  static DependencyContext vmdependencies(oop call_site);
 
   // Testers
   static bool is_subclass(Klass* klass) {
@@ -1259,7 +1376,6 @@ public:
 
   // Accessors for code generation:
   static int target_offset()  { CHECK_INIT(_target_offset); }
-  static int context_offset() { CHECK_INIT(_context_offset); }
 };
 
 // Interface to java.lang.invoke.ConstantCallSite objects
@@ -1284,56 +1400,6 @@ public:
   static bool is_instance(oop obj);
 };
 
-// Interface to java.lang.invoke.MethodHandleNatives$CallSiteContext objects
-
-#define CALLSITECONTEXT_INJECTED_FIELDS(macro) \
-  macro(java_lang_invoke_MethodHandleNatives_CallSiteContext, vmdependencies, intptr_signature, false) \
-  macro(java_lang_invoke_MethodHandleNatives_CallSiteContext, last_cleanup, long_signature, false)
-
-class DependencyContext;
-
-class java_lang_invoke_MethodHandleNatives_CallSiteContext : AllStatic {
-  friend class JavaClasses;
-
-private:
-  static int _vmdependencies_offset;
-  static int _last_cleanup_offset;
-
-  static void compute_offsets();
-
-public:
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-  // Accessors
-  static DependencyContext vmdependencies(oop context);
-
-  // Testers
-  static bool is_subclass(Klass* klass) {
-    return klass->is_subclass_of(vmClasses::Context_klass());
-  }
-  static bool is_instance(oop obj);
-};
-
-// Interface to java.security.AccessControlContext objects
-
-class java_security_AccessControlContext: AllStatic {
- private:
-  // Note that for this class the layout changed between JDK1.2 and JDK1.3,
-  // so we compute the offsets at startup rather than hard-wiring them.
-  static int _context_offset;
-  static int _privilegedContext_offset;
-  static int _isPrivileged_offset;
-  static int _isAuthorized_offset;
-
-  static void compute_offsets();
- public:
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-  static oop create(objArrayHandle context, bool isPrivileged, Handle privileged_context, TRAPS);
-
-  // Debugging/initialization
-  friend class JavaClasses;
-};
-
-
 // Interface to java.lang.ClassLoader objects
 
 #define CLASSLOADER_INJECTED_FIELDS(macro)                            \
@@ -1351,13 +1417,16 @@ class java_lang_ClassLoader : AllStatic {
   static void compute_offsets();
 
  public:
+  // Support for CDS
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
+  static int loader_data_offset() { return  _loader_data_offset; }
 
   static ClassLoaderData* loader_data_acquire(oop loader);
   static ClassLoaderData* loader_data(oop loader);
   static void release_set_loader_data(oop loader, ClassLoaderData* new_data);
 
   static oop parent(oop loader);
+  static oop parent_no_keepalive(oop loader);
   static oop name(oop loader);
   static oop nameAndId(oop loader);
   static bool isAncestor(oop loader, oop cl);
@@ -1366,13 +1435,6 @@ class java_lang_ClassLoader : AllStatic {
   static bool parallelCapable(oop the_class_mirror);
 
   static bool is_trusted_loader(oop loader);
-
-  // Return true if this is one of the class loaders associated with
-  // the generated bytecodes for reflection.
-  static bool is_reflection_class_loader(oop loader);
-
-  // Fix for 4474172
-  static oop  non_reflection_class_loader(oop loader);
 
   // Testers
   static bool is_subclass(Klass* klass) {
@@ -1394,128 +1456,11 @@ class java_lang_System : AllStatic {
   static int _static_in_offset;
   static int _static_out_offset;
   static int _static_err_offset;
-  static int _static_security_offset;
-  static int _static_allow_security_offset;
-  static int _static_never_offset;
 
  public:
   static int  in_offset() { CHECK_INIT(_static_in_offset); }
   static int out_offset() { CHECK_INIT(_static_out_offset); }
   static int err_offset() { CHECK_INIT(_static_err_offset); }
-  static bool allow_security_manager();
-  static bool has_security_manager();
-
-  static void compute_offsets();
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-
-  // Debugging
-  friend class JavaClasses;
-};
-
-
-// Interface to java.lang.StackTraceElement objects
-
-class java_lang_StackTraceElement: AllStatic {
- private:
-  static int _declaringClassObject_offset;
-  static int _classLoaderName_offset;
-  static int _moduleName_offset;
-  static int _moduleVersion_offset;
-  static int _declaringClass_offset;
-  static int _methodName_offset;
-  static int _fileName_offset;
-  static int _lineNumber_offset;
-
-  // Setters
-  static void set_classLoaderName(oop element, oop value);
-  static void set_moduleName(oop element, oop value);
-  static void set_moduleVersion(oop element, oop value);
-  static void set_declaringClass(oop element, oop value);
-  static void set_methodName(oop element, oop value);
-  static void set_fileName(oop element, oop value);
-  static void set_lineNumber(oop element, int value);
-  static void set_declaringClassObject(oop element, oop value);
-
-  static void decode_file_and_line(Handle java_mirror, InstanceKlass* holder, int version,
-                                   const methodHandle& method, int bci,
-                                   Symbol*& source, oop& source_file, int& line_number, TRAPS);
-
- public:
-  // Create an instance of StackTraceElement
-  static oop create(const methodHandle& method, int bci, TRAPS);
-
-  static void fill_in(Handle element, InstanceKlass* holder, const methodHandle& method,
-                      int version, int bci, Symbol* name, TRAPS);
-
-  static void compute_offsets();
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-
-#if INCLUDE_JVMCI
-  static void decode(const methodHandle& method, int bci, Symbol*& fileName, int& lineNumber, TRAPS);
-#endif
-
-  // Debugging
-  friend class JavaClasses;
-};
-
-
-class Backtrace: AllStatic {
- public:
-  // Helper backtrace functions to store bci|version together.
-  static int merge_bci_and_version(int bci, int version);
-  static int merge_mid_and_cpref(int mid, int cpref);
-  static int bci_at(unsigned int merged);
-  static int version_at(unsigned int merged);
-  static int mid_at(unsigned int merged);
-  static int cpref_at(unsigned int merged);
-  static int get_line_number(Method* method, int bci);
-  static Symbol* get_source_file_name(InstanceKlass* holder, int version);
-
-  // Debugging
-  friend class JavaClasses;
-};
-
-// Interface to java.lang.StackFrameInfo objects
-
-#define STACKFRAMEINFO_INJECTED_FIELDS(macro)                      \
-  macro(java_lang_StackFrameInfo, version, short_signature, false)
-
-class java_lang_StackFrameInfo: AllStatic {
-private:
-  static int _memberName_offset;
-  static int _bci_offset;
-  static int _version_offset;
-
-  static Method* get_method(Handle stackFrame, InstanceKlass* holder, TRAPS);
-
-public:
-  // Setters
-  static void set_method_and_bci(Handle stackFrame, const methodHandle& method, int bci, TRAPS);
-  static void set_bci(oop info, int value);
-
-  static void set_version(oop info, short value);
-
-  static void compute_offsets();
-  static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-
-  static void to_stack_trace_element(Handle stackFrame, Handle stack_trace_element, TRAPS);
-
-  // Debugging
-  friend class JavaClasses;
-};
-
-class java_lang_LiveStackFrameInfo: AllStatic {
- private:
-  static int _monitors_offset;
-  static int _locals_offset;
-  static int _operands_offset;
-  static int _mode_offset;
-
- public:
-  static void set_monitors(oop info, oop value);
-  static void set_locals(oop info, oop value);
-  static void set_operands(oop info, oop value);
-  static void set_mode(oop info, int value);
 
   static void compute_offsets();
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
@@ -1619,31 +1564,6 @@ class vector_VectorPayload : AllStatic {
   static bool is_instance(oop obj);
 };
 
-class java_lang_Integer : AllStatic {
-public:
-  static jint value(oop obj);
-};
-
-class java_lang_Long : AllStatic {
-public:
-  static jlong value(oop obj);
-};
-
-class java_lang_Character : AllStatic {
-public:
-  static jchar value(oop obj);
-};
-
-class java_lang_Short : AllStatic {
-public:
-  static jshort value(oop obj);
-};
-
-class java_lang_Byte : AllStatic {
-public:
-  static jbyte value(oop obj);
-};
-
 class java_lang_Boolean : AllStatic {
  private:
   static int _static_TRUE_offset;
@@ -1651,10 +1571,7 @@ class java_lang_Boolean : AllStatic {
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
-  static oop  get_TRUE(InstanceKlass *k);
-  static oop  get_FALSE(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
-  static jboolean value(oop obj);
 };
 
 class java_lang_Integer_IntegerCache : AllStatic {
@@ -1663,7 +1580,7 @@ class java_lang_Integer_IntegerCache : AllStatic {
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
-  static objArrayOop  cache(InstanceKlass *k);
+  static refArrayOop  cache(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 };
 
@@ -1673,7 +1590,7 @@ class java_lang_Long_LongCache : AllStatic {
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
-  static objArrayOop  cache(InstanceKlass *k);
+  static refArrayOop  cache(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 };
 
@@ -1683,7 +1600,7 @@ class java_lang_Character_CharacterCache : AllStatic {
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
-  static objArrayOop  cache(InstanceKlass *k);
+  static refArrayOop  cache(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 };
 
@@ -1693,7 +1610,7 @@ class java_lang_Short_ShortCache : AllStatic {
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
-  static objArrayOop  cache(InstanceKlass *k);
+  static refArrayOop  cache(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 };
 
@@ -1703,10 +1620,9 @@ class java_lang_Byte_ByteCache : AllStatic {
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
-  static objArrayOop  cache(InstanceKlass *k);
+  static refArrayOop  cache(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 };
-
 
 // Interface to java.lang.InternalError objects
 
@@ -1737,11 +1653,11 @@ class InjectedField {
   const vmClassID klass_id;
   const vmSymbolID name_index;
   const vmSymbolID signature_index;
-  const bool           may_be_java;
+  const bool may_be_java;
 
 
-  Klass* klass() const      { return vmClasses::klass_at(klass_id); }
-  Symbol* name() const      { return lookup_symbol(name_index); }
+  InstanceKlass* klass() const { return vmClasses::klass_at(klass_id); }
+  Symbol* name() const { return lookup_symbol(name_index); }
   Symbol* signature() const { return lookup_symbol(signature_index); }
 
   int compute_offset();
@@ -1752,22 +1668,10 @@ class InjectedField {
   }
 };
 
-#define DECLARE_INJECTED_FIELD_ENUM(klass, name, signature, may_be_java) \
-  klass##_##name##_enum,
-
-#define ALL_INJECTED_FIELDS(macro)          \
-  STRING_INJECTED_FIELDS(macro)             \
-  CLASS_INJECTED_FIELDS(macro)              \
-  CLASSLOADER_INJECTED_FIELDS(macro)        \
-  RESOLVEDMETHOD_INJECTED_FIELDS(macro)     \
-  MEMBERNAME_INJECTED_FIELDS(macro)         \
-  CALLSITECONTEXT_INJECTED_FIELDS(macro)    \
-  STACKFRAMEINFO_INJECTED_FIELDS(macro)     \
-  MODULE_INJECTED_FIELDS(macro)             \
-  INTERNALERROR_INJECTED_FIELDS(macro)
-
 
 // Interface to hard-coded offset checking
+
+enum class InjectedFieldID : int;
 
 class JavaClasses : AllStatic {
  private:
@@ -1776,10 +1680,6 @@ class JavaClasses : AllStatic {
 
   static bool check_offset(const char *klass_name, int offset, const char *field_name, const char* field_sig) PRODUCT_RETURN0;
  public:
-  enum InjectedFieldID {
-    ALL_INJECTED_FIELDS(DECLARE_INJECTED_FIELD_ENUM)
-    MAX_enum
-  };
 
   static int compute_injected_offset(InjectedFieldID id);
 
@@ -1788,9 +1688,15 @@ class JavaClasses : AllStatic {
   static void serialize_offsets(SerializeClosure* soc) NOT_CDS_RETURN;
   static InjectedField* get_injected(Symbol* class_name, int* field_count);
   static bool is_supported_for_archiving(oop obj) NOT_CDS_JAVA_HEAP_RETURN_(false);
+
+  static void compute_offset(int &dest_offset,
+                             InstanceKlass* ik, Symbol* name_symbol, Symbol* signature_symbol,
+                             bool is_static = false);
+  static void compute_offset(int& dest_offset, InstanceKlass* ik,
+                             const char* name_string, Symbol* signature_symbol,
+                             bool is_static = false);
 };
 
-#undef DECLARE_INJECTED_FIELD_ENUM
-
 #undef CHECK_INIT
+
 #endif // SHARE_CLASSFILE_JAVACLASSES_HPP

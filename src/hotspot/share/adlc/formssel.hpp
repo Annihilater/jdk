@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,6 +45,7 @@ class MatchRule;
 class Attribute;
 class Effect;
 class ExpandRule;
+class Flag;
 class RewriteRule;
 class ConstructRule;
 class FormatRule;
@@ -108,6 +109,7 @@ public:
   FormatRule    *_format;              // Format for assembly generation
   Peephole      *_peephole;            // List of peephole rules for instruction
   const char    *_ins_pipe;            // Instruction Scheduling description class
+  Flag          *_flag;               // List of Flags that should be set by default for this node
 
   uint          *_uniq_idx;            // Indexes of unique operands
   uint           _uniq_idx_length;     // Length of _uniq_idx array
@@ -139,7 +141,7 @@ public:
   virtual bool        expands() const ;
   // This instruction has a late expand rule?
   virtual bool        postalloc_expands() const;
-  // Return this instruction's first peephole rule, or NULL
+  // Return this instruction's first peephole rule, or null
   virtual Peephole   *peepholes() const;
   // Add a peephole rule to this instruction
   virtual void        append_peephole(Peephole *peep);
@@ -155,7 +157,6 @@ public:
   virtual int         is_ideal_copy() const;    // node matches ideal 'Copy*'
   virtual bool        is_ideal_negD() const;    // node matches ideal 'NegD'
   virtual bool        is_ideal_if()   const;    // node matches ideal 'If'
-  virtual bool        is_ideal_fastlock() const; // node matches 'FastLock'
   virtual bool        is_ideal_membar() const;  // node matches ideal 'MemBarXXX'
   virtual bool        is_ideal_loadPC() const;  // node matches ideal 'LoadPC'
   virtual bool        is_ideal_box() const;     // node matches ideal 'Box'
@@ -167,7 +168,6 @@ public:
   virtual bool        is_ideal_safepoint() const; // node matches 'SafePoint'
   virtual bool        is_ideal_nop() const;     // node matches 'Nop'
   virtual bool        is_ideal_control() const; // control node
-  virtual bool        is_vector() const;        // vector instruction
 
   virtual Form::CallType is_ideal_call() const; // matches ideal 'Call'
   virtual Form::DataType is_ideal_load() const; // node matches ideal 'LoadXNode'
@@ -196,11 +196,6 @@ public:
     NO_MEMORY_OPERAND = -1,
     MANY_MEMORY_OPERANDS = 999999
   };
-
-
-  // This instruction captures the machine-independent bottom_type
-  // Expected use is for pointer vs oop determination for LoadP
-  virtual bool        captures_bottom_type(FormDict& globals) const;
 
   virtual const char *cost();      // Access ins_cost attribute
   virtual uint        num_opnds(); // Count of num_opnds for MachNode class
@@ -238,7 +233,7 @@ public:
   const char         *opnd_ident(int idx);  // Name of operand #idx.
   const char         *reduce_result();
   // Return the name of the operand on the right hand side of the binary match
-  // Return NULL if there is no right hand side
+  // Return null if there is no right hand side
   const char         *reduce_right(FormDict &globals)  const;
   const char         *reduce_left(FormDict &globals)   const;
 
@@ -255,7 +250,7 @@ public:
   void                set_cisc_reg_mask_name(const char *rm_name) { _cisc_reg_mask_name = rm_name; }
   // Output cisc-method prototypes and method bodies
   void                declare_cisc_version(ArchDesc &AD, FILE *fp_cpp);
-  bool                define_cisc_version (ArchDesc &AD, FILE *fp_cpp);
+  void                define_cisc_version(ArchDesc& AD, FILE* fp_cpp);
 
   bool                check_branch_variant(ArchDesc &AD, InstructForm *short_branch);
 
@@ -268,19 +263,19 @@ public:
   void                set_needs_constant_base(bool x) {        _needs_constant_base = x; }
 
   InstructForm       *short_branch_form() { return _short_branch_form; }
-  bool                has_short_branch_form() { return _short_branch_form != NULL; }
+  bool                has_short_branch_form() { return _short_branch_form != nullptr; }
   // Output short branch prototypes and method bodies
   void                declare_short_branch_methods(FILE *fp_cpp);
-  bool                define_short_branch_methods(ArchDesc &AD, FILE *fp_cpp);
+  void                define_short_branch_methods(ArchDesc& AD, FILE* fp_cpp);
 
   uint                alignment() { return _alignment; }
   void                set_alignment(uint val) { _alignment = val; }
 
-  // Seach through operands to determine operands unique positions.
+  // Search through operands to determine operands unique positions.
   void                set_unique_opnds();
   uint                num_unique_opnds() { return _num_uniq; }
   uint                unique_opnds_idx(int idx) {
-    if (_uniq_idx != NULL && idx > 0) {
+    if (_uniq_idx != nullptr && idx > 0) {
       assert((uint)idx < _uniq_idx_length, "out of bounds");
       return _uniq_idx[idx];
     } else {
@@ -308,6 +303,7 @@ public:
 
   virtual void dump();             // Debug printer
   virtual void output(FILE *fp);   // Write to output files
+  virtual void forms_do(FormClosure *f);
 };
 
 //------------------------------EncodeForm-------------------------------------
@@ -331,6 +327,7 @@ public:
 
   void dump();                     // Debug printer
   void output(FILE *fp);           // Write info to output files
+  virtual void forms_do(FormClosure *f);
 };
 
 //------------------------------EncClass---------------------------------------
@@ -341,7 +338,7 @@ public:
   NameList       _parameter_name;
 
   // Breakdown the encoding into strings separated by $replacement_variables
-  // There is an entry in _strings, perhaps NULL, that precedes each _rep_vars
+  // There is an entry in _strings, perhaps null, that precedes each _rep_vars
   NameList       _code;            // Strings passed through to tty->print
   NameList       _rep_vars;        // replacement variables
 
@@ -375,6 +372,7 @@ public:
   bool verify();
   void dump();
   void output(FILE *fp);
+  virtual void forms_do(FormClosure* f);
 };
 
 //------------------------------MachNode---------------------------------------
@@ -434,7 +432,7 @@ private:
   // blank, RegReg, RegMem, MemReg, ...
   NameList    _encoding;
   // NameList    _parameter;
-  // The parameters for each encoding are preceeded by a NameList::_signal
+  // The parameters for each encoding are preceded by a NameList::_signal
   // and follow the parameters for the previous encoding.
 
   // char *_encode;                  // Type of instruction encoding
@@ -466,6 +464,7 @@ public:
 
   void dump();
   void output(FILE *fp);
+  virtual void forms_do(FormClosure *f);
 };
 
 //------------------------------Effect-----------------------------------------
@@ -513,6 +512,27 @@ public:
 
   void dump();                    // Debug printer
   void output(FILE *fp);          // Write info to output files
+  virtual void forms_do(FormClosure *f);
+};
+
+//---------------------------------Flag----------------------------------------
+class Flag : public Form {
+private:
+    Flag* _next;
+public:
+  const char *_name; // Name of the flag (See Node::<flag_name> or Node::Pd::<flag_name>
+
+  // Public Methods
+  Flag(const char *name);      // Constructor
+  ~Flag();                     // Destructor
+
+  // Append a flag rule for the same instruction
+  void append_flag(Flag *next_flag);
+
+  Flag* next();
+
+  void dump();                   // Debug printer
+  void output(FILE *fp);         // Write info to output files
 };
 
 //------------------------------RewriteRule------------------------------------
@@ -532,6 +552,7 @@ public:
   ~RewriteRule();                  // Destructor
   void dump();                     // Debug printer
   void output(FILE *fp);           // Write info to output files
+  virtual void forms_do(FormClosure* f);
 };
 
 
@@ -562,6 +583,7 @@ public:
   virtual bool ideal_only() const;
   virtual void dump();             // Debug printer
   virtual void output(FILE *fp);   // Write to output files
+  virtual void forms_do(FormClosure* f);
 };
 
 //------------------------------OperandForm------------------------------------
@@ -623,7 +645,7 @@ public:
   virtual Form::DataType is_user_name_for_sReg() const;
 
   // Return ideal type, if there is a single ideal type for this operand
-  virtual const char *ideal_type(FormDict &globals, RegisterForm *registers = NULL) const;
+  virtual const char *ideal_type(FormDict &globals, RegisterForm *registers = nullptr) const;
   // If there is a single ideal type for this interface field, return it.
   virtual const char *interface_ideal_type(FormDict   &globals,
                                            const char *field_name) const;
@@ -631,7 +653,7 @@ public:
   // Return true if this operand represents a bound register class
   bool is_bound_register() const;
 
-  // Return the Register class for this operand.  Returns NULL if
+  // Return the Register class for this operand.  Returns null if
   // operand isn't a register form.
   RegClass* get_RegClass() const;
 
@@ -660,7 +682,7 @@ public:
   // Return zero-based position in component list; -1 if not in list.
   virtual int         constant_position(FormDict &globals, const Component *comp);
   virtual int         constant_position(FormDict &globals, const char *local_name);
-  // Return the operand form corresponding to the given index, else NULL.
+  // Return the operand form corresponding to the given index, else null.
   virtual OperandForm *constant_operand(FormDict &globals, uint const_index);
 
   // Return zero-based position in component list; -1 if not in list.
@@ -668,7 +690,7 @@ public:
 
   const char         *reduce_result() const;
   // Return the name of the operand on the right hand side of the binary match
-  // Return NULL if there is no right hand side
+  // Return null if there is no right hand side
   const char         *reduce_right(FormDict &globals)  const;
   const char         *reduce_left(FormDict &globals)   const;
 
@@ -689,6 +711,7 @@ public:
 
   virtual void dump();             // Debug printer
   virtual void output(FILE *fp);   // Write to output files
+  virtual void forms_do(FormClosure* f);
 };
 
 //------------------------------Constraint-------------------------------------
@@ -707,6 +730,7 @@ public:
 
   void dump();                     // Debug printer
   void output(FILE *fp);           // Write info to output files
+  virtual void forms_do(FormClosure* f);
 };
 
 //------------------------------Predicate--------------------------------------
@@ -942,9 +966,9 @@ public:
   int         _commutative_id;     // id of commutative operation
 
   // Public Methods
-  MatchNode(ArchDesc &ad, const char *result = 0, const char *expr = 0,
-            const char *opType=0, MatchNode *lChild=NULL,
-            MatchNode *rChild=NULL);
+  MatchNode(ArchDesc &ad, const char *result = nullptr, const char *expr = nullptr,
+            const char *opType=nullptr, MatchNode *lChild=nullptr,
+            MatchNode *rChild=nullptr);
   MatchNode(ArchDesc &ad, MatchNode& mNode); // Shallow copy constructor;
   MatchNode(ArchDesc &ad, MatchNode& mNode, int clone); // Construct clone
   ~MatchNode();
@@ -974,7 +998,7 @@ public:
 
   // Return the name of the operands associated with reducing to this operand:
   // The result type, plus the left and right sides of the binary match
-  // Return NULL if there is no left or right hand side
+  // Return null if there is no left or right hand side
   bool       sets_result()   const;    // rule "Set"s result of match
   const char *reduce_right(FormDict &globals)  const;
   const char *reduce_left (FormDict &globals)  const;
@@ -982,7 +1006,7 @@ public:
   // Recursive version of check in MatchRule
   int        cisc_spill_match(FormDict& globals, RegisterForm* registers,
                               MatchNode* mRule2, const char* &operand,
-                              const char* &reg_type);
+                              const char* &reg_type, InstructForm *from_instr, InstructForm *to_instr);
   int        cisc_spill_merge(int left_result, int right_result);
 
   virtual bool equivalent(FormDict& globals, MatchNode* mNode2);
@@ -992,6 +1016,7 @@ public:
 
   void dump();
   void output(FILE *fp);
+  virtual void forms_do(FormClosure* f);
 };
 
 //------------------------------MatchRule--------------------------------------
@@ -1025,7 +1050,6 @@ public:
   int        is_ideal_copy() const;
   int        is_expensive() const;     // node matches ideal 'CosD'
   bool       is_ideal_if()   const;    // node matches ideal 'If'
-  bool       is_ideal_fastlock() const; // node matches ideal 'FastLock'
   bool       is_ideal_jump()   const;  // node matches ideal 'Jump'
   bool       is_ideal_membar() const;  // node matches ideal 'MemBarXXX'
   bool       is_ideal_loadPC() const;  // node matches ideal 'LoadPC'
@@ -1033,7 +1057,6 @@ public:
   bool       is_ideal_goto() const;    // node matches ideal 'Goto'
   bool       is_ideal_loopEnd() const; // node matches ideal 'LoopEnd'
   bool       is_ideal_bool() const;    // node matches ideal 'Bool'
-  bool       is_vector() const;        // vector instruction
   Form::DataType is_ideal_load() const;// node matches ideal 'LoadXNode'
   // Should antidep checks be disabled for this rule
   // See definition of MatchRule::skip_antidep_check
@@ -1043,7 +1066,7 @@ public:
   // Check if 'mRule2' is a cisc-spill variant of this MatchRule
   int        matchrule_cisc_spill_match(FormDict &globals, RegisterForm* registers,
                                         MatchRule* mRule2, const char* &operand,
-                                        const char* &reg_type);
+                                        const char* &reg_type, InstructForm *from_instr, InstructForm *to_instr);
 
   // Check if 'mRule2' is equivalent to this MatchRule
   virtual bool equivalent(FormDict& globals, MatchNode* mRule2);
@@ -1053,6 +1076,7 @@ public:
   void dump();
   void output_short(FILE *fp);
   void output(FILE *fp);
+  virtual void forms_do(FormClosure* f);
 };
 
 //------------------------------Attribute--------------------------------------
@@ -1080,7 +1104,7 @@ private:
 
 public:
   // Public Data
-  // There is an entry in _strings, perhaps NULL, that precedes each _rep_vars
+  // There is an entry in _strings, perhaps null, that precedes each _rep_vars
   NameList  _strings;              // Strings passed through to tty->print
   NameList  _rep_vars;             // replacement variables
   char     *_temp;                 // String representing the assembly code

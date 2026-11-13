@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2016 SAP SE. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -82,11 +82,13 @@ class NativeInstruction {
 
   bool is_illegal();
 
+  bool is_nop() const {
+    // TODO update: https://bugs.openjdk.org/browse/JDK-8290965
+    return Assembler::is_z_nop(addr_at(0));
+  }
+
   // Bcrl is currently the only accepted instruction here.
   bool is_jump();
-
-  // We use an illtrap for marking a method as not_entrant or zombie.
-  bool is_sigill_zombie_not_entrant();
 
   bool is_safepoint_poll() {
     // Is the current instruction a POTENTIAL read access to the polling page?
@@ -212,6 +214,7 @@ class NativeCall: public NativeInstruction {
     call_far_pcrelative_displacement_alignment =  4
   };
 
+  static int byte_size() { return instruction_size; }
 
   // Maximum size (in bytes) of a call to an absolute address.
   // Used when emitting call to deopt handler blob, which is a
@@ -257,7 +260,7 @@ class NativeCall: public NativeInstruction {
 
     ((NativeCall*)iaddr)->print();
     guarantee(false, "Not a NativeCall site");
-    return NULL;
+    return nullptr;
   }
 
   address return_address() const {
@@ -325,7 +328,7 @@ class NativeCall: public NativeInstruction {
   //    instruction, is always prepended with a NOP. This measure avoids
   //    ambiguities with load_const_from_toc_call.
   friend NativeCall* nativeCall_before(address return_address) {
-    NativeCall *call = NULL;
+    NativeCall *call = nullptr;
 
     // Make sure not to return garbage
     address instp = return_address - MacroAssembler::load_const_call_size();
@@ -486,8 +489,8 @@ class NativeMovConstReg: public NativeInstruction {
   // Patch narrow oop constant in code stream.
   void set_narrow_oop(intptr_t data);
   void set_narrow_klass(intptr_t data);
-  void set_pcrel_addr(intptr_t addr, CompiledMethod *nm = NULL);
-  void set_pcrel_data(intptr_t data, CompiledMethod *nm = NULL);
+  void set_pcrel_addr(intptr_t addr, nmethod *nm = nullptr);
+  void set_pcrel_data(intptr_t data, nmethod *nm = nullptr);
 
   void verify();
 
@@ -608,11 +611,6 @@ class NativeJump: public NativeInstruction {
 
   // Insertion of native jump instruction.
   static void insert(address code_pos, address entry);
-
-  // MT-safe insertion of native jump at verified method entry.
-  static void check_verified_entry_alignment(address entry, address verified_entry) { }
-
-  static void patch_verified_entry(address entry, address verified_entry, address dest);
 };
 
 //-------------------------------------
@@ -652,6 +650,79 @@ class NativeGeneralJump: public NativeInstruction {
   static void replace_mt_safe(address instr_addr, address code_buffer);
 
   void verify() PRODUCT_RETURN;
+};
+
+class NativePostCallNop: public NativeInstruction {
+
+  // Post-call NOPs are encoded as CLFI R0, imm32 (RIL-a format, 6 bytes):
+  //
+  //   Bit  |0       7|8   11|12  15|16                      47|
+  //        +---------+------+------+--------------------------+
+  //        |  0xC2   |  R1  | 0xF  |         I2 (imm32)       |
+  //        +---------+------+------+--------------------------+
+  //        | opcode1 | 0x0  |op2=F |  oopmap_slot[31:24]      |
+  //        |         |(R0)  |      |  | cb_offset[23:0]       |
+  //
+  //   Byte 0 = 0xC2  (opcode1, from CLFI_ZOPC bits 47..40)
+  //   Byte 1 = 0x0F  (R1=R0=0x0 in bits 39..36; opcode2=0xF in bits 35..32)
+  //   Bytes 2..5 = imm32 payload
+  //
+  // CLFI sets only the condition code — no GPR is written.
+  // The R1 field is fixed to R0 (encoding 0), allowing check() to
+  // recognize the instruction by testing only the first two bytes.
+
+public:
+
+  enum z_pcn_constants {
+    // Only the first 2 bytes are needed to identify the instruction.
+    // This avoids an out-of-bounds read if the return address is at a
+    // page boundary (same rationale as x86 first_check_size).
+    first_check_size    = 2,
+    instruction_size    = 6,  // CLFI is a 6-byte RIL-a instruction
+    displacement_offset = 2   // imm32 payload starts at byte 2
+  };
+
+  bool check() const { return Assembler::is_post_call_nop(addr_at(0)); }
+
+  bool decode(int32_t& oopmap_slot, int32_t& cb_offset) const {
+    // s390 is big-endian; read the 4-byte imm32 at byte offset 2.
+    // Use uint32_t to avoid signed integer arithmetic on the raw bit pattern.
+    uint32_t data = *(uint32_t*) addr_at(displacement_offset);
+    if (data == 0) {
+      return false; // no payload encoded yet
+    }
+    cb_offset   = (int32_t)(data & 0xffffff);
+    oopmap_slot = (int32_t)(data >> 24);       // top 8 bits, no masking needed
+    return true;
+  }
+
+  bool patch(int32_t oopmap_slot, int32_t cb_offset);
+  void make_deopt();
+};
+
+inline NativePostCallNop* nativePostCallNop_at(address address) {
+    NativePostCallNop* nop = (NativePostCallNop*) address;
+  if (nop->check()) {
+    return nop;
+  }
+  return nullptr;
+}
+
+class NativeDeoptInstruction: public NativeInstruction {
+public:
+  enum {
+    instruction_offset          =    0
+  };
+
+  address instruction_address() const       { return addr_at(instruction_offset); }
+  address next_instruction_address() const  { return instruction_address() + Assembler::instr_len(addr_at(0)); }
+
+  void  verify();
+
+  static bool is_deopt_at(address instr);
+
+  // MT-safe patching
+  static void insert(address code_pos);
 };
 
 #endif // CPU_S390_NATIVEINST_S390_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,6 +53,22 @@ import com.sun.jdi.event.VMDisconnectEvent;
  * {@link ObjectCollectedException} if the mirrored object has been
  * garbage collected.
  *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ * <h2><a id=valueObjects>Value Objects</a></h2>
+ * The Java Debug Interface (JDI) supports debugging of programs that use
+ * {@linkplain Class#isValue() value objects}.
+ * However, the support does in some cases deviate from identity object
+ * support in behavior or expectations as noted below:
+ * <p>
+ * If an ObjectReference is obtained for a value object under construction,
+ * it will be for a <em>snapshot</em> of the value object at that point in time.
+ * Any further changes to the initialization state of the value object will not
+ * be reflected in this ObjectReference. A new ObjectReference would need to
+ * be obtained to see the updated state. See {@link StackFrame#thisObject}.
+ *      </div>
+ * </div>
+ *
  * @author Robert Field
  * @author Gordon Hirsch
  * @author James McIlree
@@ -87,6 +103,13 @@ public interface ObjectReference extends Value {
      * The Field must be valid for this ObjectReference;
      * that is, it must be from
      * the mirrored object's class or a superclass of that class.
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     * This method does not prevent a
+     * {@linkplain java.lang.reflect.Field#isStrictInit() strictly-initialized field}
+     * from being read before it has been initialized.
+     *      </div>
+     * </div>
      *
      * @param sig the field containing the requested value
      * @return the {@link Value} of the instance field.
@@ -100,6 +123,13 @@ public interface ObjectReference extends Value {
      * The Fields must be valid for this ObjectReference;
      * that is, they must be from
      * the mirrored object's class or a superclass of that class.
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     * This method does not prevent a
+     * {@linkplain java.lang.reflect.Field#isStrictInit() strictly-initialized field}
+     * from being read before it has been initialized.
+     *      </div>
+     * </div>
      *
      * @param fields a list of {@link Field} objects containing the
      * requested values.
@@ -114,7 +144,7 @@ public interface ObjectReference extends Value {
      * Sets the value of a given instance or static field in this object.
      * The {@link Field} must be valid for this ObjectReference; that is,
      * it must be from the mirrored object's class or a superclass of that class.
-     * If static, the field must not be final.
+     * The field must not be final.
      * <p>
      * Object values must be assignment compatible with the field type
      * (This implies that the field type must be loaded through the
@@ -129,7 +159,7 @@ public interface ObjectReference extends Value {
      * @param field the field containing the requested value
      * @param value the new value to assign
      * @throws java.lang.IllegalArgumentException if the field is not valid for
-     * this object's class.
+     * this object's class or the field is final.
      * @throws InvalidTypeException if the value's type does not match
      * the field's type.
      * @throws ClassNotLoadedException if 'value' is not null, and the field
@@ -205,7 +235,7 @@ public interface ObjectReference extends Value {
      * the method is being invoked if they were previously
      * suspended by an event or by {@link VirtualMachine#suspend} or
      * {@link ThreadReference#suspend}. This is done to prevent the deadlocks
-     * that will occur if any of the threads own monitors
+     * that will occur if any of the threads own resources, such as monitors,
      * that will be needed by the invoked method.
      * Note, however, that this implicit resume acts exactly like
      * {@link ThreadReference#resume}, so if the thread's suspend
@@ -238,6 +268,15 @@ public interface ObjectReference extends Value {
      * <p>
      * If the target VM is disconnected during the invoke (for example, through
      * {@link VirtualMachine#dispose}) the method invocation continues.
+     *
+     * @apiNote
+     * <a href="{@docRoot}/java.base/java/lang/Thread.html#virtual-threads">Virtual threads</a>
+     * are typically user-mode threads scheduled by the Java runtime rather than
+     * the operating system. As such, there may be more cases with virtual threads
+     * where the {@link #INVOKE_SINGLE_THREADED} option may cause a deadlock.
+     * For example, suspending all threads in the target VM may suspend threads that
+     * support the timer mechanism for virtual threads, and thus methods such as
+     * {@link Thread#sleep} may deadlock.
      *
      * @param thread the thread in which to invoke.
      * @param method the {@link Method} to invoke.
@@ -297,7 +336,7 @@ public interface ObjectReference extends Value {
      * consequently, may result in application behavior under the
      * debugger that differs from its non-debugged behavior.
      * @throws VMCannotBeModifiedException if the VirtualMachine is read-only
-     * -see {@link VirtualMachine#canBeModified()}.
+     * - see {@link VirtualMachine#canBeModified()}.
      */
     void disableCollection();
 
@@ -308,7 +347,7 @@ public interface ObjectReference extends Value {
      * is necessary only if garbage collection was previously disabled
      * with {@link #disableCollection}.
      * @throws VMCannotBeModifiedException if the VirtualMachine is read-only
-     * -see {@link VirtualMachine#canBeModified()}.
+     * - see {@link VirtualMachine#canBeModified()}.
      */
     void enableCollection();
 
@@ -319,7 +358,7 @@ public interface ObjectReference extends Value {
      * @return <code>true</code> if this {@link ObjectReference} has been collected;
      * <code>false</code> otherwise.
      * @throws VMCannotBeModifiedException if the VirtualMachine is read-only
-     * -see {@link VirtualMachine#canBeModified()}.
+     * - see {@link VirtualMachine#canBeModified()}.
      */
     boolean isCollected();
 
@@ -336,17 +375,18 @@ public interface ObjectReference extends Value {
 
     /**
      * Returns a List containing a {@link ThreadReference} for
-     * each thread currently waiting for this object's monitor.
+     * each platform thread currently waiting for this object's monitor.
      * See {@link ThreadReference#currentContendedMonitor} for
      * information about when a thread is considered to be waiting
      * for a monitor.
      * <p>
      * Not all target VMs support this operation. See
-     * VirtualMachine#canGetMonitorInfo to determine if the
+     * {@link VirtualMachine#canGetMonitorInfo} to determine if the
      * operation is supported.
      *
      * @return a List of {@link ThreadReference} objects. The list
-     * has zero length if no threads are waiting for the monitor.
+     * has zero length if no threads are waiting for the monitor,
+     * or only virtual threads are waiting for the monitor.
      * @throws java.lang.UnsupportedOperationException if the
      * target VM does not support this operation.
      * @throws IncompatibleThreadStateException if any
@@ -357,17 +397,18 @@ public interface ObjectReference extends Value {
         throws IncompatibleThreadStateException;
 
     /**
-     * Returns an {@link ThreadReference} for the thread, if any,
+     * Returns a {@link ThreadReference} for the platform thread, if any,
      * which currently owns this object's monitor.
      * See {@link ThreadReference#ownedMonitors} for a definition
      * of ownership.
      * <p>
      * Not all target VMs support this operation. See
-     * VirtualMachine#canGetMonitorInfo to determine if the
+     * {@link VirtualMachine#canGetMonitorInfo} to determine if the
      * operation is supported.
      *
-     * @return the {@link ThreadReference} which currently owns the
-     * monitor, or null if it is unowned.
+     * @return the {@link ThreadReference} of the platform thread which
+     * currently owns the monitor, or null if the monitor is owned
+     * by a virtual thread or not owned.
      *
      * @throws java.lang.UnsupportedOperationException if the
      * target VM does not support this operation.
@@ -377,13 +418,14 @@ public interface ObjectReference extends Value {
     ThreadReference owningThread() throws IncompatibleThreadStateException;
 
     /**
-     * Returns the number times this object's monitor has been
-     * entered by the current owning thread.
+     * Returns the number of times this object's monitor has been entered by
+     * the current owning thread if the owning thread is platform thread;
+     * Returns 0 if not owned by a platform thread.
      * See {@link ThreadReference#ownedMonitors} for a definition
      * of ownership.
      * <p>
      * Not all target VMs support this operation. See
-     * VirtualMachine#canGetMonitorInfo to determine if the
+     * {@link VirtualMachine#canGetMonitorInfo} to determine if the
      * operation is supported.
      *
      * @see #owningThread
@@ -413,12 +455,12 @@ public interface ObjectReference extends Value {
      * @param maxReferrers  The maximum number of referring objects to return.
      *                      Must be non-negative.  If zero, all referring
      *                      objects are returned.
-     * @return a of List of {@link ObjectReference} objects. If there are
+     * @return a List of {@link ObjectReference} objects. If there are
      *  no objects that reference this object, a zero-length list is returned..
      * @throws java.lang.UnsupportedOperationException if
      * the target virtual machine does not support this
      * operation - see
-     * {@link VirtualMachine#canGetInstanceInfo() canGetInstanceInfo()}
+     * {@link VirtualMachine#canGetInstanceInfo()}
      * @throws java.lang.IllegalArgumentException if maxReferrers is less
      *         than zero.
      * @since 1.6

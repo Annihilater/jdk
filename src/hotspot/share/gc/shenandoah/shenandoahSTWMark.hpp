@@ -26,8 +26,9 @@
 #define SHARE_GC_SHENANDOAH_SHENANDOAHSTWMARK_HPP
 
 #include "gc/shenandoah/shenandoahMark.hpp"
+#include "gc/shenandoah/shenandoahRootProcessor.hpp"
 
-class ShenandoahSTWMarkTask;
+class ShenandoahGeneration;
 
 class ShenandoahSTWMark : public ShenandoahMark {
   friend class ShenandoahSTWMarkTask;
@@ -35,9 +36,8 @@ class ShenandoahSTWMark : public ShenandoahMark {
 private:
   ShenandoahSTWRootScanner      _root_scanner;
   TaskTerminator                _terminator;
-  bool                          _full_gc;
 public:
- ShenandoahSTWMark(bool full_gc);
+ ShenandoahSTWMark(ShenandoahGeneration* generation);
  void mark();
 
 private:
@@ -46,4 +46,3 @@ private:
 };
 
 #endif // SHARE_GC_SHENANDOAH_SHENANDOAHSTWMARK_HPP
-

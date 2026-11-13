@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,10 @@
  * @summary Tests jcmd to be able to add a directive to compile only specified methods
  * @modules java.base/jdk.internal.misc
  * @library /test/lib /
- * @requires vm.flavor != "minimal" & !vm.graal.enabled
+ * @requires vm.flavor != "minimal"
  *
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run driver compiler.compilercontrol.jcmd.PrintDirectivesTest
  */
 
@@ -77,13 +77,13 @@ public class PrintDirectivesTest extends AbstractTestBase {
             if (command == Command.INTRINSIC) {
                 argument = Utils.getRandomElement(VALID_INTRINSIC_SAMPLES);
             }
-            CompileCommand compileCommand = new CompileCommand(command,
+            CompileCommand compileCommand = new CompileCommand(command, true,
                     methodDescriptor, cmdGen.generateCompiler(),
                     Scenario.Type.DIRECTIVE, argument);
             builder.add(compileCommand);
         }
         // print all directives
-        builder.add(new JcmdCommand(Command.NONEXISTENT, null, null,
+        builder.add(new JcmdCommand(Command.NONEXISTENT, true, null, null,
                 Scenario.Type.JCMD, Scenario.JcmdType.PRINT));
         Scenario scenario = builder.build();
         scenario.execute();

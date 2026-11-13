@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,77 +25,98 @@
 #ifndef SHARE_GC_G1_G1COLLECTIONSETCANDIDATES_HPP
 #define SHARE_GC_G1_G1COLLECTIONSETCANDIDATES_HPP
 
-#include "gc/g1/g1CollectionSetCandidates.hpp"
-#include "gc/shared/workerThread.hpp"
+#include "gc/g1/g1CardSetGroup.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/globals.hpp"
+#include "utilities/growableArray.hpp"
 
-class HeapRegion;
-class HeapRegionClosure;
+class G1HeapRegion;
 
-// Set of collection set candidates, i.e. all old gen regions we consider worth
-// collecting in the remainder of the current mixed phase. Regions are sorted by decreasing
-// gc efficiency.
-// Maintains a cursor into the list that specifies the next collection set candidate
-// to put into the current collection set.
+// Tracks collection set candidate regions organized in two card set group lists. Their
+// groups are sorted by decreasing gc efficiency.
+//
+// * from_marking_groups: the set of card set groups selected by the concurrent cycle to be
+//                        evacuated to keep overall heap occupancy stable.
+//                        They are guaranteed to be evacuated and cleared out during
+//                        the mixed phase.
+//
+// * retained_groups: contains the card set groups from regions whose evacuation in
+//                    previous garbage collections failed.
+//                    Any young collection will try to evacuate them.
+//
 class G1CollectionSetCandidates : public CHeapObj<mtGC> {
-  HeapRegion** _regions;
-  uint _num_regions; // Total number of regions in the collection set candidate set.
 
-  // The sum of bytes that can be reclaimed in the remaining set of collection
-  // set candidates.
-  size_t _remaining_reclaimable_bytes;
-  // The index of the next candidate old region to be considered for
-  // addition to the current collection set.
-  uint _front_idx;
+  enum class CandidateOrigin : uint8_t {
+    Invalid,
+    Marking,                   // This region has been determined as candidate by the concurrent cycle.
+    Retained,                  // This region has been added because it has been retained after evacuation.
+    Verify                     // Special value for verification.
+  };
+
+  CandidateOrigin* _contains_map;
+  G1CardSetGroupList _from_marking_groups; // Set of groups selected by the concurrent cycle.
+  // Set of regions retained due to evacuation failure. Groups added to this list
+  // should contain only one region each, making it easier to evacuate retained regions
+  // in any young collection.
+  G1CardSetGroupList _retained_groups;
+  uint _max_num_regions;
+
+  // The number of regions from the last merge of candidates from the marking.
+  uint _num_last_marking_candidate_regions;
+
+  bool is_from_marking(G1HeapRegion* r) const;
 
 public:
-  G1CollectionSetCandidates(HeapRegion** regions, uint num_regions, size_t remaining_reclaimable_bytes) :
-    _regions(regions),
-    _num_regions(num_regions),
-    _remaining_reclaimable_bytes(remaining_reclaimable_bytes),
-    _front_idx(0) { }
+  G1CollectionSetCandidates();
+  ~G1CollectionSetCandidates();
 
-  ~G1CollectionSetCandidates() {
-    FREE_C_HEAP_ARRAY(HeapRegion*, _regions);
-  }
+  G1CardSetGroupList& from_marking_groups() { return _from_marking_groups; }
+  G1CardSetGroupList& retained_groups() { return _retained_groups; }
 
-  // Returns the total number of collection set candidate old regions added.
-  uint num_regions() { return _num_regions; }
+  void initialize(uint max_num_regions);
 
-  uint cur_idx() const { return _front_idx; }
+  void clear();
 
-  HeapRegion* at(uint idx) const {
-    HeapRegion* res = NULL;
-    if (idx < _num_regions) {
-      res = _regions[idx];
-      assert(res != NULL, "Unexpected NULL HeapRegion at index %u", idx);
-    }
-    return res;
-  }
+  // Merge collection set candidate regions from marking into the current from_marking candidate
+  // group list (which needs to be empty).
+  void set_candidates_from_marking(GrowableArrayCHeap<G1HeapRegion*, mtGC>* selected);
+  // The number of regions most recently merged using set_candidates_from_marking(). Used for calculating
+  // minimum collection set regions.
+  uint num_last_marking_candidate_regions() const { return _num_last_marking_candidate_regions; }
 
-  // Remove num_regions from the front of the collection set candidate list.
-  void remove(uint num_regions);
-  // Remove num_remove regions from the back of the collection set candidate list.
-  void remove_from_end(uint num_remove, size_t wasted);
+  void sort_by_efficiency();
 
-  // Iterate over all remaining collection set candidate regions.
-  void iterate(HeapRegionClosure* cl);
-  // Iterate over all remaining collectin set candidate regions from the end
-  // to the beginning of the set.
-  void iterate_backwards(HeapRegionClosure* cl);
+  void sort_marking_by_efficiency();
 
-  // Return the number of candidate regions remaining.
-  uint num_remaining() { return _num_regions - _front_idx; }
+  // Add the given region to the set of retained regions without regards to the
+  // gc efficiency sorting. The retained regions must be re-sorted manually later.
+  void add_retained_region_unsorted(G1HeapRegion* r);
+  // Remove the given groups from this list. All given card set groups must be part
+  // of the candidates.
+  void remove(G1CardSetGroupList* other);
 
-  bool is_empty() { return num_remaining() == 0; }
+  bool contains(const G1HeapRegion* r) const;
 
-  // Return the amount of reclaimable bytes that may be collected by the remaining
-  // candidate regions.
-  size_t remaining_reclaimable_bytes() { return _remaining_reclaimable_bytes; }
+  const char* get_short_type_str(const G1HeapRegion* r) const;
 
-  void verify() const PRODUCT_RETURN;
+  bool is_empty() const;
+
+  bool has_more_marking_candidates() const;
+  uint num_marking_regions() const;
+  uint num_retained_regions() const;
+
+  void after_rebuild();
+
+private:
+  void verify_helper(G1CardSetGroupList* list, uint& from_marking, CandidateOrigin* verify_map) PRODUCT_RETURN;
+
+public:
+  void verify_origins() PRODUCT_RETURN;
+  void verify();
+
+  uint num_regions() const { return num_marking_regions() + num_retained_regions(); }
+
+  template<typename Func>
+  void iterate_regions(Func&& f) const;
 };
 
 #endif /* SHARE_GC_G1_G1COLLECTIONSETCANDIDATES_HPP */
-

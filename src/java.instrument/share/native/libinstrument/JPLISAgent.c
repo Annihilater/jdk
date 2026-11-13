@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,13 +63,9 @@ allocateJPLISAgent(jvmtiEnv *       jvmtiEnv);
 JPLISInitializationError
 initializeJPLISAgent(   JPLISAgent *    agent,
                         JavaVM *        vm,
-                        jvmtiEnv *      jvmtienv);
-/* De-allocates a JPLIS agent data structure. Only used in partial-failure cases at startup;
- * in normal usage the JPLIS agent lives forever
- */
-void
-deallocateJPLISAgent(   jvmtiEnv *      jvmtienv,
-                        JPLISAgent *    agent);
+                        jvmtiEnv *      jvmtienv,
+                        const char *    jarfile,
+                        jboolean        printWarning);
 
 /* Does one-time work to interrogate the JVM about capabilities and cache the answers. */
 void
@@ -202,41 +198,31 @@ getJPLISEnvironment(jvmtiEnv * jvmtienv) {
  *  or NULL if an error has occurred.
  */
 JPLISInitializationError
-createNewJPLISAgent(JavaVM * vm, JPLISAgent **agent_ptr) {
-    JPLISInitializationError initerror       = JPLIS_INIT_ERROR_NONE;
+createNewJPLISAgent(JavaVM * vm, JPLISAgent **agent_ptr, const char * jarfile, jboolean printWarning) {
     jvmtiEnv *               jvmtienv        = NULL;
-    jint                     jnierror        = JNI_OK;
 
     *agent_ptr = NULL;
-    jnierror = (*vm)->GetEnv(  vm,
-                               (void **) &jvmtienv,
-                               JVMTI_VERSION_1_1);
-    if ( jnierror != JNI_OK ) {
-        initerror = JPLIS_INIT_ERROR_CANNOT_CREATE_NATIVE_AGENT;
-    } else {
-        JPLISAgent * agent = allocateJPLISAgent(jvmtienv);
-        if ( agent == NULL ) {
-            initerror = JPLIS_INIT_ERROR_ALLOCATION_FAILURE;
-        } else {
-            initerror = initializeJPLISAgent(  agent,
-                                               vm,
-                                               jvmtienv);
-            if ( initerror == JPLIS_INIT_ERROR_NONE ) {
-                *agent_ptr = agent;
-            } else {
-                deallocateJPLISAgent(jvmtienv, agent);
-            }
-        }
 
-        /* don't leak envs */
-        if ( initerror != JPLIS_INIT_ERROR_NONE ) {
-            jvmtiError jvmtierror = (*jvmtienv)->DisposeEnvironment(jvmtienv);
-            /* can be called from any phase */
-            jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
-        }
+    if ((*vm)->GetEnv(vm, (void **) &jvmtienv, JVMTI_VERSION_1_1) != JNI_OK) {
+        return JPLIS_INIT_ERROR_CANNOT_CREATE_NATIVE_AGENT;
     }
 
-    return initerror;
+    JPLISAgent * agent = allocateJPLISAgent(jvmtienv);
+    if (agent == NULL) {
+        jvmtiError jvmtierror = (*jvmtienv)->DisposeEnvironment(jvmtienv);
+        /* can be called from any phase */
+        jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
+        return JPLIS_INIT_ERROR_ALLOCATION_FAILURE;
+    }
+
+    JPLISInitializationError initerror = initializeJPLISAgent(agent, vm, jvmtienv, jarfile, printWarning);
+    if (initerror != JPLIS_INIT_ERROR_NONE) {
+        destroyJPLISAgent(agent);
+        return initerror;
+    }
+
+    *agent_ptr = agent;
+    return JPLIS_INIT_ERROR_NONE;
 }
 
 /*
@@ -251,9 +237,12 @@ allocateJPLISAgent(jvmtiEnv * jvmtienv) {
 JPLISInitializationError
 initializeJPLISAgent(   JPLISAgent *    agent,
                         JavaVM *        vm,
-                        jvmtiEnv *      jvmtienv) {
+                        jvmtiEnv *      jvmtienv,
+                        const char *    jarfile,
+                        jboolean        printWarning) {
     jvmtiError      jvmtierror = JVMTI_ERROR_NONE;
     jvmtiPhase      phase;
+    size_t          size;
 
     agent->mJVM                                      = vm;
     agent->mNormalEnvironment.mJVMTIEnv              = jvmtienv;
@@ -272,7 +261,15 @@ initializeJPLISAgent(   JPLISAgent *    agent,
     agent->mNativeMethodPrefixAdded                  = JNI_FALSE;
     agent->mAgentClassName                           = NULL;
     agent->mOptionsString                            = NULL;
-    agent->mJarfile                                  = NULL;
+    agent->mJarfile                                  = NULL;        /* set below */
+    agent->mPrintWarning                             = printWarning;
+
+    size = strlen(jarfile) + 1;
+    agent->mJarfile = allocate(jvmtienv, size);
+    if (agent->mJarfile == NULL) {
+        return JPLIS_INIT_ERROR_ALLOCATION_FAILURE;
+    }
+    memcpy((char *) agent->mJarfile, jarfile, size);
 
     /* make sure we can recover either handle in either direction.
      * the agent has a ref to the jvmti; make it mutual
@@ -325,9 +322,42 @@ initializeJPLISAgent(   JPLISAgent *    agent,
     return (jvmtierror == JVMTI_ERROR_NONE)? JPLIS_INIT_ERROR_NONE : JPLIS_INIT_ERROR_FAILURE;
 }
 
+
 void
-deallocateJPLISAgent(jvmtiEnv * jvmtienv, JPLISAgent * agent) {
+destroyJPLISAgent(JPLISAgent * agent) {
+    jvmtiEnv * jvmtienv;
+    jvmtiError jvmtierror;
+
+    if (agent == NULL) {
+        return;
+    }
+
+    jvmtienv = jvmti(agent);
+
+    deallocate(jvmtienv, (void*)agent->mJarfile);
+
+    deallocateCommandLineData(agent);
+
+    if (agent->mInstrumentationImpl != NULL) {
+        JavaVM * vm = agent->mJVM;
+        JNIEnv * jnienv;
+        jint result = (*vm)->GetEnv(vm, (void**)&jnienv, JNI_VERSION_1_2);
+        jplis_assert(result == JNI_OK);
+        (*jnienv)->DeleteGlobalRef(jnienv, agent->mInstrumentationImpl);
+    }
+
+    if (agent->mRetransformEnvironment.mJVMTIEnv != NULL) {
+        jvmtiEnv * retransformerEnv = agent->mRetransformEnvironment.mJVMTIEnv;
+        jvmtierror = (*retransformerEnv)->DisposeEnvironment(retransformerEnv);
+        /* can be called from any phase */
+        jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
+    }
+
     deallocate(jvmtienv, agent);
+
+    jvmtierror = (*jvmtienv)->DisposeEnvironment(jvmtienv);
+    /* can be called from any phase */
+    jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
 }
 
 
@@ -448,6 +478,7 @@ startJavaAgent( JPLISAgent *    agent,
                                                optionsString,
                                                &classNameObject,
                                                &optionsStringObject);
+    jplis_assert_msg(success, "commandStringIntoJavaStrings failed");
 
     if (success) {
         success = invokeJavaAgentMainMethod(   jnienv,
@@ -455,6 +486,7 @@ startJavaAgent( JPLISAgent *    agent,
                                                agentMainMethod,
                                                classNameObject,
                                                optionsStringObject);
+        jplis_assert_msg(success, "invokeJavaAgentMainMethod failed");
     }
 
     return success;
@@ -510,7 +542,8 @@ createInstrumentationImpl( JNIEnv *        jnienv,
                                                 constructorID,
                                                 peerReferenceAsScalar,
                                                 agent->mRedefineAdded,
-                                                agent->mNativeMethodPrefixAdded);
+                                                agent->mNativeMethodPrefixAdded,
+                                                agent->mPrintWarning);
         errorOutstanding = checkForAndClearThrowable(jnienv);
         errorOutstanding = errorOutstanding || (localReference == NULL);
         jplis_assert_msg(!errorOutstanding, "call constructor on InstrumentationImpl failed");
@@ -560,6 +593,8 @@ createInstrumentationImpl( JNIEnv *        jnienv,
         agent->mPremainCaller       = premainCallerMethodID;
         agent->mAgentmainCaller     = agentmainCallerMethodID;
         agent->mTransform           = transformMethodID;
+    } else {
+        (*jnienv)->DeleteGlobalRef(jnienv, resultImpl);
     }
 
     return !errorOutstanding;
@@ -614,6 +649,7 @@ invokeJavaAgentMainMethod( JNIEnv *    jnienv,
         errorOutstanding = checkForThrowable(jnienv);
         if ( errorOutstanding ) {
             logThrowable(jnienv);
+            jplis_assert_msg(!errorOutstanding, "Outstanding error when calling method in invokeJavaAgentMainMethod");
         }
         checkForAndClearThrowable(jnienv);
     }
@@ -769,7 +805,7 @@ getModuleObject(jvmtiEnv*               jvmti,
     jobject moduleObject = NULL;
 
     /* find last slash in the class name */
-    char* last_slash = (cname == NULL) ? NULL : strrchr(cname, '/');
+    const char* last_slash = (cname == NULL) ? NULL : strrchr(cname, '/');
     int len = (last_slash == NULL) ? 0 : (int)(last_slash - cname);
     char* pkg_name_buf = (char*)malloc(len + 1);
 
@@ -1034,7 +1070,7 @@ retransformableEnvironment(JPLISAgent * agent) {
     if (jvmtierror != JVMTI_ERROR_NONE) {
          /* cannot get the capability, dispose of the retransforming environment */
         jvmtierror = (*retransformerEnv)->DisposeEnvironment(retransformerEnv);
-        jplis_assert(jvmtierror == JVMTI_ERROR_NOT_AVAILABLE);
+        jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
         return NULL;
     }
     memset(&callbacks, 0, sizeof(callbacks));
@@ -1045,19 +1081,20 @@ retransformableEnvironment(JPLISAgent * agent) {
                                                         sizeof(callbacks));
     jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
     if (jvmtierror == JVMTI_ERROR_NONE) {
-        // install the retransforming environment
-        agent->mRetransformEnvironment.mJVMTIEnv = retransformerEnv;
-        agent->mRetransformEnvironment.mIsRetransformer = JNI_TRUE;
-
-        // Make it for ClassFileLoadHook handling
+        // Make the retransforming environment available for ClassFileLoadHook handling
         jvmtierror = (*retransformerEnv)->SetEnvironmentLocalStorage(
                                                        retransformerEnv,
                                                        &(agent->mRetransformEnvironment));
         jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
         if (jvmtierror == JVMTI_ERROR_NONE) {
+            // install the retransforming environment
+            agent->mRetransformEnvironment.mJVMTIEnv = retransformerEnv;
+            agent->mRetransformEnvironment.mIsRetransformer = JNI_TRUE;
             return retransformerEnv;
         }
     }
+    jvmtierror = (*retransformerEnv)->DisposeEnvironment(retransformerEnv);
+    jplis_assert(jvmtierror == JVMTI_ERROR_NONE);
     return NULL;
 }
 
@@ -1601,4 +1638,9 @@ setNativeMethodPrefixes(JNIEnv * jnienv, JPLISAgent * agent, jobjectArray prefix
         deallocate(jvmtienv, (void*)prefixes);
         deallocate(jvmtienv, (void*)originForRelease);
     }
+}
+
+jstring
+jarFile(JNIEnv * jnienv, JPLISAgent * agent) {
+    return (*jnienv)->NewStringUTF(jnienv, agent->mJarfile);
 }

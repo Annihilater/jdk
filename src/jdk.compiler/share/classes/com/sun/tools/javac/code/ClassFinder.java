@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,8 +55,8 @@ import com.sun.tools.javac.file.JRTIndex;
 import com.sun.tools.javac.file.JavacFileManager;
 import com.sun.tools.javac.jvm.ClassReader;
 import com.sun.tools.javac.jvm.Profile;
+import com.sun.tools.javac.main.JavaCompiler;
 import com.sun.tools.javac.main.Option;
-import com.sun.tools.javac.platform.PlatformDescription;
 import com.sun.tools.javac.resources.CompilerProperties.Fragments;
 import com.sun.tools.javac.util.*;
 
@@ -64,8 +64,7 @@ import static javax.tools.StandardLocation.*;
 
 import static com.sun.tools.javac.code.Flags.*;
 import static com.sun.tools.javac.code.Kinds.Kind.*;
-import com.sun.tools.javac.code.Symbol;
-import com.sun.tools.javac.code.Symbol.CompletionFailure;
+
 import com.sun.tools.javac.main.DelegatingJavaFileManager;
 
 import com.sun.tools.javac.util.Dependencies.CompletionCause;
@@ -180,6 +179,7 @@ public class ClassFinder {
     }
 
     /** Construct a new class finder. */
+    @SuppressWarnings("this-escape")
     protected ClassFinder(Context context) {
         context.put(classFinderKey, this);
         reader = ClassReader.instance(context);
@@ -214,12 +214,17 @@ public class ClassFinder {
         }
         if (fm instanceof JavacFileManager javacFileManager) {
             useCtProps = javacFileManager.isDefaultBootClassPath() && javacFileManager.isSymbolFileEnabled();
-        } else if (fm.getClass().getName().equals("com.sun.tools.sjavac.comp.SmartFileManager")) {
-            useCtProps = !options.isSet("ignore.symbol.file");
         } else {
             useCtProps = false;
         }
-        jrtIndex = useCtProps && JRTIndex.isAvailable() ? JRTIndex.getSharedInstance() : null;
+        if (useCtProps && JRTIndex.isAvailable()) {
+            Preview preview = Preview.instance(context);
+            JavaCompiler comp = JavaCompiler.instance(context);
+            jrtIndex = JRTIndex.instance(preview.isEnabled());
+            comp.closeables = comp.closeables.prepend(jrtIndex);
+        } else {
+            jrtIndex = null;
+        }
 
         profile = Profile.instance(context);
         cachedCompletionFailure = new CompletionFailure(null, () -> null, dcfh);
@@ -227,7 +232,7 @@ public class ClassFinder {
     }
 
 
-/************************************************************************
+/* **********************************************************************
  * Temporary ct.sym replacement
  *
  * The following code is a temporary substitute for the ct.sym mechanism
@@ -279,7 +284,7 @@ public class ClassFinder {
 
     private Map<PackageSymbol, Long> supplementaryFlags;
 
-/************************************************************************
+/* **********************************************************************
  * Loading Classes
  ***********************************************************************/
 
@@ -292,10 +297,16 @@ public class ClassFinder {
                 ClassSymbol c = (ClassSymbol) sym;
                 dependencies.push(c, CompletionCause.CLASS_READER);
                 annotate.blockAnnotations();
-                c.members_field = new Scope.ErrorScope(c); // make sure it's always defined
+                Scope.ErrorScope members = new Scope.ErrorScope(c);
+                c.members_field = members; // make sure it's always defined
                 completeOwners(c.owner);
                 completeEnclosing(c);
-                fillIn(c);
+                //if an enclosing class is completed from the source,
+                //this class might have been completed already as well,
+                //avoid attempts to re-complete it:
+                if (c.members_field == members) {
+                    fillIn(c);
+                }
             } finally {
                 annotate.unblockAnnotationsNoFlush();
                 dependencies.pop();
@@ -450,7 +461,7 @@ public class ClassFinder {
         return c;
     }
 
-/************************************************************************
+/* **********************************************************************
  * Loading Packages
  ***********************************************************************/
 
@@ -709,7 +720,6 @@ public class ClassFinder {
                     EnumSet.of(JavaFileObject.Kind.CLASS)));
     }
     // where
-        @SuppressWarnings("fallthrough")
         private void fillIn(PackageSymbol p,
                             Location location,
                             Iterable<JavaFileObject> files)

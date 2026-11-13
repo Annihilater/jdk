@@ -28,10 +28,10 @@
  * @summary testing of ciReplay with nested BoundMethodHandles
  * @requires vm.flightRecorder != true & vm.compMode != "Xint" & vm.debug == true & vm.compiler2.enabled
  * @modules java.base/jdk.internal.misc
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      compiler.ciReplay.TestLambdas
+ *      ${test.main.class}
  */
 
 package compiler.ciReplay;

@@ -121,7 +121,7 @@ public class MapTest extends JSR166TestCase {
 
     /**
      * Tests and extends the scenario reported in
-     * https://bugs.openjdk.java.net/browse/JDK-8186171
+     * https://bugs.openjdk.org/browse/JDK-8186171
      * HashMap: Entry.setValue may not work after Iterator.remove() called for previous entries
      * ant -Djsr166.tckTestClass=HashMapTest -Djsr166.methodFilter=testBug8186171 -Djsr166.runsPerTest=1000 tck
      */
@@ -208,11 +208,17 @@ public class MapTest extends JSR166TestCase {
 
     /**
      * 8222930: ConcurrentSkipListMap.clone() shares size variable between original and clone
+     * 8392085: CSLM.clone() on an emptied map shares state
      */
     public void testClone() {
         final ThreadLocalRandom rnd = ThreadLocalRandom.current();
         final int size = rnd.nextInt(4);
         final Map map = impl.emptyMap();
+        if (rnd.nextBoolean()) {
+            // 8392085: an emptied map behaves differently than a fresh empty map
+            map.put(impl.makeKey(-1), impl.makeValue(-1));
+            map.clear();
+        }
         for (int i = 0; i < size; i++)
             map.put(impl.makeKey(i), impl.makeValue(i));
         final Map clone = cloneableClone(map);
@@ -225,6 +231,8 @@ public class MapTest extends JSR166TestCase {
         clone.put(impl.makeKey(-1), impl.makeValue(-1));
         mustEqual(size, map.size());
         mustEqual(size + 1, clone.size());
+        assertFalse(map.containsKey(impl.makeKey(-1)));
+        mustEqual(size == 0, map.isEmpty());
 
         clone.clear();
         mustEqual(size, map.size());

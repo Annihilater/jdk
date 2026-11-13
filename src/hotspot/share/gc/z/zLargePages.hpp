@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,17 +24,20 @@
 #ifndef SHARE_GC_Z_ZLARGEPAGES_HPP
 #define SHARE_GC_Z_ZLARGEPAGES_HPP
 
-#include "memory/allocation.hpp"
+#include "memory/allStatic.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 class ZLargePages : public AllStatic {
 private:
   enum State {
     Disabled,
     Explicit,
-    Transparent
+    Transparent,
+    Collapse
   };
 
   static State _state;
+  static bool  _os_enforced_transparent_mode;
 
   static void pd_initialize();
 
@@ -44,6 +47,11 @@ public:
   static bool is_enabled();
   static bool is_explicit();
   static bool is_transparent();
+  static bool is_collapse();
+
+  static bool should_try_fallocate();
+
+  static bool pd_collapse(void* addr, size_t bytes);
 
   static const char* to_string();
 };

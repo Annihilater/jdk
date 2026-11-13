@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,13 +32,11 @@
 
 import com.sun.net.httpserver.*;
 
-import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.*;
 import java.io.*;
 import java.net.*;
-import java.security.*;
-import javax.net.ssl.*;
+import static com.sun.net.httpserver.HttpExchange.RSPBODY_EMPTY;
 
 /**
  * Test pipe-lining (no block)
@@ -63,9 +61,8 @@ public class Test5 extends Test {
             doClient(port);
             System.out.println ("OK");
         } finally {
-            delay ();
             if (server != null)
-                server.stop(2);
+                server.stop(0);
             if (exec != null)
                 exec.shutdown();
         }
@@ -96,7 +93,7 @@ public class Test5 extends Test {
                 checkBody (is, body4);
                 break;
             }
-            t.sendResponseHeaders (200, -1);
+            t.sendResponseHeaders (200, RSPBODY_EMPTY);
             t.close();
         }
     }
@@ -126,13 +123,13 @@ public class Test5 extends Test {
         "HTTP/1.1 200 OK.*Xtest: 3.*";
 
     public static void doClient (int port) throws Exception {
-        String s = "GET /test/1.html HTTP/1.1\r\nContent-length: 20\r\n"+
+        String s = "GET /test/1.html HTTP/1.1\r\nHost: localhost\r\nContent-length: 20\r\n"+
         "\r\n" +body1 +
-        "GET /test/2.html HTTP/1.1\r\nContent-length: 30\r\n"+
+        "GET /test/2.html HTTP/1.1\r\nHost: localhost\r\nContent-length: 30\r\n"+
         "\r\n"+ body2 +
-        "GET /test/3.html HTTP/1.1\r\nContent-length: 10\r\n"+
+        "GET /test/3.html HTTP/1.1\r\nHost: localhost\r\nContent-length: 10\r\n"+
         "\r\n"+ body3 +
-        "GET /test/4.html HTTP/1.1\r\nContent-length: 10\r\n"+
+        "GET /test/4.html HTTP/1.1\r\nHost: localhost\r\nContent-length: 10\r\n"+
         "\r\n"+body4;
 
         Socket socket = new Socket (InetAddress.getLoopbackAddress(), port);

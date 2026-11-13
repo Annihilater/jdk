@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,11 +21,15 @@
  * questions.
  */
 
-#include "precompiled.hpp"
 #include "gc/shared/gcLogPrecious.hpp"
 #include "gc/z/zLargePages.hpp"
 #include "gc/z/zSyscall_windows.hpp"
 #include "runtime/globals.hpp"
+#include "utilities/debug.hpp"
+
+bool ZLargePages::pd_collapse(void* addr, size_t bytes) {
+  ShouldNotCallThis();
+}
 
 void ZLargePages::pd_initialize() {
   if (UseLargePages) {

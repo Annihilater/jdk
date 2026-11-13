@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,17 +29,16 @@ import jdk.internal.net.http.common.Demand;
 import jdk.internal.net.http.common.Logger;
 import jdk.internal.net.http.common.MinimalFuture;
 import jdk.internal.net.http.common.SequentialScheduler;
-import jdk.internal.net.http.common.SequentialScheduler.CompleteRestartableTask;
 import jdk.internal.net.http.common.Utils;
 
 import java.io.IOException;
-import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.channels.SelectionKey;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
@@ -53,12 +52,12 @@ public class TransportImpl implements Transport {
     // -- Debugging infrastructure --
 
     private static final Logger debug =
-            Utils.getWebSocketLogger("[Transport]"::toString, Utils.DEBUG_WS);
+            Utils.getWebSocketLogger("[Transport]"::toString);
 
     /* Used for correlating enters to and exists from a method */
     private final AtomicLong counter = new AtomicLong();
 
-    private final SequentialScheduler sendScheduler = new SequentialScheduler(new SendTask());
+    private final SequentialScheduler sendScheduler = SequentialScheduler.lockingScheduler(new SendTask());
 
     private final MessageQueue queue;
     private final MessageEncoder encoder = new MessageEncoder();
@@ -73,7 +72,7 @@ public class TransportImpl implements Transport {
     private final Demand demand = new Demand();
     private final SequentialScheduler receiveScheduler;
     private final RawChannel channel;
-    private final Object closeLock = new Object();
+    private final ReentrantLock closeLock = new ReentrantLock();
     private final RawChannel.RawEvent writeEvent = new WriteEvent();
     private final RawChannel.RawEvent readEvent = new ReadEvent();
     private final AtomicReference<ChannelState> writeState
@@ -93,7 +92,7 @@ public class TransportImpl implements Transport {
         // To ensure the initial non-final `data` will be visible
         // (happens-before) when `readEvent.handle()` invokes `receiveScheduler`
         // the following assignment is done last:
-        receiveScheduler = new SequentialScheduler(new ReceiveTask());
+        receiveScheduler = SequentialScheduler.lockingScheduler(new ReceiveTask());
     }
 
     private ByteBuffer createWriteBuffer() {
@@ -302,7 +301,8 @@ public class TransportImpl implements Transport {
         if (debug.on()) {
             debug.log("closeOutput");
         }
-        synchronized (closeLock) {
+        closeLock.lock();
+        try {
             if (!outputClosed) {
                 outputClosed = true;
                 try {
@@ -314,6 +314,8 @@ public class TransportImpl implements Transport {
                     }
                 }
             }
+        } finally {
+            closeLock.unlock();
         }
         ChannelState s = writeState.get();
         assert s == CLOSED : s;
@@ -329,7 +331,8 @@ public class TransportImpl implements Transport {
         if (debug.on()) {
             debug.log("closeInput");
         }
-        synchronized (closeLock) {
+        closeLock.lock();
+        try {
             if (!inputClosed) {
                 inputClosed = true;
                 try {
@@ -343,6 +346,8 @@ public class TransportImpl implements Transport {
                     }
                 }
             }
+        } finally {
+            closeLock.unlock();
         }
     }
 
@@ -355,7 +360,7 @@ public class TransportImpl implements Transport {
     }
 
     @SuppressWarnings({"rawtypes"})
-    private class SendTask extends CompleteRestartableTask {
+    private class SendTask implements Runnable {
 
         private final MessageQueue.QueueCallback<Boolean, IOException>
                 encodingCallback = new MessageQueue.QueueCallback<>() {
@@ -648,7 +653,7 @@ public class TransportImpl implements Transport {
         }
     }
 
-    private class ReceiveTask extends CompleteRestartableTask {
+    private class ReceiveTask implements Runnable {
 
         @Override
         public void run() {

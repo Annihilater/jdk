@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@ package sun.jvm.hotspot.runtime;
 import java.util.*;
 
 import sun.jvm.hotspot.oops.*;
-import sun.jvm.hotspot.utilities.*;
 import sun.jvm.hotspot.debugger.*;
 import sun.jvm.hotspot.types.*;
 import sun.jvm.hotspot.utilities.Observable;
@@ -43,38 +42,18 @@ public class ObjectSynchronizer {
   }
 
   private static synchronized void initialize(TypeDataBase db) throws WrongTypeException {
-    Type type = db.lookupType("ObjectSynchronizer");
-    inUseList = type.getAddressField("_in_use_list").getValue();
+    Type objectSynchronizerType = db.lookupType("ObjectSynchronizer");
+    Type monitorListType = db.lookupType("MonitorList");
+    Address monitorListAddr = objectSynchronizerType.getField("_in_use_list").getStaticFieldAddress();
+    inUseListHead = monitorListType.getAddressField("_head").getAddress(monitorListAddr);
   }
 
   public long identityHashValueFor(Oop obj) {
-    Mark mark = obj.getMark();
-    if (mark.isUnlocked()) {
-      // FIXME: can not generate marks in debugging system
-      return mark.hash();
-    } else if (mark.hasMonitor()) {
-      ObjectMonitor monitor = mark.monitor();
-      Mark temp = monitor.header();
-      return temp.hash();
-    } else {
-      if (Assert.ASSERTS_ENABLED) {
-        Assert.that(VM.getVM().isDebugging(), "Can not access displaced header otherwise");
-      }
-      if (mark.hasDisplacedMarkHelper()) {
-        Mark temp = mark.displacedMarkHelper();
-        return temp.hash();
-      }
-      // FIXME: can not do anything else here in debugging system
-      return 0;
-    }
+    return obj.getMark().hash();
   }
 
   public static Iterator objectMonitorIterator() {
-    if (inUseList != null) {
-      return new ObjectMonitorIterator();
-    } else {
-      return null;
-    }
+    return new ObjectMonitorIterator();
   }
 
   private static class ObjectMonitorIterator implements Iterator {
@@ -83,21 +62,23 @@ public class ObjectSynchronizer {
     // are not returned by this Iterator.
 
     ObjectMonitorIterator() {
-      mon = new ObjectMonitor(inUseList);
+      mon = inUseListHead == null ? null : new ObjectMonitor(inUseListHead);
     }
 
     public boolean hasNext() {
-      return (mon.nextOM() != null);
+      return (mon != null);
     }
 
     public Object next() {
-      // advance to next entry
-      Address monAddr = mon.nextOM();
-      if (monAddr == null) {
+      ObjectMonitor ret = mon;
+      if (ret == null) {
         throw new NoSuchElementException();
       }
-      mon = new ObjectMonitor(monAddr);
-      return mon;
+      // advance to next entry
+      Address nextMon = mon.nextOM();
+      mon = nextMon == null ? null : new ObjectMonitor(nextMon);
+
+      return ret;
     }
 
     public void remove() {
@@ -107,6 +88,6 @@ public class ObjectSynchronizer {
     private ObjectMonitor mon;
   }
 
-  private static Address inUseList;
+  private static Address inUseListHead;
 
 }

@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 
 #include "gc/shenandoah/heuristics/shenandoahAggressiveHeuristics.hpp"
 #include "gc/shenandoah/shenandoahCollectionSet.hpp"
@@ -31,25 +30,29 @@
 #include "logging/logTag.hpp"
 #include "runtime/os.hpp"
 
-ShenandoahAggressiveHeuristics::ShenandoahAggressiveHeuristics() : ShenandoahHeuristics() {
+void ShenandoahAggressiveHeuristics::configure() {
+  if (!UnlockDiagnosticVMOptions) {
+    vm_exit_during_initialization(err_msg(
+      "Heuristics \"Aggressive\" is diagnostic, and must be enabled via -XX:+UnlockDiagnosticVMOptions."));
+  }
+
   // Do not shortcut evacuation
   SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahImmediateThreshold, 100);
 
   // Aggressive evacuates everything, so it needs as much evac space as it can get
   SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahEvacReserveOverflow);
+}
 
-  // If class unloading is globally enabled, aggressive does unloading even with
-  // concurrent cycles.
-  if (ClassUnloading) {
-    SHENANDOAH_ERGO_OVERRIDE_DEFAULT(ShenandoahUnloadClassesFrequency, 1);
-  }
+ShenandoahAggressiveHeuristics::ShenandoahAggressiveHeuristics(ShenandoahSpaceInfo* space_info) :
+  ShenandoahHeuristics(space_info) {
+  configure();
 }
 
 void ShenandoahAggressiveHeuristics::choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,
                                                                            RegionData* data, size_t size,
                                                                            size_t free) {
   for (size_t idx = 0; idx < size; idx++) {
-    ShenandoahHeapRegion* r = data[idx]._region;
+    ShenandoahHeapRegion* r = data[idx].get_region();
     if (r->garbage() > 0) {
       cset->add_region(r);
     }
@@ -57,13 +60,8 @@ void ShenandoahAggressiveHeuristics::choose_collection_set_from_regiondata(Shena
 }
 
 bool ShenandoahAggressiveHeuristics::should_start_gc() {
-  log_info(gc)("Trigger: Start next cycle immediately");
+  log_trigger("Start next cycle immediately");
+  accept_trigger();
   return true;
 }
 
-bool ShenandoahAggressiveHeuristics::should_unload_classes() {
-  if (!can_unload_classes_normal()) return false;
-  if (has_metaspace_oom()) return true;
-  // Randomly unload classes with 50% chance.
-  return (os::random() & 1) == 1;
-}

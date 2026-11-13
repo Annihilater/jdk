@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,8 +52,8 @@
  *
  * @library /vmTestbase
  *          /test/lib
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/native
  *      -Xbootclasspath/a:.
  *      -XX:+UnlockDiagnosticVMOptions
@@ -61,9 +61,9 @@
  *      TestDriver
  */
 
-import sun.hotspot.code.Compiler;
-import sun.hotspot.WhiteBox;
-import sun.hotspot.gc.GC;
+import jdk.test.whitebox.code.Compiler;
+import jdk.test.whitebox.WhiteBox;
+import jdk.test.whitebox.gc.GC;
 
 public class TestDriver {
     public static void main(String[] args) throws Exception {
@@ -73,11 +73,6 @@ public class TestDriver {
         boolean isUseZGCon = GC.Z.isSelected();
         boolean isShenandoahGCon = GC.Shenandoah.isSelected();
         boolean isUseEpsilonGCon = GC.Epsilon.isSelected();
-
-        if (Compiler.isGraalEnabled() &&
-            (isUseZGCon || isUseEpsilonGCon || isShenandoahGCon)) {
-            return; // Graal does not support these GCs
-        }
 
         String keyPhrase;
         if ((isExplicitGCInvokesConcurrentOn && isUseG1GCon) || isUseZGCon || isShenandoahGCon) {

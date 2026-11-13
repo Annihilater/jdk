@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -76,6 +76,7 @@ import java.time.Year;
 import java.time.ZoneId;
 import java.time.format.ResolverStyle;
 import java.time.temporal.ChronoField;
+import java.time.temporal.IsoFields;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjusters;
 import java.time.temporal.TemporalField;
@@ -164,7 +165,7 @@ public final class JapaneseChronology extends AbstractChronology implements Seri
      * Gets the calendar type of the underlying calendar system - 'japanese'.
      * <p>
      * The calendar type is an identifier defined by the
-     * <em>Unicode Locale Data Markup Language (LDML)</em> specification.
+     * <em>Unicode Common Locale Data {@literal &} Rules (CLDR)</em> specification.
      * It can be used to lookup the {@code Chronology} using {@link Chronology#of(String)}.
      * It can also be used as part of a locale, accessible via
      * {@link Locale#getUnicodeLocaleType(String)} with the key 'ca'.
@@ -502,6 +503,20 @@ public final class JapaneseChronology extends AbstractChronology implements Seri
         }
         int doy = range(DAY_OF_YEAR).checkValidIntValue(fieldValues.remove(DAY_OF_YEAR), DAY_OF_YEAR);
         return dateYearDay(era, yoe, doy);  // smart is same as strict
+    }
+
+    //-----------------------------------------------------------------------
+    /**
+     * {@code JapaneseChronology} is an ISO based chronology, which supports fields
+     * in {@link IsoFields}, such as {@link IsoFields#DAY_OF_QUARTER DAY_OF_QUARTER}
+     * and {@link IsoFields#QUARTER_OF_YEAR QUARTER_OF_YEAR}.
+     * @see IsoFields
+     * @return {@code true}
+     * @since 19
+     */
+    @Override
+    public boolean isIsoBased() {
+        return true;
     }
 
     //-----------------------------------------------------------------------

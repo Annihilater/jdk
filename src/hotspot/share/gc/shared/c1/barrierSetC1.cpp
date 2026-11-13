@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "c1/c1_Defs.hpp"
 #include "c1/c1_LIRGenerator.hpp"
 #include "classfile/javaClasses.hpp"
@@ -139,64 +138,62 @@ LIR_Opr BarrierSetC1::atomic_add_at(LIRAccess& access, LIRItem& value) {
 }
 
 void BarrierSetC1::store_at_resolved(LIRAccess& access, LIR_Opr value) {
+  LIRGenerator* gen = access.gen();
   DecoratorSet decorators = access.decorators();
-  bool is_volatile = (((decorators & MO_SEQ_CST) != 0) || AlwaysAtomicAccesses);
+  bool is_volatile = (decorators & MO_SEQ_CST) != 0;
   bool needs_patching = (decorators & C1_NEEDS_PATCHING) != 0;
   bool mask_boolean = (decorators & C1_MASK_BOOLEAN) != 0;
-  LIRGenerator* gen = access.gen();
 
   if (mask_boolean) {
     value = gen->mask_boolean(access.base().opr(), value, access.access_emit_info());
   }
 
-  if (is_volatile) {
-    __ membar_release();
-  }
-
-  LIR_PatchCode patch_code = needs_patching ? lir_patch_normal : lir_patch_none;
   if (is_volatile && !needs_patching) {
     gen->volatile_field_store(value, access.resolved_addr()->as_address_ptr(), access.access_emit_info());
   } else {
-    __ store(value, access.resolved_addr()->as_address_ptr(), access.access_emit_info(), patch_code);
-  }
+    if (is_volatile) {
+      __ membar_release();
+    }
 
-  if (is_volatile && !support_IRIW_for_not_multiple_copy_atomic_cpu) {
-    __ membar();
+    LIR_PatchCode patch_code = needs_patching ? lir_patch_normal : lir_patch_none;
+    __ store(value, access.resolved_addr()->as_address_ptr(), access.access_emit_info(), patch_code);
+
+    if (!support_IRIW_for_not_multiple_copy_atomic_cpu && is_volatile) {
+      __ membar();
+    }
   }
 }
 
 void BarrierSetC1::load_at_resolved(LIRAccess& access, LIR_Opr result) {
   LIRGenerator *gen = access.gen();
   DecoratorSet decorators = access.decorators();
-  bool is_volatile = (((decorators & MO_SEQ_CST) != 0) || AlwaysAtomicAccesses);
+  bool is_volatile = (decorators & MO_SEQ_CST) != 0;
   bool needs_patching = (decorators & C1_NEEDS_PATCHING) != 0;
   bool mask_boolean = (decorators & C1_MASK_BOOLEAN) != 0;
   bool in_native = (decorators & IN_NATIVE) != 0;
 
-  if (support_IRIW_for_not_multiple_copy_atomic_cpu && is_volatile) {
-    __ membar();
-  }
-
-  LIR_PatchCode patch_code = needs_patching ? lir_patch_normal : lir_patch_none;
-  if (in_native) {
-    __ move_wide(access.resolved_addr()->as_address_ptr(), result);
-  } else if (is_volatile && !needs_patching) {
+  if (is_volatile && !in_native && !needs_patching) {
     gen->volatile_field_load(access.resolved_addr()->as_address_ptr(), result, access.access_emit_info());
   } else {
-    __ load(access.resolved_addr()->as_address_ptr(), result, access.access_emit_info(), patch_code);
+    if (support_IRIW_for_not_multiple_copy_atomic_cpu && is_volatile) {
+      __ membar();
+    }
+
+    if (in_native) {
+      __ move_wide(access.resolved_addr()->as_address_ptr(), result);
+    } else {
+      LIR_PatchCode patch_code = needs_patching ? lir_patch_normal : lir_patch_none;
+      __ load(access.resolved_addr()->as_address_ptr(), result, access.access_emit_info(), patch_code);
+    }
+
+    if (is_volatile) {
+      __ membar_acquire();
+    }
   }
 
-  if (is_volatile) {
-    __ membar_acquire();
-  }
-
-  /* Normalize boolean value returned by unsafe operation, i.e., value  != 0 ? value = true : value false. */
+  // Truncate boolean values returned by unsafe operations.
   if (mask_boolean) {
-    LabelObj* equalZeroLabel = new LabelObj();
-    __ cmp(lir_cond_equal, result, 0);
-    __ branch(lir_cond_equal, equalZeroLabel->label());
-    __ move(LIR_OprFact::intConst(1), result);
-    __ branch_destination(equalZeroLabel->label());
+    __ logical_and(result, LIR_OprFact::intConst(1), result);
   }
 }
 
@@ -224,7 +221,7 @@ void BarrierSetC1::generate_referent_check(LIRAccess& access, LabelObj* cont) {
   // We need to generate code similar to the following...
   //
   // if (offset == java_lang_ref_Reference::referent_offset()) {
-  //   if (src != NULL) {
+  //   if (src != nullptr) {
   //     if (klass(src)->reference_type() != REF_NONE) {
   //       pre_barrier(..., value, ...);
   //     }
@@ -269,7 +266,7 @@ void BarrierSetC1::generate_referent_check(LIRAccess& access, LabelObj* cont) {
     // We still need to continue with the checks.
     if (base.is_constant()) {
       ciObject* src_con = base.get_jobject_constant();
-      guarantee(src_con != NULL, "no source constant");
+      guarantee(src_con != nullptr, "no source constant");
 
       if (src_con->is_null_object()) {
         // The constant src object is null - We can skip
@@ -287,7 +284,7 @@ void BarrierSetC1::generate_referent_check(LIRAccess& access, LabelObj* cont) {
     // Can the klass of object be statically determined to be
     // a sub-class of Reference?
     ciType* type = base.value()->declared_type();
-    if ((type != NULL) && type->is_loaded()) {
+    if ((type != nullptr) && type->is_loaded()) {
       if (type->is_subtype_of(gen->compilation()->env()->Reference_klass())) {
         gen_type_check = false;
       } else if (type->is_klass() &&
@@ -327,14 +324,14 @@ void BarrierSetC1::generate_referent_check(LIRAccess& access, LabelObj* cont) {
     if (gen_source_check) {
       // offset is a const and equals referent offset
       // if (source == null) -> continue
-      __ cmp(lir_cond_equal, base_reg, LIR_OprFact::oopConst(NULL));
+      __ cmp(lir_cond_equal, base_reg, LIR_OprFact::oopConst(nullptr));
       __ branch(lir_cond_equal, cont->label());
     }
     LIR_Opr src_klass = gen->new_register(T_METADATA);
     if (gen_type_check) {
       // We have determined that offset == referent_offset && src != null.
       // if (src->_klass->_reference_type == REF_NONE) -> continue
-      gen->load_klass(base_reg, src_klass, NULL);
+      gen->load_klass(base_reg, src_klass, nullptr);
       LIR_Address* reference_type_addr = new LIR_Address(src_klass, in_bytes(InstanceKlass::reference_type_offset()), T_BYTE);
       LIR_Opr reference_type = gen->new_register(T_INT);
       __ move(reference_type_addr, reference_type);

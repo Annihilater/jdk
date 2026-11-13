@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,18 +27,19 @@ package sun.nio.fs;
 
 import jdk.internal.misc.TerminatingThreadLocal;
 import jdk.internal.misc.Unsafe;
+import jdk.internal.vm.ContinuationSupport;
 
 /**
  * Factory for native buffers.
  */
 
 class NativeBuffers {
-    private NativeBuffers() { }
 
     private static final Unsafe unsafe = Unsafe.getUnsafe();
 
     private static final int TEMP_BUF_POOL_SIZE = 3;
-    private static ThreadLocal<NativeBuffer[]> threadLocal = new TerminatingThreadLocal<>() {
+    // per-carrier-thread cache of NativeBuffer(s)
+    private static final TerminatingThreadLocal<NativeBuffer[]> threadLocal = new TerminatingThreadLocal<>() {
         @Override
         protected void threadTerminated(NativeBuffer[] buffers) {
             // threadLocal may be initialized but with initialValue of null
@@ -54,6 +55,8 @@ class NativeBuffers {
         }
     };
 
+    private NativeBuffers() { }
+
     /**
      * Allocates a native buffer, of at least the given size, from the heap.
      */
@@ -68,18 +71,23 @@ class NativeBuffers {
      * local cache.
      */
     static NativeBuffer getNativeBufferFromCache(int size) {
-        // return from cache if possible
-        NativeBuffer[] buffers = threadLocal.get();
-        if (buffers != null) {
-            for (int i=0; i<TEMP_BUF_POOL_SIZE; i++) {
-                NativeBuffer buffer = buffers[i];
-                if (buffer != null && buffer.size() >= size) {
-                    buffers[i] = null;
-                    return buffer;
+        ContinuationSupport.pinIfSupported();
+        try {
+            // return from cache if possible
+            NativeBuffer[] buffers = threadLocal.get();
+            if (buffers != null) {
+                for (int i = 0; i < TEMP_BUF_POOL_SIZE; i++) {
+                    NativeBuffer buffer = buffers[i];
+                    if (buffer != null && buffer.size() >= size) {
+                        buffers[i] = null;
+                        return buffer;
+                    }
                 }
             }
+            return null;
+        } finally {
+            ContinuationSupport.unpinIfSupported();
         }
-        return null;
     }
 
     /**
@@ -90,7 +98,8 @@ class NativeBuffers {
     static NativeBuffer getNativeBuffer(int size) {
         NativeBuffer buffer = getNativeBufferFromCache(size);
         if (buffer != null) {
-            buffer.setOwner(null);
+            if (!Thread.currentThread().isVirtual())
+                buffer.setOwner(null);
             return buffer;
         } else {
             return allocNativeBuffer(size);
@@ -102,29 +111,34 @@ class NativeBuffers {
      * then the buffer goes into the cache; otherwise the memory is deallocated.
      */
     static void releaseNativeBuffer(NativeBuffer buffer) {
-        // create cache if it doesn't exist
-        NativeBuffer[] buffers = threadLocal.get();
-        if (buffers == null) {
-            buffers = new NativeBuffer[TEMP_BUF_POOL_SIZE];
-            buffers[0] = buffer;
-            threadLocal.set(buffers);
-            return;
-        }
-        // Put it in an empty slot if such exists
-        for (int i=0; i<TEMP_BUF_POOL_SIZE; i++) {
-            if (buffers[i] == null) {
-                buffers[i] = buffer;
+        ContinuationSupport.pinIfSupported();
+        try {
+            // create cache if it doesn't exist
+            NativeBuffer[] buffers = threadLocal.get();
+            if (buffers == null) {
+                buffers = new NativeBuffer[TEMP_BUF_POOL_SIZE];
+                buffers[0] = buffer;
+                threadLocal.set(buffers);
                 return;
             }
-        }
-        // Otherwise replace a smaller one in the cache if such exists
-        for (int i=0; i<TEMP_BUF_POOL_SIZE; i++) {
-            NativeBuffer existing = buffers[i];
-            if (existing.size() < buffer.size()) {
-                existing.free();
-                buffers[i] = buffer;
-                return;
+            // Put it in an empty slot if such exists
+            for (int i = 0; i < TEMP_BUF_POOL_SIZE; i++) {
+                if (buffers[i] == null) {
+                    buffers[i] = buffer;
+                    return;
+                }
             }
+            // Otherwise replace a smaller one in the cache if such exists
+            for (int i = 0; i < TEMP_BUF_POOL_SIZE; i++) {
+                NativeBuffer existing = buffers[i];
+                if (existing.size() < buffer.size()) {
+                    existing.free();
+                    buffers[i] = buffer;
+                    return;
+                }
+            }
+        } finally {
+            ContinuationSupport.unpinIfSupported();
         }
 
         // free it

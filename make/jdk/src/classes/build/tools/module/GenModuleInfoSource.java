@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -452,7 +452,10 @@ public class GenModuleInfoSource {
                         while ((lookAhead = parser.peekToken()) != null) {
                             // add target name
                             name = nextIdentifier(parser);
-                            statement.addTarget(name);
+                            if (!statement.addTarget(name)) {
+                                throw parser.newError("duplicate target " + name +
+                                    " in " + keyword + " " + statement.name);
+                            }
                             lookAhead = lookAhead(parser);
                             if (lookAhead.equals(",") || lookAhead.equals(";")) {
                                 parser.nextToken();
@@ -473,6 +476,11 @@ public class GenModuleInfoSource {
                     if (parser.peekToken() != null) {  // must be EOF
                         throw parser.newError("is malformed");
                     }
+                } else if (token.equals("import")) {
+                    nextIdentifier(parser);
+                    skipTokenOrThrow(parser, ";", "missing semicolon");
+                } else if (token.startsWith("@")) {
+                    continue;
                 } else {
                     throw parser.newError("missing keyword");
                 }
@@ -555,11 +563,10 @@ public class GenModuleInfoSource {
             this.ordered = ordered;
         }
 
-        Statement addTarget(String mn) {
+        boolean addTarget(String mn) {
             if (mn.isEmpty())
                 throw new IllegalArgumentException("empty module name");
-            targets.add(mn);
-            return this;
+            return targets.add(mn);
         }
 
         boolean isQualified() {

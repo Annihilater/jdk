@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,6 +58,7 @@ import java.util.jar.Manifest;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 
@@ -69,11 +70,16 @@ import jdk.internal.perf.PerfCounter;
 
 /**
  * A {@code ModuleFinder} that locates modules on the file system by searching
- * a sequence of directories or packaged modules. The ModuleFinder can be
- * created to work in either the run-time or link-time phases. In both cases it
- * locates modular JAR and exploded modules. When created for link-time then it
- * additionally locates modules in JMOD files. The ModuleFinder can also
- * optionally patch any modules that it locates with a ModulePatcher.
+ * a sequence of directories or packaged modules.
+ *
+ * <p> A ModulePath can be created to locate modules on a module path at run-time or
+ * link-time. In both cases it supports modular JARs and exploded modules. At link-time
+ * it additionally locates modules in JMOD files. The ModuleFinder can also optionally
+ * patch the modules that it locates with a ModulePatcher.
+ *
+ * <p> A ModulePath can also be created to locate modules in a JDK exploded image. It
+ * can optionally patch any modules that it locates with a ModulePatcher, and it can
+ * support preview classes in META-INF/preview when running with preview features enabled.
  */
 
 public class ModulePath implements ModuleFinder {
@@ -88,21 +94,26 @@ public class ModulePath implements ModuleFinder {
     // for patching modules, can be null
     private final ModulePatcher patcher;
 
+    // true for a module path to a JDK exploded image and preview features are enabled
+    private final boolean previewMode;
+
     // the entries on this module path
     private final Path[] entries;
     private int next;
 
-    // map of module name to module reference map for modules already located
+    // map of module name to module reference for modules already located
     private final Map<String, ModuleReference> cachedModules = new HashMap<>();
 
 
     private ModulePath(Runtime.Version version,
                        boolean isLinkPhase,
                        ModulePatcher patcher,
+                       boolean previewMode,
                        Path... entries) {
         this.releaseVersion = version;
         this.isLinkPhase = isLinkPhase;
         this.patcher = patcher;
+        this.previewMode = previewMode;
         this.entries = entries.clone();
         for (Path entry : this.entries) {
             Objects.requireNonNull(entry);
@@ -115,7 +126,7 @@ public class ModulePath implements ModuleFinder {
      * may be patched by the given ModulePatcher.
      */
     public static ModuleFinder of(ModulePatcher patcher, Path... entries) {
-        return new ModulePath(JarFile.runtimeVersion(), false, patcher, entries);
+        return new ModulePath(JarFile.runtimeVersion(), false, patcher, false, entries);
     }
 
     /**
@@ -123,7 +134,7 @@ public class ModulePath implements ModuleFinder {
      * searching a sequence of directories and/or packaged modules.
      */
     public static ModuleFinder of(Path... entries) {
-        return of((ModulePatcher)null, entries);
+        return of(null, entries);
     }
 
     /**
@@ -136,9 +147,24 @@ public class ModulePath implements ModuleFinder {
     public static ModuleFinder of(Runtime.Version version,
                                   boolean isLinkPhase,
                                   Path... entries) {
-        return new ModulePath(version, isLinkPhase, null, entries);
+        return new ModulePath(version, isLinkPhase, null, false, entries);
     }
 
+    /**
+     * Returns a ModuleFinder that locates modules in a JDK exploded image.
+     * @param modulesDir the modules directory ($JAVA_HOME/modules)
+     * @param patcher the ModulePatcher or null
+     * @param previewMode true if preview features are enabled
+     */
+    public static ModuleFinder ofExplodedImage(Path modulesDir,
+                                               ModulePatcher patcher,
+                                               boolean previewMode) {
+        return new ModulePath(JarFile.runtimeVersion(), // not used for exploded image
+                              false,
+                              patcher,
+                              previewMode,
+                              modulesDir);
+    }
 
     @Override
     public Optional<ModuleReference> find(String name) {
@@ -527,7 +553,6 @@ public class ModulePath implements ModuleFinder {
         Set<String> packages = classFiles.stream()
                 .map(this::toPackageName)
                 .flatMap(Optional::stream)
-                .distinct()
                 .collect(Collectors.toSet());
 
         // all packages are exported and open
@@ -663,13 +688,13 @@ public class ModulePath implements ModuleFinder {
     // -- exploded directories --
 
     private Set<String> explodedPackages(Path dir) {
-        try {
-            return Files.find(dir, Integer.MAX_VALUE,
-                    ((path, attrs) -> attrs.isRegularFile() && !isHidden(path)))
-                    .map(path -> dir.relativize(path))
-                    .map(this::toPackageName)
-                    .flatMap(Optional::stream)
-                    .collect(Collectors.toSet());
+        String separator = dir.getFileSystem().getSeparator();
+        try (Stream<Path> stream = Files.find(dir, Integer.MAX_VALUE,
+                (path, attrs) -> attrs.isRegularFile() && !isHidden(path))) {
+            return stream.map(dir::relativize)
+                .map(path -> toPackageName(path, separator))
+                .flatMap(Optional::stream)
+                .collect(Collectors.toSet());
         } catch (IOException x) {
             throw new UncheckedIOException(x);
         }
@@ -692,7 +717,7 @@ public class ModulePath implements ModuleFinder {
             // for now
             return null;
         }
-        return ModuleReferences.newExplodedModule(attrs, patcher, dir);
+        return ModuleReferences.newExplodedModule(attrs, patcher, previewMode, dir);
     }
 
     /**
@@ -738,7 +763,7 @@ public class ModulePath implements ModuleFinder {
      * @throws InvalidModuleDescriptorException if the name is a class file in
      *         the top-level directory (and it's not module-info.class)
      */
-    private Optional<String> toPackageName(Path file) {
+    private Optional<String> toPackageName(Path file, String separator) {
         assert file.getRoot() == null;
 
         Path parent = file.getParent();
@@ -752,7 +777,7 @@ public class ModulePath implements ModuleFinder {
             return Optional.empty();
         }
 
-        String pn = parent.toString().replace(File.separatorChar, '.');
+        String pn = parent.toString().replace(separator, ".");
         if (Checks.isPackageName(pn)) {
             return Optional.of(pn);
         } else {

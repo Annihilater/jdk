@@ -223,7 +223,7 @@ public class XMLErrorResources_de extends ListResourceBundle
       "Fehler: Iterator f\u00FCr Achse {0} nicht implementiert "},
 
     { ER_ITERATOR_CLONE_NOT_SUPPORTED,
-      "Iteratorclone nicht unterst\u00FCtzt"},
+      "Iteratorklon nicht unterst\u00FCtzt"},
 
     { ER_UNKNOWN_AXIS_TYPE,
       "Unbekannter Achsendurchlauftyp: {0}"},
@@ -286,7 +286,7 @@ public class XMLErrorResources_de extends ListResourceBundle
        "Ung\u00FCltige Portnummer"},
 
     { ER_FRAG_FOR_GENERIC_URI,
-       "Fragment kann nur f\u00FCr einen generischen URI festgelegt werden"},
+       "Fragment kann nur f\u00FCr eine generische URI festgelegt werden"},
 
     { ER_FRAG_WHEN_PATH_NULL,
        "Fragment kann nicht festgelegt werden, wenn der Pfad null ist"},

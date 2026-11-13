@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,6 +22,7 @@
  */
 package nsk.share.runner;
 
+import java.util.concurrent.locks.LockSupport;
 import nsk.share.gc.OOMStress;
 import nsk.share.log.*;
 import nsk.share.test.Stresser;
@@ -74,8 +75,20 @@ public class ThreadsRunner implements MultiRunner, LogAware, RunParamsAware {
         }
 
         public Thread newThread(Runnable runnable, String name, int num) {
-            return new Thread(runnable, name);
+            Thread t;
+            if (this.params.useVirtualThreads()) {
+                t = unstartedVirtualThread(runnable);
+            } else {
+                t = new Thread(runnable);
+            }
+            t.setName(name);
+            return t;
         }
+
+        private Thread unstartedVirtualThread(Runnable task) {
+            return Thread.ofVirtual().unstarted(task);
+        }
+
     }
 
     private class ManagedThread implements Runnable {
@@ -98,23 +111,26 @@ public class ThreadsRunner implements MultiRunner, LogAware, RunParamsAware {
         public void run() {
             notStarted.decrementAndGet();
             while (notStarted.get() != 0) {
-                Thread.onSpinWait();
+                LockSupport.parkNanos(1);
             }
             try {
                 stresser.start(runParams.getIterations());
                 while (!this.thread.isInterrupted() && stresser.iteration()) {
                     test.run();
-                    Thread.yield();
-                }
-            } catch (OutOfMemoryError oom) {
-                if (test instanceof OOMStress) {
-                    // Test stressing OOM, not a failure.
-                    log.info("Caught OutOfMemoryError in OOM stress test, omitting exception.");
-                } else {
-                    failWithException(oom);
+                    LockSupport.parkNanos(1);
                 }
             } catch (Throwable t) {
-                failWithException(t);
+                if (test instanceof OOMStress && isCausedByOOM(t)) {
+                    // Test stressing OOM, not a failure. The OOME may arrive
+                    // wrapped in another exception.
+                    try {
+                        log.info("Caught " + t + " in OOM stress test, omitting exception.");
+                    } catch (OutOfMemoryError oom) {
+                        // no memory left to log, still not a failure
+                    }
+                } else {
+                    failWithException(t);
+                }
             } finally {
                 waitForOtherThreads();
                 stresser.finish();
@@ -134,6 +150,16 @@ public class ThreadsRunner implements MultiRunner, LogAware, RunParamsAware {
             } else {
                 throw new TestBug("Waiting a second time is not premitted");
             }
+        }
+
+        private static boolean isCausedByOOM(Throwable t) {
+            while (t != null) {
+                if (t instanceof OutOfMemoryError) {
+                    return true;
+                }
+                t = t.getCause();
+            }
+            return false;
         }
 
         private void failWithException(Throwable t) {
@@ -297,6 +323,10 @@ public class ThreadsRunner implements MultiRunner, LogAware, RunParamsAware {
             log.info("Unexpected exception during the run.");
             log.info(t);
             successful = false;
+        } finally {
+            // Finished testing; release memory to avoid OOM.
+            runnables.clear();
+            threads.clear();
         }
     }
 

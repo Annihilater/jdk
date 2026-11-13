@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,60 +22,31 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "gc/shared/partialArrayTaskStepper.inline.hpp"
-#include "memory/allStatic.hpp"
 #include "unittest.hpp"
 
-using Step = PartialArrayTaskStepper::Step;
-using Stepper = PartialArrayTaskStepper;
-
-class PartialArrayTaskStepper::TestSupport : AllStatic {
-public:
-  static Step start(const Stepper* stepper,
-                    int length,
-                    int* to_length_addr,
-                    uint chunk_size) {
-    return stepper->start_impl(length, to_length_addr, chunk_size);
-  }
-
-  static Step next(const Stepper* stepper,
-                   int length,
-                   int* to_length_addr,
-                   uint chunk_size) {
-    return stepper->next_impl(length, to_length_addr, chunk_size);
-  }
-};
-
-using StepperSupport = PartialArrayTaskStepper::TestSupport;
-
-static int simulate(const Stepper* stepper,
-                    int length,
-                    int* to_length_addr,
-                    uint chunk_size) {
-  Step init = StepperSupport::start(stepper, length, to_length_addr, chunk_size);
-  uint queue_count = init._ncreate;
-  int task = 0;
-  for ( ; queue_count > 0; ++task) {
-    --queue_count;
-    Step step = StepperSupport::next(stepper, length, to_length_addr, chunk_size);
-    queue_count += step._ncreate;
-  }
-  return task;
-}
-
-static void run_test(int length, int chunk_size, uint n_workers) {
+static void run_test(size_t length, size_t chunk_size, uint n_workers) {
   const PartialArrayTaskStepper stepper(n_workers);
-  int to_length;
-  int tasks = simulate(&stepper, length, &to_length, chunk_size);
-  ASSERT_EQ(length, to_length);
+  size_t index = length % chunk_size;
+  uint pending = index < length ? 1u : 0u;
+  uint tasks = 0;
+  while (pending > 0) {
+    ASSERT_LT(index, length);
+    --pending;
+    pending += stepper.continuation_tasks(index, length, chunk_size);
+    index += chunk_size;
+    ++tasks;
+    ASSERT_LE(pending, n_workers);
+    ASSERT_LE(pending, (length - index) / chunk_size);
+  }
+  ASSERT_EQ(length, index);
   ASSERT_EQ(tasks, length / chunk_size);
 }
 
-TEST(PartialArrayTaskStepperTest, doit) {
-  for (int chunk_size = 50; chunk_size <= 500; chunk_size += 50) {
+TEST(PartialArrayTaskStepperTest, coverage_and_task_limit) {
+  for (size_t chunk_size = 50; chunk_size <= 500; chunk_size += 50) {
     for (uint n_workers = 1; n_workers <= 256; n_workers = (n_workers * 3 / 2 + 1)) {
-      for (int length = 0; length <= 1000000; length = (length * 2 + 1)) {
+      for (size_t length = 0; length <= 1000000; length = (length * 2 + 1)) {
         run_test(length, chunk_size, n_workers);
       }
       // Ensure we hit boundary cases for length % chunk_size == 0.
@@ -84,4 +55,16 @@ TEST(PartialArrayTaskStepperTest, doit) {
       }
     }
   }
+}
+
+// Verifies that with below constants the stepper won't create tasks beyond the original array.
+TEST(PartialArrayTaskStepperTest, overflow_beyond_array) {
+  const size_t Length = INT32_MAX;
+  const size_t ChunkSize = 1;
+  const size_t Index = 1431655765;
+  const uint NumWorkers = 16; // Fanout is 4.
+
+  const PartialArrayTaskStepper stepper(NumWorkers);
+
+  ASSERT_EQ(1u, stepper.continuation_tasks(Index, Length, ChunkSize));
 }

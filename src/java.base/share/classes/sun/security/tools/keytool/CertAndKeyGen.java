@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,7 @@ import java.security.spec.NamedParameterSpec;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.GregorianCalendar;
+import java.util.Locale;
 import java.util.TimeZone;
 
 import sun.security.pkcs10.PKCS10;
@@ -148,19 +149,11 @@ public final class CertAndKeyGen {
             if (prng == null) {
                 prng = new SecureRandom();
             }
-            try {
-                keyGen.initialize(new NamedParameterSpec(name), prng);
-            } catch (InvalidAlgorithmParameterException e) {
-                if (keyType.equalsIgnoreCase("EC")) {
-                    // EC has another NamedParameterSpec
-                    keyGen.initialize(new ECGenParameterSpec(name), prng);
-                } else {
-                    throw e;
-                }
-            }
-
+            keyGen.initialize(keyType.toUpperCase(Locale.ROOT).equals("EC")
+                    ? new ECGenParameterSpec(name)
+                    : new NamedParameterSpec(name), prng);
         } catch (Exception e) {
-            throw new IllegalArgumentException(e.getMessage());
+            throw new IllegalArgumentException(e.getMessage(), e);
         }
         generateInternal();
     }
@@ -176,7 +169,7 @@ public final class CertAndKeyGen {
                 keyGen.initialize(keyBits, prng);
 
             } catch (Exception e) {
-                throw new IllegalArgumentException(e.getMessage());
+                throw new IllegalArgumentException(e.getMessage(), e);
             }
         }
         generateInternal();
@@ -230,7 +223,7 @@ public final class CertAndKeyGen {
      *
      * XXX Note: This behaviour is needed for backwards compatibility.
      * What this method really should return is the public key of the
-     * generated key pair, regardless of whether or not it is an instance of
+     * generated key pair, regardless of whether it is an instance of
      * <code>X509Key</code>. Accordingly, the return type of this method
      * should be <code>PublicKey</code>.
      */
@@ -319,37 +312,34 @@ public final class CertAndKeyGen {
 
             X509CertInfo info = new X509CertInfo();
             // Add all mandatory attributes
-            info.set(X509CertInfo.VERSION,
-                     new CertificateVersion(CertificateVersion.V3));
+            info.setVersion(new CertificateVersion(CertificateVersion.V3));
             if (prng == null) {
                 prng = new SecureRandom();
             }
-            info.set(X509CertInfo.SERIAL_NUMBER,
-                    CertificateSerialNumber.newRandom64bit(prng));
-            info.set(X509CertInfo.SUBJECT, myname);
-            info.set(X509CertInfo.KEY, new CertificateX509Key(publicKey));
-            info.set(X509CertInfo.VALIDITY, interval);
+            info.setSerialNumber(CertificateSerialNumber.newRandom64bit(prng));
+            info.setSubject(myname);
+            info.setKey(new CertificateX509Key(publicKey));
+            info.setValidity(interval);
             if (signerFlag) {
                 // use signer's subject name to set the issuer name
-                info.set(X509CertInfo.ISSUER, signerSubjectName);
+                info.setIssuer(signerSubjectName);
             } else {
-                info.set(X509CertInfo.ISSUER, myname);
+                info.setIssuer(myname);
             }
-            if (ext != null) info.set(X509CertInfo.EXTENSIONS, ext);
+            if (ext != null) info.setExtensions(ext);
 
-            cert = new X509CertImpl(info);
             if (signerFlag) {
                 // use signer's private key to sign
-                cert.sign(signerPrivateKey, sigAlg);
+                cert = X509CertImpl.newSigned(info, signerPrivateKey, sigAlg);
             } else {
-                cert.sign(privateKey, sigAlg);
+                cert = X509CertImpl.newSigned(info, privateKey, sigAlg);
             }
 
             return cert;
 
         } catch (IOException e) {
              throw new CertificateEncodingException("getSelfCert: " +
-                                                    e.getMessage());
+                                                    e.getMessage(), e);
         }
     }
 
@@ -362,7 +352,7 @@ public final class CertAndKeyGen {
     }
 
     private SecureRandom        prng;
-    private String              keyType;
+    private final String        keyType;
     private String              sigAlg;
     private KeyPairGenerator    keyGen;
     private PublicKey           publicKey;

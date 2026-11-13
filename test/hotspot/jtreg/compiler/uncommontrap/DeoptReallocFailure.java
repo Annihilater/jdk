@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@
  * @bug 8146416
  * @library /test/lib /
  *
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
  *      -XX:+WhiteBoxAPI -Xbatch -Xmx100m
  *      -XX:CompileCommand=exclude,compiler.uncommontrap.DeoptReallocFailure::main
@@ -35,9 +35,26 @@
  *
  */
 
+/*
+ * @test
+ * @bug 8146416
+ * @library /test/lib /
+ *
+ * @requires os.arch == "aarch64" | os.arch == "riscv64"
+ * @requires vm.compiler2.enabled
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *      -XX:+WhiteBoxAPI -Xbatch -Xmx100m
+ *      -XX:CompileCommand=exclude,compiler.uncommontrap.DeoptReallocFailure::main
+ *      -XX:+UnlockExperimentalVMOptions -XX:+PreferCallBasedUncommonTraps
+ *      compiler.uncommontrap.DeoptReallocFailure
+ *
+ */
+
 package compiler.uncommontrap;
 
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 import java.lang.reflect.Method;
 
@@ -63,7 +80,7 @@ public class DeoptReallocFailure {
         NoEscape[] noEscape = new NoEscape[45];
         noEscape[0] = new NoEscape();
         for (int i=0;i<1024*256;i++) {
-           root.array[i]= new Object[45];
+           root.array[i]= new Object[4500];
         }
         return noEscape[0].f1;
     }

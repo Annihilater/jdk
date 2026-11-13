@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@
  * @test
  * @requires vm.cds
  * @library /test/lib /test/hotspot/jtreg/runtime/cds/appcds
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/timeout=480 -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:. MainModuleOnly
  * @summary Test some scenarios with a main modular jar specified in the --module-path and -cp options in the command line.
  */
@@ -43,7 +43,7 @@ import jdk.test.lib.Platform;
 import jdk.test.lib.cds.CDSTestUtils;
 
 import jtreg.SkippedException;
-import sun.hotspot.code.Compiler;
+import jdk.test.whitebox.code.Compiler;
 
 public class MainModuleOnly extends DynamicArchiveTestBase {
 
@@ -117,7 +117,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             "--module-path", moduleDir.toString(),
             "-m", TEST_MODULE1)
             .assertNormalExit(output -> {
-                    output.shouldContain("[class,load] com.simple.Main source: shared objects file")
+                    output.shouldMatch("\\[class,load *\\] com\\.simple\\.Main source: shared objects file")
                           .shouldHaveExitValue(0);
                 });
 
@@ -160,25 +160,20 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
                    .shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar");
             });
 
-        boolean skippedTest = false;
-        if (!Compiler.isGraalEnabled()) {
-            // run with the archive with the --limit-modules option.
-            // CDS will be disabled with this options and the main class will be
-            // loaded from the modular jar.
-            run(topArchiveName,
-                "-Xlog:cds+dynamic=debug,cds=debug,class+load=trace",
-                "-cp", destJar.toString(),
-                "--limit-modules", "java.base," + TEST_MODULE1,
-                "--module-path", moduleDir.toString(),
-                "-m", TEST_MODULE1)
-                .assertSilentlyDisabledCDS(out -> {
-                    out.shouldHaveExitValue(0)
-                       .shouldMatch("CDS is disabled when the.*option is specified")
-                       .shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar");
-            });
-        } else {
-            skippedTest = true;
-        }
+        // run with the archive with the --limit-modules option.
+        // CDS will be disabled with this options and the main class will be
+        // loaded from the modular jar.
+        run(topArchiveName,
+            "-Xlog:cds+dynamic=debug,cds=debug,class+load=trace",
+            "-cp", destJar.toString(),
+            "--limit-modules", "java.base," + TEST_MODULE1,
+            "--module-path", moduleDir.toString(),
+            "-m", TEST_MODULE1)
+            .assertSilentlyDisabledCDS(out -> {
+                out.shouldHaveExitValue(0)
+                   .shouldMatch("CDS is disabled when the.*option is specified")
+                   .shouldMatch(".class.load. com.simple.Main source:.*com.simple.jar");
+        });
         // run with the archive with the --patch-module option.
         // CDS will be disabled with this options and the main class will be
         // loaded from the modular jar.
@@ -204,7 +199,7 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             "--module-path", moduleDir.toString(),
             "-m", TEST_MODULE1)
             .assertAbnormalExit(
-                "A jar file is not the one used while building the shared archive file:");
+                "This file is not the one used while building the shared archive file:");
         // create an archive with a non-empty directory in the --module-path.
         // The dumping process will exit with an error due to non-empty directory
         // in the --module-path.
@@ -213,8 +208,10 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
              "-cp", destJar.toString(),
              "--module-path", MODS_DIR.toString(),
              "-m", TEST_MODULE1 + "/" + MAIN_CLASS)
-            .assertAbnormalExit(output -> {
-                output.shouldMatch("Error: non-empty directory.*com.simple");
+            // After JDK-8328313, non-empty module path directory won't be included
+            // in the shared paths table.
+            .assertNormalExit(output -> {
+                output.shouldNotMatch("Error: non-empty directory.*com.simple");
                 });
 
         // test module path with very long length
@@ -263,9 +260,5 @@ public class MainModuleOnly extends DynamicArchiveTestBase {
             .ifAbnormalExit(output -> {
                 output.shouldMatch("os::stat error.*CDS dump aborted");
                 });
-
-        if (skippedTest) {
-            throw new SkippedException("Skipped --limit-modules test; it can't be run with Graal enabled");
-        }
     }
 }

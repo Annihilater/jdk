@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,19 +38,16 @@ class PhaseStringOpts : public Phase {
   PhaseGVN* _gvn;
 
   // List of dead nodes to clean up aggressively at the end
-  Unique_Node_List dead_worklist;
+  Unique_Node_List<Node> dead_worklist;
 
   // Memory slices needed for code gen
   int byte_adr_idx;
-
-  // Integer.sizeTable - used for int to String conversion
-  ciField* size_table_field;
 
   // A set for use by various stages
   VectorSet _visited;
 
   // Collect a list of all SB.toString calls
-  Node_List collect_toString_calls();
+  Node_List<CallStaticJavaNode> collect_toString_calls();
 
   // Examine the use of the SB alloc to see if it can be replace with
   // a single string construction.
@@ -58,9 +55,6 @@ class PhaseStringOpts : public Phase {
 
   // Replace all the SB calls in concat with an optimization String allocation
   void replace_string_concat(StringConcat* concat);
-
-  // Load the value of a static field, performing any constant folding.
-  Node* fetch_static_field(GraphKit& kit, ciField* field);
 
   // Compute the number of characters required to represent the int value
   Node* int_stringSize(GraphKit& kit, Node* value);
@@ -112,7 +106,15 @@ class PhaseStringOpts : public Phase {
   };
 
  public:
-  PhaseStringOpts(PhaseGVN* gvn, Unique_Node_List* worklist);
+  PhaseStringOpts(PhaseGVN* gvn);
+
+#ifndef PRODUCT
+  static void print_statistics();
+ private:
+  static uint _stropts_replaced;
+  static uint _stropts_merged;
+  static uint _stropts_total;
+#endif
 };
 
 #endif // SHARE_OPTO_STRINGOPTS_HPP

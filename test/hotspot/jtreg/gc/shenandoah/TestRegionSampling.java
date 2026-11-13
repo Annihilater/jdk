@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2017, 2018, Red Hat, Inc. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,12 +29,6 @@
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=passive
- *      -XX:+ShenandoahDegeneratedGC
- *      TestRegionSampling
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=passive
- *      -XX:-ShenandoahDegeneratedGC
  *      TestRegionSampling
  */
 
@@ -43,6 +38,15 @@
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=adaptive
+ *      TestRegionSampling
+ */
+
+/*
+ * @test id=generational
+ * @requires vm.gc.Shenandoah
+ *
+ * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
+ *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=adaptive -XX:ShenandoahGCMode=generational
  *      TestRegionSampling
  */
 
@@ -71,25 +75,6 @@
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=aggressive
  *      TestRegionSampling
- */
-
-/*
- * @test id=iu-aggressive
- * @requires vm.gc.Shenandoah
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu -XX:ShenandoahGCHeuristics=aggressive
- *      TestRegionSampling
- */
-
-/*
- * @test id=iu
- * @requires vm.gc.Shenandoah
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions -XX:+ShenandoahRegionSampling
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu
- *      TestRegionSampling
- *
  */
 
 public class TestRegionSampling {

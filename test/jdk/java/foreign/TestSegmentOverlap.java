@@ -1,46 +1,50 @@
 /*
- *  Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
- *  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  This code is free software; you can redistribute it and/or modify it
- *  under the terms of the GNU General Public License version 2 only, as
- *  published by the Free Software Foundation.
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
  *
- *  This code is distributed in the hope that it will be useful, but WITHOUT
- *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- *  version 2 for more details (a copy is included in the LICENSE file that
- *  accompanied this code).
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
  *
- *  You should have received a copy of the GNU General Public License version
- *  2 along with this work; if not, write to the Free Software Foundation,
- *  Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- *  Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- *  or visit www.oracle.com if you need additional information or have any
- *  questions.
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
  */
 
 /*
  * @test
- * @run testng/othervm TestSegmentOverlap
+ * @run junit/othervm TestSegmentOverlap
  */
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.function.Supplier;
-import jdk.incubator.foreign.MemorySegment;
-import jdk.incubator.foreign.ResourceScope;
-import org.testng.annotations.Test;
-import org.testng.annotations.DataProvider;
-import static java.lang.System.out;
-import static org.testng.Assert.*;
+import java.lang.foreign.MemorySegment;
 
+import static java.lang.System.out;
+
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class TestSegmentOverlap {
 
     static Path tempPath;
@@ -57,13 +61,12 @@ public class TestSegmentOverlap {
         }
     }
 
-    @DataProvider(name = "segmentFactories")
     public Object[][] segmentFactories() {
         List<Supplier<MemorySegment>> l = List.of(
-                () -> MemorySegment.allocateNative(16, ResourceScope.newConfinedScope()),
+                () -> Arena.ofAuto().allocate(16, 1),
                 () -> {
-                    try {
-                        return MemorySegment.mapFile(tempPath, 0L, 16, FileChannel.MapMode.READ_WRITE, ResourceScope.newConfinedScope());
+                    try (FileChannel fileChannel = FileChannel.open(tempPath, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+                        return fileChannel.map(FileChannel.MapMode.READ_WRITE, 0L, 16L, Arena.ofAuto());
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
@@ -79,58 +82,72 @@ public class TestSegmentOverlap {
         return l.stream().map(s -> new Object[] { s }).toArray(Object[][]::new);
     }
 
-    @Test(dataProvider="segmentFactories")
+    @ParameterizedTest
+    @MethodSource("segmentFactories")
     public void testBasic(Supplier<MemorySegment> segmentSupplier) {
         var s1 = segmentSupplier.get();
         var s2 = segmentSupplier.get();
         var sOther = s1.isNative() ? OtherSegmentFactory.HEAP.factory.get()
                 : OtherSegmentFactory.NATIVE.factory.get();
         out.format("testBasic s1:%s, s2:%s, sOther:%s\n", s1, s2, sOther);
-        assertNull(s1.asOverlappingSlice(s2));
-        assertNull(s2.asOverlappingSlice(s1));
-        assertNull(s1.asOverlappingSlice(sOther));
+        assertTrue(s1.asOverlappingSlice(s2).isEmpty());
+        assertTrue(s2.asOverlappingSlice(s1).isEmpty());
+        assertTrue(s1.asOverlappingSlice(sOther).isEmpty());
     }
 
-    @Test(dataProvider="segmentFactories")
+    @ParameterizedTest
+    @MethodSource("segmentFactories")
     public void testIdentical(Supplier<MemorySegment> segmentSupplier) {
         var s1 = segmentSupplier.get();
         var s2 = s1.asReadOnly();
         out.format("testIdentical s1:%s, s2:%s\n", s1, s2);
-        assertEquals(s1.asOverlappingSlice(s2).byteSize(), s1.byteSize());
-        assertEquals(s1.asOverlappingSlice(s2).scope(), s1.scope());
+        assertEquals(s1.byteSize(), s1.asOverlappingSlice(s2).get().byteSize());
+        assertEquals(s1.scope(), s1.asOverlappingSlice(s2).get().scope());
 
-        assertEquals(s2.asOverlappingSlice(s1).byteSize(), s2.byteSize());
-        assertEquals(s2.asOverlappingSlice(s1).scope(), s2.scope());
+        assertEquals(s2.byteSize(), s2.asOverlappingSlice(s1).get().byteSize());
+        assertEquals(s2.scope(), s2.asOverlappingSlice(s1).get().scope());
 
         if (s1.isNative()) {
-            assertEquals(s1.asOverlappingSlice(s2).address(), s1.address());
-            assertEquals(s2.asOverlappingSlice(s1).address(), s2.address());
+            assertEquals(s1.address(), s1.asOverlappingSlice(s2).get().address());
+            assertEquals(s2.address(), s2.asOverlappingSlice(s1).get().address());
         }
     }
 
-    @Test(dataProvider="segmentFactories")
+    @ParameterizedTest
+    @MethodSource("segmentFactories")
     public void testSlices(Supplier<MemorySegment> segmentSupplier) {
         MemorySegment s1 = segmentSupplier.get();
         MemorySegment s2 = segmentSupplier.get();
         for (int offset = 0 ; offset < 4 ; offset++) {
             MemorySegment slice = s1.asSlice(offset);
             out.format("testSlices s1:%s, s2:%s, slice:%s, offset:%d\n", s1, s2, slice, offset);
-            assertEquals(s1.asOverlappingSlice(slice).byteSize(), s1.byteSize() - offset);
-            assertEquals(s1.asOverlappingSlice(slice).scope(), s1.scope());
+            assertEquals(s1.byteSize() - offset, s1.asOverlappingSlice(slice).get().byteSize());
+            assertEquals(s1.scope(), s1.asOverlappingSlice(slice).get().scope());
 
-            assertEquals(slice.asOverlappingSlice(s1).byteSize(), slice.byteSize());
-            assertEquals(slice.asOverlappingSlice(s1).scope(), slice.scope());
+            assertEquals(slice.byteSize(), slice.asOverlappingSlice(s1).get().byteSize());
+            assertEquals(slice.scope(), slice.asOverlappingSlice(s1).get().scope());
 
             if (s1.isNative()) {
-                assertEquals(s1.asOverlappingSlice(slice).address(), s1.address().addOffset(offset));
-                assertEquals(slice.asOverlappingSlice(s1).address(), slice.address());
+                assertEquals(s1.address() + offset, s1.asOverlappingSlice(slice).get().address());
+                assertEquals(slice.address(), slice.asOverlappingSlice(s1).get().address());
             }
-            assertNull(s2.asOverlappingSlice(slice));
+            assertTrue(s2.asOverlappingSlice(slice).isEmpty());
         }
     }
 
+    @ParameterizedTest
+    @MethodSource("segmentFactories")
+    public void testContainedSlice(Supplier<MemorySegment> segmentSupplier) {
+        MemorySegment segment = segmentSupplier.get();
+        // Select an inner slice whose end precedes the end of the enclosing segment.
+        MemorySegment slice = segment.asSlice(1, 2);
+
+        // The overlap is limited by both segment ends, so it must not extend past the slice.
+        assertEquals(slice.byteSize(), segment.asOverlappingSlice(slice).orElseThrow().byteSize());
+    }
+
     enum OtherSegmentFactory {
-        NATIVE(() -> MemorySegment.allocateNative(16, ResourceScope.newConfinedScope())),
+        NATIVE(() -> Arena.ofAuto().allocate(16, 1)),
         HEAP(() -> MemorySegment.ofArray(new byte[]{16}));
 
         final Supplier<MemorySegment> factory;

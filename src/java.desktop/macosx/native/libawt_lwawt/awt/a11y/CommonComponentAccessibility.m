@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -95,7 +95,11 @@ static jobject sAccessibilityClass = NULL;
         return NO;
     }
 
-    return isChildSelected(env, ((CommonComponentAccessibility *)[self parent])->fAccessible, fIndex, fComponent);
+    CommonComponentAccessibility* parent = [self typeSafeParent];
+    if (parent != nil) {
+        return isChildSelected(env, parent->fAccessible, fIndex, fComponent);
+    }
+    return NO;
 }
 
 - (BOOL)isSelectable:(JNIEnv *)env
@@ -122,16 +126,17 @@ static jobject sAccessibilityClass = NULL;
     /*
      * Here we should keep all the mapping between the accessibility roles and implementing classes
      */
-    rolesMap = [[NSMutableDictionary alloc] initWithCapacity:51];
+    rolesMap = [[NSMutableDictionary alloc] initWithCapacity:52];
 
     [rolesMap setObject:@"ButtonAccessibility" forKey:@"pushbutton"];
     [rolesMap setObject:@"ImageAccessibility" forKey:@"icon"];
     [rolesMap setObject:@"ImageAccessibility" forKey:@"desktopicon"];
     [rolesMap setObject:@"SpinboxAccessibility" forKey:@"spinbox"];
-    [rolesMap setObject:@"StaticTextAccessibility" forKey:@"hyperlink"];
+    [rolesMap setObject:@"LinkAccessibility" forKey:@"hyperlink"];
     [rolesMap setObject:@"StaticTextAccessibility" forKey:@"label"];
     [rolesMap setObject:@"RadiobuttonAccessibility" forKey:@"radiobutton"];
     [rolesMap setObject:@"CheckboxAccessibility" forKey:@"checkbox"];
+    [rolesMap setObject:@"CheckboxAccessibility" forKey:@"togglebutton"];
     [rolesMap setObject:@"SliderAccessibility" forKey:@"slider"];
     [rolesMap setObject:@"ScrollAreaAccessibility" forKey:@"scrollpane"];
     [rolesMap setObject:@"ScrollBarAccessibility" forKey:@"scrollbar"];
@@ -149,13 +154,14 @@ static jobject sAccessibilityClass = NULL;
     [rolesMap setObject:@"NavigableTextAccessibility" forKey:@"dateeditor"];
     [rolesMap setObject:@"ComboBoxAccessibility" forKey:@"combobox"];
     [rolesMap setObject:@"TabGroupAccessibility" forKey:@"pagetablist"];
+    [rolesMap setObject:@"TabButtonAccessibility" forKey:@"pagetab"];
     [rolesMap setObject:@"ListAccessibility" forKey:@"list"];
     [rolesMap setObject:@"OutlineAccessibility" forKey:@"tree"];
     [rolesMap setObject:@"TableAccessibility" forKey:@"table"];
     [rolesMap setObject:@"MenuBarAccessibility" forKey:@"menubar"];
     [rolesMap setObject:@"MenuAccessibility" forKey:@"menu"];
-    [rolesMap setObject:@"MenuItemAccessibility" forKey:@"menuitem"];
     [rolesMap setObject:@"MenuAccessibility" forKey:@"popupmenu"];
+    [rolesMap setObject:@"MenuItemAccessibility" forKey:@"menuitem"];
     [rolesMap setObject:@"ProgressIndicatorAccessibility" forKey:@"progressbar"];
 
     /*
@@ -182,7 +188,8 @@ static jobject sAccessibilityClass = NULL;
     [rolesMap setObject:IgnoreClassName forKey:@"viewport"];
     [rolesMap setObject:IgnoreClassName forKey:@"window"];
 
-    rowRolesMapForParent = [[NSMutableDictionary alloc] initWithCapacity:2];
+    rowRolesMapForParent = [[NSMutableDictionary alloc] initWithCapacity:3];
+    [rowRolesMapForParent setObject:@"MenuItemAccessibility" forKey:@"MenuAccessibility"];
 
     [rowRolesMapForParent setObject:@"ListRowAccessibility" forKey:@"ListAccessibility"];
     [rowRolesMapForParent setObject:@"OutlineRowAccessibility" forKey:@"OutlineAccessibility"];
@@ -595,11 +602,9 @@ static jobject sAccessibilityClass = NULL;
     jobject axAction = (*env)->CallStaticObjectMethod(env, sjc_CAccessibility, jm_getAccessibleAction, fAccessible, fComponent);
     CHECK_EXCEPTION();
     if (axAction != NULL) {
-        jclass jc_AccessibleAction = NULL;
-        GET_CLASS(jc_AccessibleAction, "javax/accessibility/AccessibleAction");
-        jmethodID jm_getAccessibleActionCount = NULL;
-        GET_METHOD(jm_getAccessibleActionCount, jc_AccessibleAction, "getAccessibleActionCount", "()I");
-        jint count = (*env)->CallIntMethod(env, axAction, jm_getAccessibleActionCount);
+        DECLARE_STATIC_METHOD(jm_getAccessibleActionCount, sjc_CAccessibility, "getAccessibleActionCount", "(Ljavax/accessibility/AccessibleAction;Ljava/awt/Component;)I");
+        jint count = (*env)->CallStaticIntMethod(env, sjc_CAccessibility, jm_getAccessibleActionCount, axAction, fComponent);
+        CHECK_EXCEPTION();
         fActions = [[NSMutableDictionary alloc] initWithCapacity:count];
         fActionSelectors = [[NSMutableArray alloc] initWithCapacity:count];
         for (int i =0; i < count; i++) {
@@ -610,8 +615,18 @@ static jobject sAccessibilityClass = NULL;
                 [fActions setObject:action forKey:NSAccessibilityPickAction];
                 [fActionSelectors addObject:[sActionSelectors objectForKey:NSAccessibilityPickAction]];
             } else {
-                [fActions setObject:action forKey:[sActions objectForKey:[action getDescription]]];
-                [fActionSelectors addObject:[sActionSelectors objectForKey:[sActions objectForKey:[action getDescription]]]];
+                NSString *nsActionName = [sActions objectForKey:[action getDescription]];
+                if (nsActionName != nil) {
+                    [fActions setObject:action forKey:nsActionName];
+                    [fActionSelectors addObject:[sActionSelectors objectForKey:nsActionName]];
+                } else if (count == 1) {
+                    // If no mapping exists and it's the sole action, default
+                    // to "press" (click). In JButtons where the language is
+                    // not English the accessible action description we receive
+                    // is localized, so we can't assume it's "click"
+                    [fActions setObject:action forKey:NSAccessibilityPressAction];
+                    [fActionSelectors addObject:[sActionSelectors objectForKey:NSAccessibilityPressAction]];
+                }
             }
             [action release];
         }
@@ -626,7 +641,7 @@ static jobject sAccessibilityClass = NULL;
     }
     if ([[currentAction allKeys] containsObject:actionName]) {
         [(JavaAxAction *)[currentAction objectForKey:actionName] perform];
-        return YES;;
+        return YES;
     }
     return NO;
 }
@@ -706,6 +721,15 @@ static jobject sAccessibilityClass = NULL;
         [fParent retain];
     }
     return fParent;
+}
+
+- (CommonComponentAccessibility *)typeSafeParent
+{
+    id parent = [self parent];
+    if ([parent isKindOfClass:[CommonComponentAccessibility class]]) {
+        return (CommonComponentAccessibility*)parent;
+    }
+    return nil;
 }
 
 - (NSString *)javaRole
@@ -824,11 +848,13 @@ static jobject sAccessibilityClass = NULL;
     if (fNSRole == nil) {
         NSString *javaRole = [self javaRole];
         fNSRole = [sRoles objectForKey:javaRole];
+        CommonComponentAccessibility* parent = [self typeSafeParent];
         // The sRoles NSMutableDictionary maps popupmenu to Mac's popup button.
         // JComboBox behavior currently relies on this.  However this is not the
         // proper mapping for a JPopupMenu so fix that.
         if ( [javaRole isEqualToString:@"popupmenu"] &&
-             ![[[self parent] javaRole] isEqualToString:@"combobox"] ) {
+             parent != nil &&
+             ![[parent javaRole] isEqualToString:@"combobox"] ) {
              fNSRole = NSAccessibilityMenuRole;
         }
         if (fNSRole == nil) {
@@ -1025,8 +1051,9 @@ static jobject sAccessibilityClass = NULL;
     // This may change when later fixing issues which currently
     // exist for combo boxes, but for now the following is only
     // for JPopupMenus, not for combobox menus.
-    id parent = [self parent];
+    id parent = [self typeSafeParent];
     if ( [[self javaRole] isEqualToString:@"popupmenu"] &&
+         parent != nil &&
          ![[parent javaRole] isEqualToString:@"combobox"] ) {
         NSArray *children =
             [CommonComponentAccessibility childrenOfParent:self
@@ -1170,13 +1197,24 @@ static jobject sAccessibilityClass = NULL;
     JNIEnv* env = [ThreadUtilities getJNIEnv];
 
     GET_CACCESSIBILITY_CLASS_RETURN(FALSE);
-    DECLARE_STATIC_METHOD_RETURN(jm_doAccessibleAction, sjc_CAccessibility, "doAccessibleAction",
-                                 "(Ljavax/accessibility/AccessibleAction;ILjava/awt/Component;)V", FALSE);
-    (*env)->CallStaticVoidMethod(env, sjc_CAccessibility, jm_doAccessibleAction,
-                                 [self axContextWithEnv:(env)], index, fComponent);
+    DECLARE_STATIC_METHOD_RETURN(jm_getAccessibleAction, sjc_CAccessibility, "getAccessibleAction",
+                           "(Ljavax/accessibility/Accessible;Ljava/awt/Component;)Ljavax/accessibility/AccessibleAction;", FALSE);
+
+    jobject axAction = (*env)->CallStaticObjectMethod(env, sjc_CAccessibility, jm_getAccessibleAction, fAccessible, fComponent);
     CHECK_EXCEPTION();
 
-    return TRUE;
+    if (axAction != NULL) {
+        DECLARE_STATIC_METHOD_RETURN(jm_doAccessibleAction, sjc_CAccessibility, "doAccessibleAction",
+                                     "(Ljavax/accessibility/AccessibleAction;ILjava/awt/Component;)V", FALSE);
+        (*env)->CallStaticVoidMethod(env, sjc_CAccessibility, jm_doAccessibleAction,
+                                     axAction, index, fComponent);
+        CHECK_EXCEPTION();
+
+        (*env)->DeleteLocalRef(env, axAction);
+        return TRUE;
+    } else {
+        return FALSE;
+    }
 }
 
 // NSAccessibilityActions methods

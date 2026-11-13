@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,23 +22,23 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "classfile/classLoaderDataGraph.hpp"
 #include "classfile/dictionary.hpp"
 #include "classfile/javaClasses.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "memory/universe.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/valueKlass.hpp"
 #include "prims/jvmtiGetLoadedClasses.hpp"
 #include "runtime/handles.inline.hpp"
+#include "runtime/javaThread.hpp"
 #include "runtime/jniHandles.inline.hpp"
-#include "runtime/thread.hpp"
 #include "utilities/stack.inline.hpp"
 
 // The closure for GetLoadedClasses
 class LoadedClassesClosure : public KlassClosure {
 private:
-  Stack<jclass, mtInternal> _classStack;
+  Stack<jclass, mtServiceability> _classStack;
   JvmtiEnv* _env;
   Thread*   _cur_thread;
   bool      _dictionary_walk;
@@ -58,8 +58,18 @@ private:
   }
 
   // Return current size of the Stack
-  int get_count() {
+  int get_count() const {
     return (int)_classStack.size();
+  }
+
+  // Some klasses should not be reported by GetLoadedClasses/GetClassLoaderClasses
+  bool exclude_klass(Klass* k) const {
+    // Direct instances of ObjArrayKlass represent the Java types that Java code can see.
+    // RefArrayKlass/FlatArrayKlass describe different implementations of the arrays, filter them out.
+    if (k->is_objArray_klass() && k->kind() != Klass::KlassKind::ObjArrayKlassKind) {
+      return true;
+    }
+    return false;
   }
 
 public:
@@ -71,12 +81,16 @@ public:
 
   void do_klass(Klass* k) {
     // Collect all jclasses
-    _classStack.push((jclass) _env->jni_reference(Handle(_cur_thread, k->java_mirror())));
+    if (!exclude_klass(k)) {
+      _classStack.push((jclass)_env->jni_reference(Handle(_cur_thread, k->java_mirror())));
+    }
     if (_dictionary_walk) {
       // Collect array classes this way when walking the dictionary (because array classes are
       // not in the dictionary).
-      for (Klass* l = k->array_klass_or_null(); l != NULL; l = l->array_klass_or_null()) {
-        _classStack.push((jclass) _env->jni_reference(Handle(_cur_thread, l->java_mirror())));
+      for (Klass* l = k->array_klass_or_null(); l != nullptr; l = l->array_klass_or_null()) {
+        if (!exclude_klass(l)) {
+          _classStack.push((jclass)_env->jni_reference(Handle(_cur_thread, l->java_mirror())));
+        }
       }
     }
   }
@@ -102,14 +116,10 @@ JvmtiGetLoadedClasses::getLoadedClasses(JvmtiEnv *env, jint* classCountPtr, jcla
 
   LoadedClassesClosure closure(env, false);
   {
-    // To get a consistent list of classes we need MultiArray_lock to ensure
-    // array classes aren't created.
-    MutexLocker ma(MultiArray_lock);
-
     // Iterate through all classes in ClassLoaderDataGraph
     // and collect them using the LoadedClassesClosure
     MutexLocker mcld(ClassLoaderDataGraph_lock);
-    ClassLoaderDataGraph::loaded_classes_do(&closure);
+    ClassLoaderDataGraph::loaded_classes_do_keepalive(&closure);
   }
 
   return closure.get_result(env, classCountPtr, classesPtr);
@@ -122,17 +132,18 @@ JvmtiGetLoadedClasses::getClassLoaderClasses(JvmtiEnv *env, jobject initiatingLo
   LoadedClassesClosure closure(env, true);
   {
     // To get a consistent list of classes we need MultiArray_lock to ensure
-    // array classes aren't created during this walk.
-    MutexLocker ma(MultiArray_lock);
+    // array classes aren't created by another thread during this walk. This walks through the
+    // InstanceKlass::_array_klasses links.
+    RecursiveLocker ma(MultiArray_lock, Thread::current());
     MutexLocker sd(SystemDictionary_lock);
     oop loader = JNIHandles::resolve(initiatingLoader);
     // All classes loaded from this loader as initiating loader are
     // requested, so only need to walk this loader's ClassLoaderData
-    // dictionary, or the NULL ClassLoaderData dictionary for bootstrap loader.
-    if (loader != NULL) {
+    // dictionary, or the null ClassLoaderData dictionary for bootstrap loader.
+    if (loader != nullptr) {
       ClassLoaderData* data = java_lang_ClassLoader::loader_data_acquire(loader);
       // ClassLoader may not be used yet for loading.
-      if (data != NULL && data->dictionary() != NULL) {
+      if (data != nullptr && data->dictionary() != nullptr) {
         data->dictionary()->all_entries_do(&closure);
       }
     } else {

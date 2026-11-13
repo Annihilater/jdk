@@ -1,43 +1,40 @@
 /*
- *  Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
- *  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- *  This code is free software; you can redistribute it and/or modify it
- *  under the terms of the GNU General Public License version 2 only, as
- *  published by the Free Software Foundation.
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
  *
- *  This code is distributed in the hope that it will be useful, but WITHOUT
- *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- *  version 2 for more details (a copy is included in the LICENSE file that
- *  accompanied this code).
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
  *
- *  You should have received a copy of the GNU General Public License version
- *  2 along with this work; if not, write to the Free Software Foundation,
- *  Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- *  Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- *  or visit www.oracle.com if you need additional information or have any
- *  questions.
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
  */
 
 /*
  * @test
- * @requires ((os.arch == "amd64" | os.arch == "x86_64") & sun.arch.data.model == "64") | os.arch == "aarch64"
  * @modules java.base/jdk.internal.ref
- *          jdk.incubator.foreign
- * @run testng/othervm
+ * @run junit/othervm
  *     --enable-native-access=ALL-UNNAMED
  *     TestNulls
  */
 
-import jdk.incubator.foreign.*;
+import java.lang.foreign.*;
+
 import jdk.internal.ref.CleanerFactory;
-import org.testng.annotations.DataProvider;
-import org.testng.annotations.NoInjection;
-import org.testng.annotations.Test;
 
 import java.lang.constant.Constable;
+import java.lang.foreign.Arena;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -47,23 +44,27 @@ import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static jdk.incubator.foreign.ValueLayout.JAVA_INT;
-import static jdk.incubator.foreign.ValueLayout.JAVA_LONG;
-import static org.testng.Assert.*;
-import static org.testng.Assert.fail;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.fail;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * This test makes sure that public API classes (listed in {@link TestNulls#CLASSES}) throws NPEs whenever
@@ -75,11 +76,12 @@ import static org.testng.Assert.fail;
  * by adding/removing default mappings for standard carrier types (see {@link #DEFAULT_VALUES} or by
  * adding/removing custom replacements (see {@link #REPLACEMENT_VALUES}).
  */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class TestNulls {
 
     static final Class<?>[] CLASSES = new Class<?>[] {
+            Arena.class,
             MemorySegment.class,
-            MemoryAddress.class,
             MemoryLayout.class,
             MemoryLayout.PathElement.class,
             SequenceLayout.class,
@@ -92,38 +94,22 @@ public class TestNulls {
             ValueLayout.OfFloat.class,
             ValueLayout.OfLong.class,
             ValueLayout.OfDouble.class,
-            ValueLayout.OfAddress.class,
+            AddressLayout.class,
+            PaddingLayout.class,
             GroupLayout.class,
-            Addressable.class,
-            SymbolLookup.class,
-            MemoryHandles.class,
-            CLinker.class,
-            VaList.class,
-            VaList.Builder.class,
+            StructLayout.class,
+            UnionLayout.class,
+            Linker.class,
+            Linker.Option.class,
             FunctionDescriptor.class,
             SegmentAllocator.class,
-            ResourceScope.class,
-            NativeSymbol.class
+            MemorySegment.Scope.class,
+            SymbolLookup.class
     };
 
     static final Set<String> EXCLUDE_LIST = Set.of(
-            "jdk.incubator.foreign.ResourceScope/newConfinedScope(java.lang.ref.Cleaner)/0/0",
-            "jdk.incubator.foreign.ResourceScope/newSharedScope(java.lang.ref.Cleaner)/0/0",
-            "jdk.incubator.foreign.MemoryLayout/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.SequenceLayout/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfAddress/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfBoolean/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfByte/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfChar/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfShort/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfInt/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfFloat/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfLong/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.ValueLayout$OfDouble/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.GroupLayout/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0",
-            "jdk.incubator.foreign.MemoryHandles/insertCoordinates(java.lang.invoke.VarHandle,int,java.lang.Object[])/2/1",
-            "jdk.incubator.foreign.FunctionDescriptor/withAttribute(java.lang.String,java.lang.constant.Constable)/1/0"
+            "java.lang.foreign.MemorySegment/reinterpret(java.lang.foreign.Arena,java.util.function.Consumer)/1/0",
+            "java.lang.foreign.MemorySegment/reinterpret(long,java.lang.foreign.Arena,java.util.function.Consumer)/2/0"
     );
 
     static final Set<String> OBJECT_METHODS = Stream.of(Object.class.getMethods())
@@ -148,6 +134,7 @@ public class TestNulls {
         addDefaultMapping(ByteOrder.class, ByteOrder.nativeOrder());
         addDefaultMapping(Thread.class, Thread.currentThread());
         addDefaultMapping(Cleaner.class, CleanerFactory.cleaner());
+        addDefaultMapping(Buffer.class, ByteBuffer.wrap(new byte[10]));
         addDefaultMapping(ByteBuffer.class, ByteBuffer.wrap(new byte[10]));
         addDefaultMapping(Path.class, Path.of("nonExistent"));
         addDefaultMapping(FileChannel.MapMode.class, FileChannel.MapMode.PRIVATE);
@@ -157,17 +144,15 @@ public class TestNulls {
         addDefaultMapping(Class.class, String.class);
         addDefaultMapping(Runnable.class, () -> {});
         addDefaultMapping(Object.class, new Object());
-        addDefaultMapping(VarHandle.class, MemoryHandles.varHandle(JAVA_INT));
+        addDefaultMapping(VarHandle.class, JAVA_INT.varHandle());
         addDefaultMapping(MethodHandle.class, MethodHandles.identity(int.class));
         addDefaultMapping(List.class, List.of());
         addDefaultMapping(Charset.class, Charset.defaultCharset());
         addDefaultMapping(Consumer.class, x -> {});
         addDefaultMapping(MethodType.class, MethodType.methodType(void.class));
-        addDefaultMapping(MemoryAddress.class, MemoryAddress.ofLong(1));
-        addDefaultMapping(Addressable.class, MemoryAddress.ofLong(1));
         addDefaultMapping(MemoryLayout.class, ValueLayout.JAVA_INT);
         addDefaultMapping(ValueLayout.class, ValueLayout.JAVA_INT);
-        addDefaultMapping(ValueLayout.OfAddress.class, ValueLayout.ADDRESS);
+        addDefaultMapping(AddressLayout.class, ValueLayout.ADDRESS);
         addDefaultMapping(ValueLayout.OfByte.class, ValueLayout.JAVA_BYTE);
         addDefaultMapping(ValueLayout.OfBoolean.class, ValueLayout.JAVA_BOOLEAN);
         addDefaultMapping(ValueLayout.OfChar.class, ValueLayout.JAVA_CHAR);
@@ -176,33 +161,21 @@ public class TestNulls {
         addDefaultMapping(ValueLayout.OfFloat.class, ValueLayout.JAVA_FLOAT);
         addDefaultMapping(ValueLayout.OfLong.class, JAVA_LONG);
         addDefaultMapping(ValueLayout.OfDouble.class, ValueLayout.JAVA_DOUBLE);
+        addDefaultMapping(PaddingLayout.class, MemoryLayout.paddingLayout(4));
         addDefaultMapping(GroupLayout.class, MemoryLayout.structLayout(ValueLayout.JAVA_INT));
-        addDefaultMapping(SequenceLayout.class, MemoryLayout.sequenceLayout(ValueLayout.JAVA_INT));
+        addDefaultMapping(StructLayout.class, MemoryLayout.structLayout(ValueLayout.JAVA_INT));
+        addDefaultMapping(UnionLayout.class, MemoryLayout.unionLayout(ValueLayout.JAVA_INT));
+        addDefaultMapping(SequenceLayout.class, MemoryLayout.sequenceLayout(1, ValueLayout.JAVA_INT));
+        addDefaultMapping(SymbolLookup.class, SymbolLookup.loaderLookup());
         addDefaultMapping(MemorySegment.class, MemorySegment.ofArray(new byte[10]));
         addDefaultMapping(FunctionDescriptor.class, FunctionDescriptor.ofVoid());
-        addDefaultMapping(CLinker.class, CLinker.systemCLinker());
-        addDefaultMapping(VaList.class, VaListHelper.vaList);
-        addDefaultMapping(VaList.Builder.class, VaListHelper.vaListBuilder);
-        addDefaultMapping(ResourceScope.class, ResourceScope.newSharedScope());
+        addDefaultMapping(Linker.class, Linker.nativeLinker());
+        addDefaultMapping(Arena.class, Arena.ofConfined());
+        addDefaultMapping(MemorySegment.Scope.class, Arena.ofAuto().scope());
         addDefaultMapping(SegmentAllocator.class, SegmentAllocator.prefixAllocator(MemorySegment.ofArray(new byte[10])));
         addDefaultMapping(Supplier.class, () -> null);
         addDefaultMapping(ClassLoader.class, TestNulls.class.getClassLoader());
-        addDefaultMapping(SymbolLookup.class, CLinker.systemCLinker());
-        addDefaultMapping(NativeSymbol.class, NativeSymbol.ofAddress("dummy", MemoryAddress.ofLong(1), ResourceScope.globalScope()));
-    }
-
-    static class VaListHelper {
-        static final VaList vaList;
-        static final VaList.Builder vaListBuilder;
-
-        static {
-            AtomicReference<VaList.Builder> builderRef = new AtomicReference<>();
-            vaList = VaList.make(b -> {
-                builderRef.set(b);
-                b.addVarg(JAVA_LONG, 42L);
-            }, ResourceScope.newImplicitScope());
-            vaListBuilder = builderRef.get();
-        }
+        addDefaultMapping(Thread.UncaughtExceptionHandler.class, (thread, ex) -> {});
     }
 
     static final Map<Class<?>, Object[]> REPLACEMENT_VALUES = new HashMap<>();
@@ -218,20 +191,20 @@ public class TestNulls {
         addReplacements(Set.class, null, Stream.of(new Object[] { null }).collect(Collectors.toSet()));
     }
 
-    @Test(dataProvider = "cases")
-    public void testNulls(String testName, @NoInjection Method meth, Object receiver, Object[] args) {
+    @ParameterizedTest(autoCloseArguments = false)
+    @MethodSource("cases")
+    public void testNulls(String testName, Method meth, Object receiver, Object[] args) {
         try {
             meth.invoke(receiver, args);
             fail("Method invocation completed normally");
         } catch (InvocationTargetException ex) {
             Class<?> cause = ex.getCause().getClass();
-            assertEquals(cause, NullPointerException.class, "got " + cause.getName() + " - expected NullPointerException");
+            assertEquals(NullPointerException.class, cause, "got " + cause.getName() + " - expected NullPointerException");
         } catch (Throwable ex) {
             fail("Unexpected exception: " + ex);
         }
     }
 
-    @DataProvider(name = "cases")
     static Iterator<Object[]> cases() {
         List<Object[]> cases = new ArrayList<>();
         for (Class<?> clazz : CLASSES) {

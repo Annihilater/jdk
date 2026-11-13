@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package com.sun.security.sasl.digest;
 
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -32,7 +33,6 @@ import java.util.StringTokenizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Arrays;
 import java.util.logging.Level;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -144,7 +144,7 @@ final class DigestMD5Client extends DigestMD5Base implements SaslClient {
      * combined protocol and host being used for authentication.
      * @param props The possibly null properties to be used by the SASL
      * mechanism to configure the authentication exchange.
-     * @param cbh The non-null CallbackHanlder object for callbacks
+     * @param cbh The non-null CallbackHandler object for callbacks
      * @throws SaslException if no authentication ID or password is supplied
      */
     DigestMD5Client(String authzid, String protocol, String serverName,
@@ -261,8 +261,8 @@ final class DigestMD5Client extends DigestMD5Base implements SaslClient {
     * Check directive values that are multi-valued and ensure that mandatory
     * directives not missing from the digest-challenge.
     *
-    * @throws SaslException if a sasl is a the mechanism cannot
-    * correcly handle a callbacks or if a violation in the
+    * @throws SaslException if a sasl mechanism cannot
+    * correctly handle callbacks or if a violation in the
     * digest challenge format is detected.
     */
     private void processChallenge(byte[][] challengeVal, List<byte[]> realmChoices)
@@ -649,7 +649,7 @@ final class DigestMD5Client extends DigestMD5Base implements SaslClient {
      */
     private void validateResponseValue(byte[] fromServer) throws SaslException {
         if (fromServer == null) {
-            throw new SaslException("DIGEST-MD5: Authenication failed. " +
+            throw new SaslException("DIGEST-MD5: Authentication failed. " +
                 "Expecting 'rspauth' authentication success message");
         }
 
@@ -657,15 +657,12 @@ final class DigestMD5Client extends DigestMD5Base implements SaslClient {
             byte[] expected = generateResponseValue("",
                 digestUri, negotiatedQop, username, negotiatedRealm,
                 passwd, nonce, cnonce,  nonceCount, authzidBytes);
-            if (!Arrays.equals(expected, fromServer)) {
+            if (!MessageDigest.isEqual(expected, fromServer)) {
                 /* Server's rspauth value does not match */
                 throw new SaslException(
                     "Server's rspauth value does not match what client expects");
             }
-        } catch (NoSuchAlgorithmException e) {
-            throw new SaslException(
-                "Problem generating response value for verification", e);
-        } catch (IOException e) {
+        } catch (NoSuchAlgorithmException | IOException e) {
             throw new SaslException(
                 "Problem generating response value for verification", e);
         }

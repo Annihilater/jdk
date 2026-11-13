@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,23 +27,24 @@
 
 #include "oops/instanceKlass.hpp"
 
-#include "classfile/javaClasses.hpp"
-#include "classfile/vmSymbols.hpp"
-#include "memory/iterator.hpp"
-#include "memory/resourceArea.hpp"
+#include "memory/memRegion.hpp"
+#include "oops/fieldInfo.inline.hpp"
 #include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.hpp"
-#include "utilities/debug.hpp"
+#include "runtime/atomicAccess.hpp"
+#include "utilities/devirtualizer.inline.hpp"
 #include "utilities/globalDefinitions.hpp"
-#include "utilities/macros.hpp"
 
 inline intptr_t* InstanceKlass::start_of_itable()   const { return (intptr_t*)start_of_vtable() + vtable_length(); }
 inline intptr_t* InstanceKlass::end_of_itable()     const { return start_of_itable() + itable_length(); }
 
-inline int InstanceKlass::itable_offset_in_words() const { return start_of_itable() - (intptr_t*)this; }
-
 inline oop InstanceKlass::static_field_base_raw() { return java_mirror(); }
+
+inline Symbol* InstanceKlass::field_name(int index) const { return field(index).name(constants()); }
+inline Symbol* InstanceKlass::field_signature(int index) const { return field(index).signature(constants()); }
+
+inline int InstanceKlass::java_fields_count() const { return FieldInfoStream::num_java_fields(fieldinfo_stream()); }
+inline int InstanceKlass::total_fields_count() const { return FieldInfoStream::num_total_fields(fieldinfo_stream()); }
 
 inline OopMapBlock* InstanceKlass::start_of_nonstatic_oop_maps() const {
   return (OopMapBlock*)(start_of_itable() + itable_length());
@@ -58,24 +59,36 @@ inline InstanceKlass* volatile* InstanceKlass::adr_implementor() const {
   if (is_interface()) {
     return (InstanceKlass* volatile*)end_of_nonstatic_oop_maps();
   } else {
-    return NULL;
+    return nullptr;
   }
 }
 
+inline address InstanceKlass::end_of_instance_klass() const {
+  return (address)end_of_nonstatic_oop_maps() +
+      (is_interface() ? sizeof(InstanceKlass*) : 0);
+}
+
+inline ValueKlass* InstanceKlass::get_value_type_field_klass(int idx) const {
+  assert(has_flat_fields() || has_null_restricted_static_fields(), "Sanity checking");
+  assert(idx < java_fields_count(), "IOOB");
+  ValueKlass* k = value_field_info(idx).klass();
+  assert(k != nullptr, "Should always be set before being read");
+  return k;
+}
+
+inline ValueKlass* InstanceKlass::get_value_type_field_klass_or_null(int idx) const {
+  assert(has_flat_fields() || has_null_restricted_static_fields(), "Sanity checking");
+  assert(idx < java_fields_count(), "IOOB");
+  ValueKlass* k = value_field_info(idx).klass();
+  return k;
+}
+
 inline ObjArrayKlass* InstanceKlass::array_klasses_acquire() const {
-  return Atomic::load_acquire(&_array_klasses);
+  return AtomicAccess::load_acquire(&_array_klasses);
 }
 
 inline void InstanceKlass::release_set_array_klasses(ObjArrayKlass* k) {
-  Atomic::release_store(&_array_klasses, k);
-}
-
-inline jmethodID* InstanceKlass::methods_jmethod_ids_acquire() const {
-  return Atomic::load_acquire(&_methods_jmethod_ids);
-}
-
-inline void InstanceKlass::release_set_methods_jmethod_ids(jmethodID* jmeths) {
-  Atomic::release_store(&_methods_jmethod_ids, jmeths);
+  AtomicAccess::release_store(&_array_klasses, k);
 }
 
 // The iteration over the oops in objects is a hot path in the GC code.
@@ -185,16 +198,17 @@ ALWAYSINLINE void InstanceKlass::oop_oop_iterate_bounded(oop obj, OopClosureType
   oop_oop_iterate_oop_maps_bounded<T>(obj, closure, mr);
 }
 
-inline instanceOop InstanceKlass::allocate_instance(oop java_class, TRAPS) {
-  Klass* k = java_lang_Class::as_Klass(java_class);
-  if (k == NULL) {
-    ResourceMark rm(THREAD);
-    THROW_(vmSymbols::java_lang_InstantiationException(), NULL);
-  }
-  InstanceKlass* ik = cast(k);
-  ik->check_valid_for_instantiation(false, CHECK_NULL);
-  ik->initialize(CHECK_NULL);
-  return ik->allocate_instance(THREAD);
+template<typename T, typename TConsumerType>
+inline void InstanceKlass::print_array_on(outputStream* st, Array<T>* array, TConsumerType elem_printer) {
+   if (array == nullptr) { st->print_cr("nullptr"); return; }
+   array->print_value_on(st); st->cr();
+   if (Verbose || WizardMode) {
+     for (int i = 0; i < array->length(); i++) {
+       st->print("%d : ", i);
+       elem_printer(st, array->at(i));
+       st->cr();
+     }
+   }
 }
 
 #endif // SHARE_OOPS_INSTANCEKLASS_INLINE_HPP

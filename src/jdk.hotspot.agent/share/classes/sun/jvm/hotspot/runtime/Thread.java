@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,13 +34,12 @@ public class Thread extends VMObject {
   private static long tlabFieldOffset;
 
   private static CIntegerField suspendFlagsField;
-  // Thread::SuspendFlags enum constants
-  private static int HAS_ASYNC_EXCEPTION;
 
   private static AddressField currentPendingMonitorField;
   private static AddressField currentWaitingMonitorField;
+  private static AddressField osThreadField;
 
-  private static JLongField allocatedBytesField;
+  private static CIntegerField allocatedBytesField;
 
   static {
     VM.registerVMInitializedObserver(new Observer() {
@@ -55,12 +54,13 @@ public class Thread extends VMObject {
     Type typeJavaThread = db.lookupType("JavaThread");
 
     suspendFlagsField = typeJavaThread.getCIntegerField("_suspend_flags");
-    HAS_ASYNC_EXCEPTION = db.lookupIntConstant("JavaThread::_has_async_exception").intValue();
+    osThreadField = typeThread.getAddressField("_osthread");
+
 
     tlabFieldOffset    = typeThread.getField("_tlab").getOffset();
     currentPendingMonitorField = typeJavaThread.getAddressField("_current_pending_monitor");
     currentWaitingMonitorField = typeJavaThread.getAddressField("_current_waiting_monitor");
-    allocatedBytesField = typeThread.getJLongField("_allocated_bytes");
+    allocatedBytesField = typeThread.getCIntegerField("_allocated_bytes");
   }
 
   public Thread(Address addr) {
@@ -69,10 +69,6 @@ public class Thread extends VMObject {
 
   public int suspendFlags() {
     return (int) suspendFlagsField.getValue(addr);
-  }
-
-  public boolean hasAsyncException() {
-    return (suspendFlags() & HAS_ASYNC_EXCEPTION) != 0;
   }
 
   public ThreadLocalAllocBuffer tlab() {
@@ -84,14 +80,7 @@ public class Thread extends VMObject {
   }
 
   public boolean   isVMThread()                  { return false; }
-  public boolean   isJavaThread()                { return false; }
-  public boolean   isCompilerThread()            { return false; }
-  public boolean   isCodeCacheSweeperThread()    { return false; }
   public boolean   isHiddenFromExternalView()    { return false; }
-  public boolean   isJvmtiAgentThread()          { return false; }
-  public boolean   isWatcherThread()             { return false; }
-  public boolean   isServiceThread()             { return false; }
-  public boolean   isMonitorDeflationThread()    { return false; }
 
   /** Memory operations */
   public void oopsDo(AddressVisitor oopVisitor) {
@@ -127,6 +116,10 @@ public class Thread extends VMObject {
     // underlying thread, which is only present for Java threads; see
     // JavaThread.java.
     return false;
+  }
+
+  public OSThread osThread() {
+    return new OSThread(osThreadField.getValue(addr));
   }
 
   /** Assistance for ObjectMonitor implementation */

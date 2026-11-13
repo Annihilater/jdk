@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
 package jdk.test.lib.apps;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FilenameFilter;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -37,7 +39,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.UUID;
@@ -45,6 +46,7 @@ import java.util.UUID;
 import jdk.test.lib.JDKToolFinder;
 import jdk.test.lib.Utils;
 import jdk.test.lib.process.OutputBuffer;
+import jdk.test.lib.process.ProcessTools;
 import jdk.test.lib.process.StreamPumper;
 import jdk.test.lib.util.CoreUtils;
 
@@ -61,7 +63,7 @@ import jdk.test.lib.util.CoreUtils;
  *
  *   for use custom LingeredApp (class SmartTestApp extends LingeredApp):
  *
- *   SmartTestApp = new SmartTestApp();
+ *   SmartTestApp a = new SmartTestApp();
  *   LingeredApp.startApp(a, cmd);
  *     // do something
  *   a.stopApp();   // LingeredApp.stopApp(a) can be used as well
@@ -71,14 +73,14 @@ import jdk.test.lib.util.CoreUtils;
  *   a = new SmartTestApp("MyLock.lck");
  *   a.createLock();
  *   a.runAppExactJvmOpts(Utils.getTestJavaOpts());
- *   a.waitAppReady();
+ *   a.waitAppReadyOrCrashed();
  *     // do something
  *   a.deleteLock();
  *   a.waitAppTerminate();
  *
  *  After app termination (stopApp/waitAppTermination) its output is available
  *
- *   output = a.getAppOutput();
+ *   output = a.getOutput();
  *
  */
 public class LingeredApp {
@@ -119,6 +121,12 @@ public class LingeredApp {
 
     public void setForceCrash(boolean forceCrash) {
         this.forceCrash = forceCrash;
+    }
+
+    private static Runnable crasher;
+
+    public static void setCrasher(Runnable runnable) {
+        crasher = runnable;
     }
 
     native private static int crash();
@@ -264,23 +272,12 @@ public class LingeredApp {
      * @param timeout timeout in seconds
      * @throws java.io.IOException
      */
-    public void waitAppReady(long timeout) throws IOException {
+    public void waitAppReadyOrCrashed(long timeout) throws IOException {
         // adjust timeout for timeout_factor and convert to ms
         timeout = Utils.adjustTimeout(timeout) * 1000;
         long here = epoch();
         while (true) {
-            long epoch = epoch();
-            if (epoch - here > timeout) {
-                throw new IOException("App waiting timeout");
-            }
-
-            // Live process should touch lock file every second
-            long lm = lastModified(lockFileName);
-            if (lm > lockCreationTime) {
-                break;
-            }
-
-            // Make sure process didn't already exit
+            // Check for crash or lock modification now, and immediately after sleeping for spinDelay each loop.
             if (!appProcess.isAlive()) {
                 if (forceCrash) {
                     return; // This is expected. Just return.
@@ -289,6 +286,16 @@ public class LingeredApp {
                 }
             }
 
+            // Live process should touch lock file every second
+            long lm = lastModified(lockFileName);
+            if (lm > lockCreationTime) {
+                break;
+            }
+
+            long timeTaken = epoch() - here;
+            if (timeTaken > timeout) {
+                throw new IOException("Timeout: app not started or crashed in " + timeTaken + "ms");
+            }
             try {
                 Thread.sleep(spinDelay);
             } catch (InterruptedException ex) {
@@ -300,8 +307,8 @@ public class LingeredApp {
     /**
      * Waits for the application to start with the default timeout.
      */
-    public void waitAppReady() throws IOException {
-        waitAppReady(forceCrash ? appCoreWaitTime : appWaitTime);
+    public void waitAppReadyOrCrashed() throws IOException {
+        waitAppReadyOrCrashed(forceCrash ? appCoreWaitTime : appWaitTime);
     }
 
     /**
@@ -323,6 +330,11 @@ public class LingeredApp {
             cmd.add("-cp");
             String classpath = System.getProperty("test.class.path");
             cmd.add((classpath == null) ? "." : classpath);
+        }
+        // Forward test.thread.factory to child process for virtual thread testing
+        String testThreadFactory = System.getProperty("test.thread.factory");
+        if (testThreadFactory != null) {
+            cmd.add("-Dtest.thread.factory=" + testThreadFactory);
         }
 
         return cmd;
@@ -429,7 +441,7 @@ public class LingeredApp {
         }
     }
 
-    /**
+    /*
      *  High level interface for test writers
      */
 
@@ -442,15 +454,46 @@ public class LingeredApp {
      * @throws IOException
      */
     public static void startAppExactJvmOpts(LingeredApp theApp, String... jvmOpts) throws IOException {
+        long t1 = System.currentTimeMillis();
         theApp.createLock();
         try {
+            ProcessTools.checkDuplicateAgentOpts(jvmOpts);
             theApp.runAppExactJvmOpts(jvmOpts);
-            theApp.waitAppReady();
+            theApp.waitAppReadyOrCrashed();
         } catch (Exception ex) {
-            System.out.println("LingeredApp failed to start: " + ex);
-            theApp.finishApp();
+            boolean alive = theApp.getProcess() != null && theApp.getProcess().isAlive();
+            System.out.println("LingeredApp failed to start or failed to crash. isAlive=" + alive + ": " + ex);
+            // stopApp in case it is still alive, may be able to get output:
+            if (alive) {
+                theApp.stopApp();
+            }
+            alive = theApp.getProcess() != null && theApp.getProcess().isAlive();
+            if (!alive) {
+                theApp.finishApp(); // Calls getOutput(), fails if still alive
+            }
             theApp.deleteLock();
             throw ex;
+        } finally {
+            long t2 = System.currentTimeMillis();
+            System.out.println("LingeredApp startup took " + (t2 - t1) + "ms");
+            checkForDumps();
+        }
+    }
+
+    /**
+      * Show any dump files of interest in the current directory.
+      */
+    public static void checkForDumps() {
+        System.out.println("Check for hs_err_pid/core/mdmp files:");
+        int count = 0;
+        FilenameFilter filter = (dir, file) -> (file.startsWith("hs_err_pid") || file.startsWith("core") || file.endsWith("mdmp"));
+        for (File f : new File(".").listFiles(filter)) {
+            long fileSize = f.length();
+            System.out.println(f + " " + (fileSize / 1024 / 1024) + "mb (" + fileSize + " bytes)");
+            count++;
+        }
+        if (count == 0) {
+            System.out.println("None.");
         }
     }
 
@@ -557,14 +600,39 @@ public class LingeredApp {
         }
     }
 
+    static class SteadyStateLock {};
+
+    private static volatile boolean isReady = false;
+
+    protected static boolean isReady() {
+        return isReady;
+    }
 
     /**
      * This part is the application itself. First arg is optional "forceCrash".
      * Following arg is the lock file name.
      */
+    @SuppressWarnings("restricted")
     public static void main(String args[]) {
-        boolean forceCrash = false;
+        // Checks the property directly so the app keeps working with a minimal classpath.
+        if ("Virtual".equals(System.getProperty("test.thread.factory"))) {
+            Thread t = Thread.ofVirtual().start(() -> mainLoop(args));
+            try {
+                t.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        } else {
+            mainLoop(args);
+        }
+    }
 
+    /**
+     * Runs the app on the current thread regardless of the test thread factory.
+     */
+    @SuppressWarnings("restricted")
+    public static void mainLoop(String[] args) {
+        boolean forceCrash = false;
         if (args.length == 0) {
             System.err.println("Lock file name is not specified");
             System.exit(7);
@@ -586,16 +654,23 @@ public class LingeredApp {
         Path path = Paths.get(theLockFileName);
 
         try {
-            Object steadyStateObj = new Object();
+            Object steadyStateObj = new SteadyStateLock();
             synchronized(steadyStateObj) {
                 startSteadyStateThread(steadyStateObj);
                 if (forceCrash) {
-                    System.loadLibrary("LingeredApp"); // location of native crash() method
-                    crash();
+                    if (crasher == null) {
+                        System.loadLibrary("LingeredApp"); // location of native crash() method
+                        crash();
+                    } else {
+                        crasher.run();
+                    }
                 }
+                // Force a GC now to reduce the risk of one happening during the loop below.
+                System.gc();
                 while (Files.exists(path)) {
                     // Touch the lock to indicate our readiness
                     setLastModified(theLockFileName, epoch());
+                    isReady = true;
                     Thread.sleep(spinDelay);
                 }
             }

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2008, 2018, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2015, 2018 SAP SE. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,13 +39,6 @@
 
 #include "sun_tools_attach_VirtualMachineImpl.h"
 
-#define RESTARTABLE(_cmd, _result) do { \
-  do { \
-    _result = _cmd; \
-  } while((_result == -1) && (errno == EINTR)); \
-} while(0)
-
-
 #define ROOT_UID 0
 
 /*
@@ -81,7 +74,6 @@ JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_connect
         addr.sun_family = AF_UNIX;
         /* strncpy is safe because addr.sun_path was zero-initialized before. */
         strncpy(addr.sun_path, p, sizeof(addr.sun_path) - 1);
-        /* We must call bind with the actual socketaddr length. This is obligatory for AS400. */
         if (connect(fd, (struct sockaddr*)&addr, SUN_LEN(&addr)) == -1) {
             err = errno;
         }
@@ -133,20 +125,21 @@ JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkPermissions
     jboolean isCopy;
     const char* p = GetStringPlatformChars(env, path, &isCopy);
     if (p != NULL) {
-        struct stat64 sb;
+        struct stat sb;
         uid_t uid, gid;
         int res;
 
-        memset(&sb, 0, sizeof(struct stat64));
+        memset(&sb, 0, sizeof(struct stat));
 
         /*
-         * Check that the path is owned by the effective uid/gid of this
-         * process. Also check that group/other access is not allowed.
+         * Check that the path itself (not following symbolic links) is
+         * owned by the effective uid/gid of this process and that it is
+         * a socket. Also check that group/other access is not allowed.
          */
         uid = geteuid();
         gid = getegid();
 
-        res = stat64(p, &sb);
+        res = lstat(p, &sb);
         if (res != 0) {
             /* save errno */
             res = errno;
@@ -155,7 +148,11 @@ JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkPermissions
         if (res == 0) {
             char msg[100];
             jboolean isError = JNI_FALSE;
-            if (sb.st_uid != uid && uid != ROOT_UID) {
+            if (!S_ISSOCK(sb.st_mode)) {
+                snprintf(msg, sizeof(msg),
+                    "file is expected to be a socket: S_ISSOCK(sb.st_mode): %d", S_ISSOCK(sb.st_mode));
+                isError = JNI_TRUE;
+            } else if (sb.st_uid != uid && uid != ROOT_UID) {
                 snprintf(msg, sizeof(msg),
                     "file should be owned by the current user (which is %d) but is owned by %d", uid, sb.st_uid);
                 isError = JNI_TRUE;

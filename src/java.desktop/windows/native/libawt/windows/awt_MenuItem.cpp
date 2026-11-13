@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,7 +48,6 @@
 // struct for _SetLabel() method
 struct SetLabelStruct {
     jobject menuitem;
-    jstring label;
 };
 // struct for _SetEnable() method
 struct SetEnableStruct {
@@ -370,14 +369,8 @@ AwtMenuItem::DrawSelf(DRAWITEMSTRUCT& drawInfo)
         // Disabled text must be drawn in gray.
         crText = ::GetSysColor(bEnabled? COLOR_HIGHLIGHTTEXT : COLOR_GRAYTEXT);
     } else {
-        // COLOR_MENUBAR is only defined on WindowsXP. Our binaries are
-        // built on NT, hence the below ifdef.
-
-#ifndef COLOR_MENUBAR
-#define COLOR_MENUBAR 30
-#endif
         // Set background and text colors for unselected item
-        if (IS_WINXP && IsTopMenu() && AwtDesktopProperties::IsXPStyle()) {
+        if (IsTopMenu() && AwtDesktopProperties::IsXPStyle()) {
             crBack = ::GetSysColor (COLOR_MENUBAR);
         } else {
             crBack = ::GetSysColor (COLOR_MENU);
@@ -402,9 +395,7 @@ AwtMenuItem::DrawSelf(DRAWITEMSTRUCT& drawInfo)
     //draw check mark
     int checkWidth = ::GetSystemMetrics(SM_CXMENUCHECK);
     // Workaround for CR#6401956
-    if (IS_WINVISTA) {
-        AdjustCheckWidth(checkWidth);
-    }
+    AdjustCheckWidth(checkWidth);
 
     if (IsCheckbox()) {
         // means that target is a java.awt.CheckboxMenuItem
@@ -565,9 +556,7 @@ void AwtMenuItem::MeasureSelf(HDC hDC, MEASUREITEMSTRUCT& measureInfo)
     if (!IsTopMenu()) {
         int checkWidth = ::GetSystemMetrics(SM_CXMENUCHECK);
         // Workaround for CR#6401956
-        if (IS_WINVISTA) {
-            AdjustCheckWidth(checkWidth);
-        }
+        AdjustCheckWidth(checkWidth);
         measureInfo.itemWidth += checkWidth;
 
         // Add in shortcut width, if one exists.
@@ -685,7 +674,7 @@ void AwtMenuItem::DoCommand()
     }
 }
 
-void AwtMenuItem::SetLabel(LPCTSTR sb)
+void AwtMenuItem::SetLabel()
 {
     AwtMenu* menu = GetMenuContainer();
     /* Fix for bug 4257944 by ssi@sparc.spb.su
@@ -704,12 +693,11 @@ void AwtMenuItem::SetLabel(LPCTSTR sb)
     memset(&mii, 0, sizeof(MENUITEMINFO));
     mii.cbSize = sizeof(MENUITEMINFO);
     mii.fMask = MIIM_CHECKMARKS | MIIM_DATA | MIIM_ID
-              | MIIM_STATE | MIIM_SUBMENU | MIIM_TYPE;
+              | MIIM_STATE | MIIM_SUBMENU | MIIM_FTYPE;
 
     ::GetMenuItemInfo(hMenu, GetID(), FALSE, &mii);
 
     mii.fType = MFT_OWNERDRAW;
-    mii.dwTypeData = (LPTSTR)(*sb);
 
     // find index by menu item id
     int nMenuItemCount = ::GetMenuItemCount(hMenu);
@@ -784,7 +772,6 @@ void AwtMenuItem::_SetLabel(void *param) {
 
         SetLabelStruct *sls = (SetLabelStruct *)param;
         jobject self = sls->menuitem;
-        jstring label = sls->label;
 
         int badAlloc = 0;
         AwtMenuItem *m = NULL;
@@ -792,64 +779,12 @@ void AwtMenuItem::_SetLabel(void *param) {
         PDATA pData;
         JNI_CHECK_PEER_GOTO(self, ret);
         m = (AwtMenuItem *)pData;
-//    if (::IsWindow(m->GetOwnerHWnd()))
-        {
-            // fix for bug 4251036 MenuItem setLabel(null/"") behaves differently
-            // under Win32 and Solaris
-            jstring empty = NULL;
-            if (JNU_IsNull(env, label))
-            {
-                empty = JNU_NewStringPlatform(env, TEXT(""));
-            }
-            if (env->ExceptionCheck()) {
-                badAlloc = 1;
-                goto ret;
-            }
-            LPCTSTR labelPtr;
-            if (empty != NULL)
-            {
-                labelPtr = JNU_GetStringPlatformChars(env, empty, 0);
-            }
-            else
-            {
-                labelPtr = JNU_GetStringPlatformChars(env, label, 0);
-            }
-            if (labelPtr == NULL)
-            {
-                badAlloc = 1;
-            }
-            else
-            {
-                DASSERT(!IsBadStringPtr(labelPtr, 20));
-                m->SetLabel(labelPtr);
-                if (empty != NULL)
-                {
-                    JNU_ReleaseStringPlatformChars(env, empty, labelPtr);
-                }
-                else
-                {
-                    JNU_ReleaseStringPlatformChars(env, label, labelPtr);
-                }
-            }
-            if (empty != NULL)
-            {
-                env->DeleteLocalRef(empty);
-            }
-        }
+        m->SetLabel();
 
 ret:
         env->DeleteGlobalRef(self);
-        if (label != NULL)
-        {
-            env->DeleteGlobalRef(label);
-        }
 
         delete sls;
-
-        if (badAlloc)
-        {
-            throw std::bad_alloc();
-        }
     } else {
         AwtToolkit::GetInstance().InvokeFunction(AwtMenuItem::_SetLabel, param);
     }
@@ -948,20 +883,6 @@ BOOL AwtMenuItem::IsSeparator() {
 }
 
 /************************************************************************
- * MenuComponent native methods
- */
-
-extern "C" {
-
-JNIEXPORT void JNICALL
-Java_java_awt_MenuComponent_initIDs(JNIEnv *env, jclass cls)
-{
-}
-
-} /* extern "C" */
-
-
-/************************************************************************
  * MenuItem native methods
  */
 
@@ -1031,17 +952,15 @@ Java_sun_awt_windows_WMenuItemPeer_initIDs(JNIEnv *env, jclass cls)
 /*
  * Class:     sun_awt_windows_WMenuItemPeer
  * Method:    _setLabel
- * Signature: (Ljava/lang/String;)V
+ * Signature: ()V
  */
 JNIEXPORT void JNICALL
-Java_sun_awt_windows_WMenuItemPeer__1setLabel(JNIEnv *env, jobject self,
-                                              jstring label)
+Java_sun_awt_windows_WMenuItemPeer__1setLabel(JNIEnv *env, jobject self)
 {
     TRY;
 
     SetLabelStruct *sls = new SetLabelStruct;
     sls->menuitem = env->NewGlobalRef(self);
-    sls->label = (label == NULL) ? NULL : (jstring)env->NewGlobalRef(label);
 
     AwtToolkit::GetInstance().SyncCall(AwtMenuItem::_SetLabel, sls);
     // global refs and sls are deleted in _SetLabel

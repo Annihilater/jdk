@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+* Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
 * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 *
 * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,13 @@
 #ifndef SHARE_CLASSFILE_MODULES_HPP
 #define SHARE_CLASSFILE_MODULES_HPP
 
-#include "memory/allocation.hpp"
-#include "runtime/handles.hpp"
+#include "memory/allStatic.hpp"
 
+class Handle;
 class ModuleEntryTable;
 class Symbol;
 
 class Modules : AllStatic {
-  static void check_cds_restrictions(TRAPS) NOT_CDS_JAVA_HEAP_RETURN;
 
 public:
   // define_module defines a module containing the specified packages. It binds the
@@ -52,9 +51,6 @@ public:
   //  NullPointerExceptions are thrown if module is null.
   static void define_module(Handle module, jboolean is_open, jstring version,
                             jstring location, jobjectArray packages, TRAPS);
-
-  static void define_archived_modules(Handle h_platform_loader, Handle h_system_loader,
-                                      TRAPS) NOT_CDS_JAVA_HEAP_RETURN;
 
   // Provides the java.lang.Module for the unnamed module defined
   // to the boot loader.
@@ -101,8 +97,8 @@ public:
   static jobject get_module(jclass clazz, TRAPS);
 
   // Return the java.lang.Module object for this class loader and package.
-  // Returns NULL if the package name is empty, if the resulting package
-  // entry is NULL, if the module is not found or is unnamed.
+  // Returns null if the package name is empty, if the resulting package
+  // entry is null, if the module is not found or is unnamed.
   // The package should contain /'s, not .'s, as in java/lang, not java.lang.
   static oop get_named_module(Handle h_loader, const char* package);
 

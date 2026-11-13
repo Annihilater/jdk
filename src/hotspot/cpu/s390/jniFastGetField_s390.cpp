@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2016 SAP SE. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
@@ -31,6 +30,7 @@
 #include "prims/jniFastGetField.hpp"
 #include "prims/jvm_misc.hpp"
 #include "prims/jvmtiExport.hpp"
+#include "runtime/jfieldIDWorkaround.hpp"
 #include "runtime/safepoint.hpp"
 
 // TSO ensures that loads are blocking and ordered with respect to
@@ -38,7 +38,7 @@
 
 #define __ masm->
 
-#define BUFFER_SIZE 30*sizeof(jint)
+#define BUFFER_SIZE 100*sizeof(jint)
 
 // Common register usage:
 // Z_RET/Z_FRET: result
@@ -58,7 +58,7 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
     case T_FLOAT:   name = "jni_fast_GetFloatField";   break;
     case T_DOUBLE:  name = "jni_fast_GetDoubleField";  break;
     default:        ShouldNotReachHere();
-      name = NULL;  // unreachable
+      name = nullptr;  // unreachable
   }
   ResourceMark rm;
   BufferBlob* blob = BufferBlob::create(name, BUFFER_SIZE);
@@ -89,7 +89,7 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
   BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
   bs->try_resolve_jobject_in_native(masm, Z_ARG1, Robj, Rtmp, slow);
 
-  __ z_srlg(Rtmp, Z_ARG3, 2); // offset
+  __ z_srlg(Rtmp, Z_ARG3, jfieldIDWorkaround::offset_shift); // offset
   __ z_agr(Robj, Rtmp);
 
   assert(count < LIST_CAPACITY, "LIST_CAPACITY too small");
@@ -129,12 +129,12 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
     case T_FLOAT:   slow_case_addr = jni_GetFloatField_addr();   break;
     case T_DOUBLE:  slow_case_addr = jni_GetDoubleField_addr();  break;
     default:        ShouldNotReachHere();
-      slow_case_addr = NULL;  // unreachable
+      slow_case_addr = nullptr;  // unreachable
   }
   __ load_const_optimized(Robj, slow_case_addr);
   __ z_br(Robj); // tail call
 
-  __ flush();
+  __ invalidate_icache();
 
   return fast_entry;
 }

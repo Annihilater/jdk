@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,7 +66,7 @@ import javax.sql.rowset.*;
 public class SyncProviderException extends java.sql.SQLException {
 
     /**
-     * The instance of <code>javax.sql.rowset.spi.SyncResolver</code> that
+     * @serial The instance of <code>javax.sql.rowset.spi.SyncResolver</code> that
      * this <code>SyncProviderException</code> object will return when its
      * <code>getSyncResolver</code> method is called.
      */
@@ -126,6 +126,8 @@ public class SyncProviderException extends java.sql.SQLException {
      *     implementation is also returned if the <code>SyncResolver()</code> or
      *     <code>SyncResolver(String)</code> constructors are used to instantiate
      *     the <code>SyncResolver</code> instance.
+     * @throws IllegalStateException if a {@code SyncResolver} is not set and the default
+     *      implementation cannot be loaded.
      */
     public SyncResolver getSyncResolver() {
         if (syncResolver != null) {

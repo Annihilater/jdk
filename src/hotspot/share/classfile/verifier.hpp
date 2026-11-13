@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,29 @@
 #include "runtime/handles.hpp"
 #include "utilities/exceptions.hpp"
 #include "utilities/growableArray.hpp"
-#include "utilities/resourceHash.hpp"
+#include "utilities/hashTable.hpp"
+
+struct NameAndSig {
+  Symbol* _name;
+  Symbol* _signature;
+
+  NameAndSig(Symbol* n, Symbol* s) : _name(n), _signature(s) {}
+};
+
+inline unsigned int nameandsig_hash(NameAndSig const& field) {
+  Symbol* name = field._name;
+  return (unsigned int) name->identity_hash();
+}
+
+inline bool nameandsig_equals(NameAndSig const& f1, NameAndSig const& f2) {
+  return f1._name == f2._name &&
+          f1._signature == f2._signature;
+}
+
+// List of unset strict fields. The boolean value is a dummy so this acts as a set
+typedef HashTable<NameAndSig, bool, 17,
+                  AnyObj::RESOURCE_AREA, mtInternal,
+                  nameandsig_hash, nameandsig_equals> AssertUnsetFieldTable;
 
 // The verifier class
 class Verifier : AllStatic {
@@ -40,7 +62,9 @@ class Verifier : AllStatic {
     STACKMAP_ATTRIBUTE_MAJOR_VERSION    = 50,
     INVOKEDYNAMIC_MAJOR_VERSION         = 51,
     NO_RELAX_ACCESS_CTRL_CHECK_VERSION  = 52,
-    DYNAMICCONSTANT_MAJOR_VERSION       = 55
+    DYNAMICCONSTANT_MAJOR_VERSION       = 55,
+    VALUE_TYPES_MAJOR_VERSION           = 70,
+    JAVA_PREVIEW_MINOR_VERSION          = 65535,
   };
 
   // Verify the bytecodes for a class.
@@ -52,7 +76,7 @@ class Verifier : AllStatic {
   // Return false if the class is loaded by the bootstrap loader,
   // or if defineClass was called requesting skipping verification
   // -Xverify:all overrides this value
-  static bool should_verify_for(oop class_loader, bool should_verify_class);
+  static bool should_verify_for(oop class_loader);
 
   // Relax certain access checks to enable some broken 1.1 apps to run on 1.2.
   static bool relax_access_for(oop class_loader);
@@ -60,8 +84,9 @@ class Verifier : AllStatic {
   // Print output for class+resolve
   static void trace_class_resolution(Klass* resolve_class, InstanceKlass* verify_class);
 
+  static bool supports_strict_fields(InstanceKlass* klass);
+
  private:
-  static bool is_eligible_for_verification(InstanceKlass* klass, bool should_verify_class);
   static Symbol* inference_verify(
     InstanceKlass* klass, char* msg, size_t msg_len, TRAPS);
 };
@@ -107,25 +132,25 @@ class TypeOrigin {
   } Origin;
 
   Origin _origin;
-  u2 _index;              // local, stack, or constant pool index
+  int _index;              // local, stack, or constant pool index
   StackMapFrame* _frame;  // source frame if CF or SM
   VerificationType _type; // The actual type
 
   TypeOrigin(
-      Origin origin, u2 index, StackMapFrame* frame, VerificationType type)
+      Origin origin, int index, StackMapFrame* frame, VerificationType type)
       : _origin(origin), _index(index), _frame(frame), _type(type) {}
 
  public:
-  TypeOrigin() : _origin(NONE), _index(0), _frame(NULL) {}
+  TypeOrigin() : _origin(NONE), _index(0), _frame(nullptr) {}
 
   static TypeOrigin null();
-  static TypeOrigin local(u2 index, StackMapFrame* frame);
-  static TypeOrigin stack(u2 index, StackMapFrame* frame);
-  static TypeOrigin sm_local(u2 index, StackMapFrame* frame);
-  static TypeOrigin sm_stack(u2 index, StackMapFrame* frame);
-  static TypeOrigin cp(u2 index, VerificationType vt);
+  static TypeOrigin local(int index, StackMapFrame* frame);
+  static TypeOrigin stack(int index, StackMapFrame* frame);
+  static TypeOrigin sm_local(int index, StackMapFrame* frame);
+  static TypeOrigin sm_stack(int index, StackMapFrame* frame);
+  static TypeOrigin cp(int index, VerificationType vt);
   static TypeOrigin signature(VerificationType vt);
-  static TypeOrigin bad_index(u2 index);
+  static TypeOrigin bad_index(int index);
   static TypeOrigin implicit(VerificationType t);
   static TypeOrigin frame(StackMapFrame* frame);
 
@@ -134,7 +159,7 @@ class TypeOrigin {
   void print_frame(outputStream* ss) const;
   const StackMapFrame* frame() const { return _frame; }
   bool is_valid() const { return _origin != NONE; }
-  u2 index() const { return _index; }
+  int index() const { return _index; }
 
 #ifdef ASSERT
   void print_on(outputStream* str) const;
@@ -149,12 +174,15 @@ class ErrorContext {
     FLAGS_MISMATCH,       // Frame flags are not assignable
     BAD_CP_INDEX,         // Invalid constant pool index
     BAD_LOCAL_INDEX,      // Invalid local index
+    BAD_STRICT_FIELDS,    // Strict instance fields must be initialized before super constructor
     LOCALS_SIZE_MISMATCH, // Frames have differing local counts
     STACK_SIZE_MISMATCH,  // Frames have different stack sizes
+    STRICT_FIELDS_MISMATCH, // Frames have incompatible uninitialized strict instance fields
     STACK_OVERFLOW,       // Attempt to push onto a full expression stack
     STACK_UNDERFLOW,      // Attempt to pop and empty expression stack
     MISSING_STACKMAP,     // No stackmap for this location and there should be
     BAD_STACKMAP,         // Format error in stackmap
+    WRONG_VALUE_TYPE,     // Mismatched value type
     NO_FAULT,             // No error
     UNKNOWN
   } FaultType;
@@ -174,49 +202,60 @@ class ErrorContext {
  public:
   ErrorContext() : _bci(-1), _fault(NO_FAULT) {}
 
-  static ErrorContext bad_code(u2 bci) {
+  static ErrorContext bad_code(int bci) {
     return ErrorContext(bci, INVALID_BYTECODE);
   }
-  static ErrorContext bad_type(u2 bci, TypeOrigin type) {
+  static ErrorContext bad_type(int bci, TypeOrigin type) {
     return ErrorContext(bci, WRONG_TYPE, type);
   }
-  static ErrorContext bad_type(u2 bci, TypeOrigin type, TypeOrigin exp) {
+  static ErrorContext bad_type(int bci, TypeOrigin type, TypeOrigin exp) {
     return ErrorContext(bci, WRONG_TYPE, type, exp);
   }
-  static ErrorContext bad_flags(u2 bci, StackMapFrame* frame) {
+  static ErrorContext bad_flags(int bci, StackMapFrame* frame) {
     return ErrorContext(bci, FLAGS_MISMATCH, TypeOrigin::frame(frame));
   }
-  static ErrorContext bad_flags(u2 bci, StackMapFrame* cur, StackMapFrame* sm) {
+  static ErrorContext bad_flags(int bci, StackMapFrame* cur, StackMapFrame* sm) {
     return ErrorContext(bci, FLAGS_MISMATCH,
                         TypeOrigin::frame(cur), TypeOrigin::frame(sm));
   }
-  static ErrorContext bad_cp_index(u2 bci, u2 index) {
+  static ErrorContext bad_cp_index(int bci, int index) {
     return ErrorContext(bci, BAD_CP_INDEX, TypeOrigin::bad_index(index));
   }
-  static ErrorContext bad_local_index(u2 bci, u2 index) {
+  static ErrorContext bad_local_index(int bci, int index) {
     return ErrorContext(bci, BAD_LOCAL_INDEX, TypeOrigin::bad_index(index));
   }
+  static ErrorContext bad_strict_fields(int bci, StackMapFrame* cur) {
+    return ErrorContext(bci, BAD_STRICT_FIELDS, TypeOrigin::frame(cur));
+  }
   static ErrorContext locals_size_mismatch(
-      u2 bci, StackMapFrame* frame0, StackMapFrame* frame1) {
+      int bci, StackMapFrame* frame0, StackMapFrame* frame1) {
     return ErrorContext(bci, LOCALS_SIZE_MISMATCH,
         TypeOrigin::frame(frame0), TypeOrigin::frame(frame1));
   }
   static ErrorContext stack_size_mismatch(
-      u2 bci, StackMapFrame* frame0, StackMapFrame* frame1) {
+      int bci, StackMapFrame* frame0, StackMapFrame* frame1) {
     return ErrorContext(bci, STACK_SIZE_MISMATCH,
         TypeOrigin::frame(frame0), TypeOrigin::frame(frame1));
   }
-  static ErrorContext stack_overflow(u2 bci, StackMapFrame* frame) {
+  static ErrorContext strict_fields_mismatch(
+      int bci, StackMapFrame* frame0, StackMapFrame* frame1) {
+        return ErrorContext(bci, STRICT_FIELDS_MISMATCH,
+          TypeOrigin::frame(frame0), TypeOrigin::frame(frame1));
+  }
+  static ErrorContext stack_overflow(int bci, StackMapFrame* frame) {
     return ErrorContext(bci, STACK_OVERFLOW, TypeOrigin::frame(frame));
   }
-  static ErrorContext stack_underflow(u2 bci, StackMapFrame* frame) {
+  static ErrorContext stack_underflow(int bci, StackMapFrame* frame) {
     return ErrorContext(bci, STACK_UNDERFLOW, TypeOrigin::frame(frame));
   }
-  static ErrorContext missing_stackmap(u2 bci) {
+  static ErrorContext missing_stackmap(int bci) {
     return ErrorContext(bci, MISSING_STACKMAP);
   }
   static ErrorContext bad_stackmap(int index, StackMapFrame* frame) {
     return ErrorContext(0, BAD_STACKMAP, TypeOrigin::frame(frame));
+  }
+  static ErrorContext bad_value_type(int bci, TypeOrigin type, TypeOrigin exp) {
+    return ErrorContext(bci, WRONG_VALUE_TYPE, type, exp);
   }
 
   bool is_valid() const { return _fault != NO_FAULT; }
@@ -271,7 +310,7 @@ class sig_as_verification_types : public ResourceObj {
 
 // This hashtable is indexed by the Utf8 constant pool indexes pointed to
 // by constant pool (Interface)Method_refs' NameAndType signature entries.
-typedef ResourceHashtable<int, sig_as_verification_types*, 1007>
+typedef HashTable<int, sig_as_verification_types*, 1007>
                           method_signatures_table_type;
 
 // A new instance of this class is created for each class being verified
@@ -285,7 +324,7 @@ class ClassVerifier : public StackObj {
   Symbol* _exception_type;
   char* _message;
 
-  method_signatures_table_type* _method_signatures_table;
+  method_signatures_table_type _method_signatures_table;
 
   ErrorContext _error_context;  // contains information about an error
 
@@ -297,29 +336,31 @@ class ClassVerifier : public StackObj {
 
   VerificationType cp_ref_index_to_type(
       int index, const constantPoolHandle& cp, TRAPS) {
-    return cp_index_to_type(cp->klass_ref_index_at(index), cp, THREAD);
+    return cp_index_to_type(cp->uncached_klass_ref_index_at(index), cp, THREAD);
   }
 
   bool is_protected_access(
     InstanceKlass* this_class, Klass* target_class,
     Symbol* field_name, Symbol* field_sig, bool is_method);
 
-  void verify_cp_index(u2 bci, const constantPoolHandle& cp, int index, TRAPS);
-  void verify_cp_type(u2 bci, int index, const constantPoolHandle& cp,
+  void verify_cp_index(int bci, const constantPoolHandle& cp, u2 index, TRAPS);
+  void verify_cp_type(int bci, u2 index, const constantPoolHandle& cp,
       unsigned int types, TRAPS);
-  void verify_cp_class_type(u2 bci, int index, const constantPoolHandle& cp, TRAPS);
+  void verify_cp_class_type(int bci, u2 index, const constantPoolHandle& cp, TRAPS);
 
   u2 verify_stackmap_table(
-    u2 stackmap_index, u2 bci, StackMapFrame* current_frame,
+    u2 stackmap_index, int bci, StackMapFrame* current_frame,
     StackMapTable* stackmap_table, bool no_control_flow, TRAPS);
 
+  // broken_type: the type replaced by top in the exception frame's locals
+  // (invokespecial <init> on a broken object); else top, if none.
   void verify_exception_handler_targets(
-    u2 bci, bool this_uninit, StackMapFrame* current_frame,
-    StackMapTable* stackmap_table, TRAPS);
+    int bci, VerificationType broken_type,
+    StackMapFrame* current_frame, StackMapTable* stackmap_table, TRAPS);
 
   void verify_ldc(
     int opcode, u2 index, StackMapFrame *current_frame,
-    const constantPoolHandle& cp, u2 bci, TRAPS);
+    const constantPoolHandle& cp, int bci, TRAPS);
 
   void verify_switch(
     RawBytecodeStream* bcs, u4 code_length, char* code_data,
@@ -332,43 +373,32 @@ class ClassVerifier : public StackObj {
   void verify_invoke_init(
     RawBytecodeStream* bcs, u2 ref_index, VerificationType ref_class_type,
     StackMapFrame* current_frame, u4 code_length, bool in_try_block,
-    bool* this_uninit, const constantPoolHandle& cp, StackMapTable* stackmap_table,
+    bool* verified_exc_handlers, const constantPoolHandle& cp, StackMapTable* stackmap_table,
     TRAPS);
-
-  // Used by ends_in_athrow() to push all handlers that contain bci onto the
-  // handler_stack, if the handler has not already been pushed on the stack.
-  void push_handlers(ExceptionTable* exhandlers,
-                     GrowableArray<u4>* handler_list,
-                     GrowableArray<u4>* handler_stack,
-                     u4 bci);
-
-  // Returns true if all paths starting with start_bc_offset end in athrow
-  // bytecode or loop.
-  bool ends_in_athrow(u4 start_bc_offset);
 
   void verify_invoke_instructions(
     RawBytecodeStream* bcs, u4 code_length, StackMapFrame* current_frame,
-    bool in_try_block, bool* this_uninit, VerificationType return_type,
+    bool in_try_block, bool* verified_exc_handlers,
     const constantPoolHandle& cp, StackMapTable* stackmap_table, TRAPS);
 
-  VerificationType get_newarray_type(u2 index, u2 bci, TRAPS);
-  void verify_anewarray(u2 bci, u2 index, const constantPoolHandle& cp,
+  VerificationType get_newarray_type(u2 index, int bci, TRAPS);
+  void verify_anewarray(int bci, u2 index, const constantPoolHandle& cp,
       StackMapFrame* current_frame, TRAPS);
   void verify_return_value(
-      VerificationType return_type, VerificationType type, u2 offset,
+      VerificationType return_type, VerificationType type, int bci,
       StackMapFrame* current_frame, TRAPS);
 
-  void verify_iload (u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_lload (u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_fload (u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_dload (u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_aload (u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_istore(u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_lstore(u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_fstore(u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_dstore(u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_astore(u2 index, StackMapFrame* current_frame, TRAPS);
-  void verify_iinc  (u2 index, StackMapFrame* current_frame, TRAPS);
+  void verify_iload (int index, StackMapFrame* current_frame, TRAPS);
+  void verify_lload (int index, StackMapFrame* current_frame, TRAPS);
+  void verify_fload (int index, StackMapFrame* current_frame, TRAPS);
+  void verify_dload (int index, StackMapFrame* current_frame, TRAPS);
+  void verify_aload (int index, StackMapFrame* current_frame, TRAPS);
+  void verify_istore(int index, StackMapFrame* current_frame, TRAPS);
+  void verify_lstore(int index, StackMapFrame* current_frame, TRAPS);
+  void verify_fstore(int index, StackMapFrame* current_frame, TRAPS);
+  void verify_dstore(int index, StackMapFrame* current_frame, TRAPS);
+  void verify_astore(int index, StackMapFrame* current_frame, TRAPS);
+  void verify_iinc  (int index, StackMapFrame* current_frame, TRAPS);
 
   bool name_in_supers(Symbol* ref_name, InstanceKlass* current);
 
@@ -422,7 +452,7 @@ class ClassVerifier : public StackObj {
 
   // Return status modes
   Symbol* result() const { return _exception_type; }
-  bool has_error() const { return result() != NULL; }
+  bool has_error() const { return result() != nullptr; }
   char* exception_message() {
     stringStream ss;
     ss.print("%s", _message);
@@ -437,19 +467,16 @@ class ClassVerifier : public StackObj {
 
   Klass* load_class(Symbol* name, TRAPS);
 
-  method_signatures_table_type* method_signatures_table() const {
-    return _method_signatures_table;
-  }
-
-  void set_method_signatures_table(method_signatures_table_type* method_signatures_table) {
-    _method_signatures_table = method_signatures_table;
+  method_signatures_table_type* method_signatures_table() {
+    return &_method_signatures_table;
   }
 
   int change_sig_to_verificationType(
     SignatureStream* sig_type, VerificationType* inference_type);
 
   VerificationType cp_index_to_type(int index, const constantPoolHandle& cp, TRAPS) {
-    return VerificationType::reference_type(cp->klass_name_at(index));
+    Symbol* name = cp->klass_name_at(index);
+    return VerificationType::reference_type(name);
   }
 
   // Keep a list of temporary symbols created during verification because
@@ -463,8 +490,8 @@ class ClassVerifier : public StackObj {
     }
     if (!s->is_permanent()) {
       s->increment_refcount();
-      if (_symbols == NULL) {
-        _symbols = new GrowableArray<Symbol*>(50, 0, NULL);
+      if (_symbols == nullptr) {
+        _symbols = new GrowableArray<Symbol*>(50, 0, nullptr);
       }
       _symbols->push(s);
     }
@@ -487,8 +514,7 @@ inline int ClassVerifier::change_sig_to_verificationType(
         // Create another symbol to save as signature stream unreferences this symbol.
         Symbol* name_copy = create_temporary_symbol(name);
         assert(name_copy == name, "symbols don't match");
-        *inference_type =
-          VerificationType::reference_type(name_copy);
+        *inference_type = VerificationType::reference_type(name_copy);
         return 1;
       }
     case T_LONG:

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,49 +25,63 @@
 #ifndef SHARE_OOPS_METHODCOUNTERS_HPP
 #define SHARE_OOPS_METHODCOUNTERS_HPP
 
-#include "oops/metadata.hpp"
 #include "compiler/compilerDefinitions.hpp"
-#include "compiler/compilerOracle.hpp"
 #include "interpreter/invocationCounter.hpp"
+#include "oops/metadata.hpp"
 #include "utilities/align.hpp"
+
+class AOTCodeEntry;
+class MethodTrainingData;
 
 class MethodCounters : public Metadata {
  friend class VMStructs;
- friend class JVMCIVMStructs;
+
+ // Used by CDS. These classes need to access the private default constructor.
+ template <class T> friend class CppVtableTesterA;
+ template <class T> friend class CppVtableTesterB;
+ template <class T> friend class CppVtableCloner;
+
  private:
   InvocationCounter _invocation_counter;         // Incremented before each activation of the method - used to trigger frequency-based optimizations
   InvocationCounter _backedge_counter;           // Incremented before each backedge taken - used to trigger frequency-based optimizations
+
+  // Back pointer to the Method*
+  Method* _method;
+
+  Metadata*         _method_training_data;
+#if INCLUDE_CDS
+  // After JDK-8380476 FIXME: Jamming in a code reference here is a code
+  // smell.  Since access to this value is infrequent, it does not
+  // need to be a pointer.  (See AOTCodeCache::invalidate_entry.)
+  // Suggestion: Have finish_write build a two-column binary-search
+  // table in the AOT cache, to map method ID to preload method index.
+  // Searchable static indexes are a core competency for AOT.
+  AOTCodeEntry*     _aot_preload_code_entry;      // AOT Code Cache entry for preload code
+#endif
   jlong             _prev_time;                   // Previous time the rate was acquired
   float             _rate;                        // Events (invocation and backedge counter increments) per millisecond
-  int               _nmethod_age;
   int               _invoke_mask;                 // per-method Tier0InvokeNotifyFreqLog
   int               _backedge_mask;               // per-method Tier0BackedgeNotifyFreqLog
   int               _prev_event_count;            // Total number of events saved at previous callback
-#if COMPILER2_OR_JVMCI
+#ifdef COMPILER2
   u2                _interpreter_throwout_count; // Count of times method was exited via exception while interpreting
-#endif
+#endif // COMPILER2
 #if INCLUDE_JVMTI
   u2                _number_of_breakpoints;      // fullspeed debugging support
 #endif
-  // NMethod age is a counter for warm methods detection in the code cache sweeper.
-  // The counter is reset by the sweeper and is decremented by some of the compiled
-  // code. The counter values are interpreted as follows:
-  // 1. (HotMethodDetection..INT_MAX] - initial value, no counters inserted
-  // 2. [1..HotMethodDetectionLimit)  - the method is warm, the counter is used
-  //                                    to figure out which methods can be flushed.
-  // 3. (INT_MIN..0]                  - method is hot and will deopt and get
-  //                                    recompiled without the counters
   u1                _highest_comp_level;          // Highest compile level this method has ever seen.
   u1                _highest_osr_comp_level;      // Same for OSR level
 
   MethodCounters(const methodHandle& mh);
+  MethodCounters();
+
  public:
   virtual bool is_methodCounters() const { return true; }
-
+  Method* method() const { return _method; }
   static MethodCounters* allocate_no_exception(const methodHandle& mh);
   static MethodCounters* allocate_with_exception(const methodHandle& mh, TRAPS);
 
-  void deallocate_contents(ClassLoaderData* loader_data) {}
+  void deallocate_contents(ClassLoaderData* loader_data) NOT_CDS_RETURN;
 
   static int method_counters_size() {
     return align_up((int)sizeof(MethodCounters), wordSize) / wordSize;
@@ -75,29 +89,32 @@ class MethodCounters : public Metadata {
   virtual int size() const {
     return method_counters_size();
   }
+
   MetaspaceObj::Type type() const { return MethodCountersType; }
+  void metaspace_pointers_do(MetaspaceClosure* iter);
+
   void clear_counters();
 
-#if COMPILER2_OR_JVMCI
+#ifdef COMPILER2
   void interpreter_throwout_increment() {
     if (_interpreter_throwout_count < 65534) {
       _interpreter_throwout_count++;
     }
   }
-  int  interpreter_throwout_count() const {
+  u2  interpreter_throwout_count() const {
     return _interpreter_throwout_count;
   }
-  void set_interpreter_throwout_count(int count) {
+  void set_interpreter_throwout_count(u2 count) {
     _interpreter_throwout_count = count;
   }
-#else // COMPILER2_OR_JVMCI
-  int  interpreter_throwout_count() const {
+#else // COMPILER2
+  u2  interpreter_throwout_count() const {
     return 0;
   }
-  void set_interpreter_throwout_count(int count) {
+  void set_interpreter_throwout_count(u2 count) {
     assert(count == 0, "count must be 0");
   }
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2
 
 #if INCLUDE_JVMTI
   u2   number_of_breakpoints() const   { return _number_of_breakpoints; }
@@ -114,31 +131,13 @@ class MethodCounters : public Metadata {
   void set_rate(float rate)                      { _rate = rate; }
 
   int highest_comp_level() const                 { return _highest_comp_level;  }
-  void set_highest_comp_level(int level)         { _highest_comp_level = level; }
+  void set_highest_comp_level(int level)         { _highest_comp_level = (u1)level; }
   int highest_osr_comp_level() const             { return _highest_osr_comp_level;  }
-  void set_highest_osr_comp_level(int level)     { _highest_osr_comp_level = level; }
+  void set_highest_osr_comp_level(int level)     { _highest_osr_comp_level = (u1)level; }
 
   // invocation counter
   InvocationCounter* invocation_counter() { return &_invocation_counter; }
   InvocationCounter* backedge_counter()   { return &_backedge_counter; }
-
-  int nmethod_age() {
-    return _nmethod_age;
-  }
-  void set_nmethod_age(int age) {
-    _nmethod_age = age;
-  }
-  void reset_nmethod_age() {
-    set_nmethod_age(HotMethodDetectionLimit);
-  }
-
-  static bool is_nmethod_hot(int age)       { return age <= 0; }
-  static bool is_nmethod_warm(int age)      { return age < HotMethodDetectionLimit; }
-  static bool is_nmethod_age_unset(int age) { return age > HotMethodDetectionLimit; }
-
-  static ByteSize nmethod_age_offset() {
-    return byte_offset_of(MethodCounters, _nmethod_age);
-  }
 
   static ByteSize invocation_counter_offset()    {
     return byte_offset_of(MethodCounters, _invocation_counter);
@@ -157,7 +156,37 @@ class MethodCounters : public Metadata {
   }
 
   virtual const char* internal_name() const { return "{method counters}"; }
-  virtual void print_value_on(outputStream* st) const;
 
+  Metadata* method_training_data_sentinel() {
+    return this;
+  }
+  MethodTrainingData* method_training_data() const {
+    return reinterpret_cast<MethodTrainingData*>(_method_training_data);
+  }
+  bool init_method_training_data(MethodTrainingData* td) {
+    MethodTrainingData* cur = method_training_data();
+    if (cur == td) {
+      return true;
+    }
+    if (cur == nullptr || cur == reinterpret_cast<MethodTrainingData*>(method_training_data_sentinel())) {
+      return AtomicAccess::cmpxchg(reinterpret_cast<MethodTrainingData**>(&_method_training_data), cur, td) == cur;
+    }
+    return false;
+  }
+
+#if INCLUDE_CDS
+  void set_aot_preload_code_entry(AOTCodeEntry* entry);
+  AOTCodeEntry* aot_preload_code_entry() const   {
+    return _aot_preload_code_entry;
+  }
+
+  void remove_unshareable_info();
+  void restore_unshareable_info(TRAPS);
+#endif
+
+  // Printing
+  void print_on      (outputStream* st) const;
+  void print_value_on(outputStream* st) const;
+  void print_data_on(outputStream* st) const;
 };
 #endif // SHARE_OOPS_METHODCOUNTERS_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,9 @@
 
 package javax.imageio.stream;
 
+import jdk.internal.util.ByteArray;
+import jdk.internal.util.ByteArrayLittleEndian;
+
 import java.io.IOException;
 import java.io.UTFDataFormatException;
 import java.nio.ByteOrder;
@@ -45,71 +48,58 @@ public abstract class ImageOutputStreamImpl
     public ImageOutputStreamImpl() {
     }
 
+    @Override
     public abstract void write(int b) throws IOException;
 
+    @Override
     public void write(byte[] b) throws IOException {
         write(b, 0, b.length);
     }
 
+    @Override
     public abstract void write(byte[] b, int off, int len) throws IOException;
 
+    @Override
     public void writeBoolean(boolean v) throws IOException {
         write(v ? 1 : 0);
     }
 
+    @Override
     public void writeByte(int v) throws IOException {
         write(v);
     }
 
+    @Override
     public void writeShort(int v) throws IOException {
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
-            byteBuf[0] = (byte)(v >>> 8);
-            byteBuf[1] = (byte)(v >>> 0);
+            ByteArray.setUnsignedShort(byteBuf, 0, v);
         } else {
-            byteBuf[0] = (byte)(v >>> 0);
-            byteBuf[1] = (byte)(v >>> 8);
+            ByteArrayLittleEndian.setUnsignedShort(byteBuf, 0, v);
         }
         write(byteBuf, 0, 2);
     }
 
+    @Override
     public void writeChar(int v) throws IOException {
         writeShort(v);
     }
 
+    @Override
     public void writeInt(int v) throws IOException {
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
-            byteBuf[0] = (byte)(v >>> 24);
-            byteBuf[1] = (byte)(v >>> 16);
-            byteBuf[2] = (byte)(v >>>  8);
-            byteBuf[3] = (byte)(v >>>  0);
+            ByteArray.setInt(byteBuf, 0, v);
         } else {
-            byteBuf[0] = (byte)(v >>>  0);
-            byteBuf[1] = (byte)(v >>>  8);
-            byteBuf[2] = (byte)(v >>> 16);
-            byteBuf[3] = (byte)(v >>> 24);
+            ByteArrayLittleEndian.setInt(byteBuf, 0, v);
         }
         write(byteBuf, 0, 4);
     }
 
+    @Override
     public void writeLong(long v) throws IOException {
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
-            byteBuf[0] = (byte)(v >>> 56);
-            byteBuf[1] = (byte)(v >>> 48);
-            byteBuf[2] = (byte)(v >>> 40);
-            byteBuf[3] = (byte)(v >>> 32);
-            byteBuf[4] = (byte)(v >>> 24);
-            byteBuf[5] = (byte)(v >>> 16);
-            byteBuf[6] = (byte)(v >>>  8);
-            byteBuf[7] = (byte)(v >>>  0);
+            ByteArray.setLong(byteBuf, 0, v);
         } else {
-            byteBuf[0] = (byte)(v >>>  0);
-            byteBuf[1] = (byte)(v >>>  8);
-            byteBuf[2] = (byte)(v >>> 16);
-            byteBuf[3] = (byte)(v >>> 24);
-            byteBuf[4] = (byte)(v >>> 32);
-            byteBuf[5] = (byte)(v >>> 40);
-            byteBuf[6] = (byte)(v >>> 48);
-            byteBuf[7] = (byte)(v >>> 56);
+            ByteArrayLittleEndian.setLong(byteBuf, 0, v);
         }
         // REMIND: Once 6277756 is fixed, we should do a bulk write of all 8
         // bytes here as we do in writeShort() and writeInt() for even better
@@ -119,14 +109,17 @@ public abstract class ImageOutputStreamImpl
         write(byteBuf, 4, 4);
     }
 
+    @Override
     public void writeFloat(float v) throws IOException {
         writeInt(Float.floatToIntBits(v));
     }
 
+    @Override
     public void writeDouble(double v) throws IOException {
         writeLong(Double.doubleToLongBits(v));
     }
 
+    @Override
     public void writeBytes(String s) throws IOException {
         int len = s.length();
         for (int i = 0 ; i < len ; i++) {
@@ -134,6 +127,7 @@ public abstract class ImageOutputStreamImpl
         }
     }
 
+    @Override
     public void writeChars(String s) throws IOException {
         int len = s.length();
 
@@ -141,21 +135,25 @@ public abstract class ImageOutputStreamImpl
         int boff = 0;
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int i = 0; i < len ; i++) {
-                int v = s.charAt(i);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                char v = s.charAt(i);
+                ByteArray.setChar(b, boff, v);
+                boff += 2;
             }
         } else {
             for (int i = 0; i < len ; i++) {
-                int v = s.charAt(i);
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
+                char v = s.charAt(i);
+                ByteArrayLittleEndian.setChar(b, boff, v);
+                boff += 2;
             }
         }
 
         write(b, 0, len*2);
     }
 
+    /**
+     * @throws UTFDataFormatException {@inheritDoc}
+     */
+    @Override
     public void writeUTF(String s) throws IOException {
         int strlen = s.length();
         int utflen = 0;
@@ -198,6 +196,7 @@ public abstract class ImageOutputStreamImpl
         write(b, 0, utflen + 2);
     }
 
+    @Override
     public void writeShorts(short[] s, int off, int len) throws IOException {
         // Fix 4430357 - if off + len < 0, overflow occurred
         if (off < 0 || len < 0 || off + len > s.length || off + len < 0) {
@@ -210,20 +209,21 @@ public abstract class ImageOutputStreamImpl
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int i = 0; i < len; i++) {
                 short v = s[off + i];
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                ByteArray.setShort(b, boff, v);
+                boff += 2;
             }
         } else {
             for (int i = 0; i < len; i++) {
                 short v = s[off + i];
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
+                ByteArrayLittleEndian.setShort(b, boff, v);
+                boff += 2;
             }
         }
 
         write(b, 0, len*2);
     }
 
+    @Override
     public void writeChars(char[] c, int off, int len) throws IOException {
         // Fix 4430357 - if off + len < 0, overflow occurred
         if (off < 0 || len < 0 || off + len > c.length || off + len < 0) {
@@ -236,20 +236,21 @@ public abstract class ImageOutputStreamImpl
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int i = 0; i < len; i++) {
                 char v = c[off + i];
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                ByteArray.setChar(b, boff, v);
+                boff += 2;
             }
         } else {
             for (int i = 0; i < len; i++) {
                 char v = c[off + i];
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
+                ByteArrayLittleEndian.setChar(b, boff, v);
+                boff += 2;
             }
         }
 
         write(b, 0, len*2);
     }
 
+    @Override
     public void writeInts(int[] i, int off, int len) throws IOException {
         // Fix 4430357 - if off + len < 0, overflow occurred
         if (off < 0 || len < 0 || off + len > i.length || off + len < 0) {
@@ -262,24 +263,21 @@ public abstract class ImageOutputStreamImpl
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int j = 0; j < len; j++) {
                 int v = i[off + j];
-                b[boff++] = (byte)(v >>> 24);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                ByteArray.setInt(b, boff, v);
+                boff += 4;
             }
         } else {
             for (int j = 0; j < len; j++) {
                 int v = i[off + j];
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 24);
+                ByteArrayLittleEndian.setInt(b, boff, v);
+                boff += 4;
             }
         }
 
         write(b, 0, len*4);
     }
 
+    @Override
     public void writeLongs(long[] l, int off, int len) throws IOException {
         // Fix 4430357 - if off + len < 0, overflow occurred
         if (off < 0 || len < 0 || off + len > l.length || off + len < 0) {
@@ -292,32 +290,21 @@ public abstract class ImageOutputStreamImpl
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int i = 0; i < len; i++) {
                 long v = l[off + i];
-                b[boff++] = (byte)(v >>> 56);
-                b[boff++] = (byte)(v >>> 48);
-                b[boff++] = (byte)(v >>> 40);
-                b[boff++] = (byte)(v >>> 32);
-                b[boff++] = (byte)(v >>> 24);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                ByteArray.setLong(b, boff, v);
+                boff += 8;
             }
         } else {
             for (int i = 0; i < len; i++) {
                 long v = l[off + i];
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 24);
-                b[boff++] = (byte)(v >>> 32);
-                b[boff++] = (byte)(v >>> 40);
-                b[boff++] = (byte)(v >>> 48);
-                b[boff++] = (byte)(v >>> 56);
+                ByteArrayLittleEndian.setLong(b, boff, v);
+                boff += 8;
             }
         }
 
         write(b, 0, len*8);
     }
 
+    @Override
     public void writeFloats(float[] f, int off, int len) throws IOException {
         // Fix 4430357 - if off + len < 0, overflow occurred
         if (off < 0 || len < 0 || off + len > f.length || off + len < 0) {
@@ -329,25 +316,22 @@ public abstract class ImageOutputStreamImpl
         int boff = 0;
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int i = 0; i < len; i++) {
-                int v = Float.floatToIntBits(f[off + i]);
-                b[boff++] = (byte)(v >>> 24);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                float v = f[off + i];
+                ByteArray.setFloat(b, boff, v);
+                boff += 4;
             }
         } else {
             for (int i = 0; i < len; i++) {
-                int v = Float.floatToIntBits(f[off + i]);
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 24);
+                float v = f[off + i];
+                ByteArrayLittleEndian.setFloat(b, boff, v);
+                boff += 4;
             }
         }
 
         write(b, 0, len*4);
     }
 
+    @Override
     public void writeDoubles(double[] d, int off, int len) throws IOException {
         // Fix 4430357 - if off + len < 0, overflow occurred
         if (off < 0 || len < 0 || off + len > d.length || off + len < 0) {
@@ -359,37 +343,27 @@ public abstract class ImageOutputStreamImpl
         int boff = 0;
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             for (int i = 0; i < len; i++) {
-                long v = Double.doubleToLongBits(d[off + i]);
-                b[boff++] = (byte)(v >>> 56);
-                b[boff++] = (byte)(v >>> 48);
-                b[boff++] = (byte)(v >>> 40);
-                b[boff++] = (byte)(v >>> 32);
-                b[boff++] = (byte)(v >>> 24);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 0);
+                double v = d[off + i];
+                ByteArray.setDouble(b, boff, v);
+                boff += 8;
             }
         } else {
             for (int i = 0; i < len; i++) {
-                long v = Double.doubleToLongBits(d[off + i]);
-                b[boff++] = (byte)(v >>> 0);
-                b[boff++] = (byte)(v >>> 8);
-                b[boff++] = (byte)(v >>> 16);
-                b[boff++] = (byte)(v >>> 24);
-                b[boff++] = (byte)(v >>> 32);
-                b[boff++] = (byte)(v >>> 40);
-                b[boff++] = (byte)(v >>> 48);
-                b[boff++] = (byte)(v >>> 56);
+                double v = d[off + i];
+                ByteArrayLittleEndian.setDouble(b, boff, v);
+                boff += 8;
             }
         }
 
         write(b, 0, len*8);
     }
 
+    @Override
     public void writeBit(int bit) throws IOException {
         writeBits((1L & bit), 1);
     }
 
+    @Override
     public void writeBits(long bits, int numBits) throws IOException {
         checkClosed();
 
@@ -484,7 +458,7 @@ public abstract class ImageOutputStreamImpl
      * beginning of the {@code write(int)} and
      * {@code write(byte[], int, int)} methods.
      *
-     * @exception IOException if an I/O error occurs.
+     * @throws IOException if an I/O error occurs.
      */
     protected final void flushBits() throws IOException {
         checkClosed();

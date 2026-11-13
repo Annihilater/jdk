@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2016, 2018, Red Hat, Inc. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,22 +30,11 @@
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=passive
- *      -XX:+ShenandoahDegeneratedGC -XX:+ShenandoahVerify
+ *      -XX:+ShenandoahVerify
  *      TestAllocObjects
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=passive
- *      -XX:-ShenandoahDegeneratedGC -XX:+ShenandoahVerify
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=passive
- *      -XX:+ShenandoahDegeneratedGC
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=passive
- *      -XX:-ShenandoahDegeneratedGC
  *      TestAllocObjects
  */
 
@@ -53,14 +43,19 @@
  * @summary Acceptance tests: collector can withstand allocation
  * @requires vm.gc.Shenandoah
  *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
+ * @run main/othervm/timeout=240 -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=aggressive
  *      -XX:+ShenandoahOOMDuringEvacALot -XX:+ShenandoahVerify
  *      TestAllocObjects
  *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
+ * @run main/othervm/timeout=480 -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=aggressive
  *      -XX:+ShenandoahAllocFailureALot -XX:+ShenandoahVerify
+ *      TestAllocObjects
+ *
+ * @run main/othervm/timeout=480 -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
+ *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=aggressive
+ *      -XX:ShenandoahPinRegionRate=1000 -XX:+ShenandoahVerify
  *      TestAllocObjects
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
@@ -75,13 +70,12 @@
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=aggressive
+ *      -XX:ShenandoahPinRegionRate=1000
  *      TestAllocObjects
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=aggressive
- *      -XX:+ShenandoahSuspendibleWorkers
  *      TestAllocObjects
- *
  */
 
 /*
@@ -97,10 +91,20 @@
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=adaptive
  *      TestAllocObjects
+ */
+
+/*
+ * @test id=generational
+ * @summary Acceptance tests: collector can withstand allocation
+ * @requires vm.gc.Shenandoah
  *
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=adaptive
- *      -XX:+ShenandoahSuspendibleWorkers
+ *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=adaptive -XX:ShenandoahGCMode=generational
+ *      -XX:+ShenandoahVerify
+ *      TestAllocObjects
+ *
+ * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
+ *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=adaptive -XX:ShenandoahGCMode=generational
  *      TestAllocObjects
  */
 
@@ -112,11 +116,6 @@
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=static
  *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=static
- *      -XX:+ShenandoahSuspendibleWorkers
- *      TestAllocObjects
  */
 
 /*
@@ -127,63 +126,7 @@
  * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=compact
  *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCHeuristics=compact
- *      -XX:+ShenandoahSuspendibleWorkers
- *      TestAllocObjects
  */
-
-/*
- * @test id=iu-aggressive
- * @summary Acceptance tests: collector can withstand allocation
- * @requires vm.gc.Shenandoah
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu -XX:ShenandoahGCHeuristics=aggressive
- *      -XX:+ShenandoahOOMDuringEvacALot -XX:+ShenandoahVerify
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu -XX:ShenandoahGCHeuristics=aggressive
- *      -XX:+ShenandoahAllocFailureALot -XX:+ShenandoahVerify
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu -XX:ShenandoahGCHeuristics=aggressive
- *      -XX:+ShenandoahOOMDuringEvacALot
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu -XX:ShenandoahGCHeuristics=aggressive
- *      -XX:+ShenandoahAllocFailureALot
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu -XX:ShenandoahGCHeuristics=aggressive
- *      TestAllocObjects
- */
-
-/*
- * @test id=iu
- * @summary Acceptance tests: collector can withstand allocation
- * @requires vm.gc.Shenandoah
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu
- *      -XX:+ShenandoahVerify
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu
- *      TestAllocObjects
- *
- * @run main/othervm -Xmx1g -Xms1g -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions
- *      -XX:+UseShenandoahGC -XX:ShenandoahGCMode=iu
- *      -XX:+ShenandoahSuspendibleWorkers
- *      TestAllocObjects
- */
-
 public class TestAllocObjects {
 
     static final long TARGET_MB = Long.getLong("target", 10_000); // 10 Gb allocation

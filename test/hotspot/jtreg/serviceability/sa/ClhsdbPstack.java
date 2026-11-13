@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,22 +28,28 @@ import java.util.Map;
 import jdk.test.lib.apps.LingeredApp;
 import jdk.test.lib.util.CoreUtils;
 import jdk.test.lib.Platform;
+import jdk.test.lib.SA.SATestUtils;
 import jtreg.SkippedException;
 
 /**
  * @test id=process
- * @bug 8190198
+ * @bug 8190198 8390621
  * @summary Test clhsdb pstack command on a live process
  * @requires vm.hasSA
+ * @requires vm.gc != "Z"
+ * @requires (os.arch != "riscv64" | !(vm.cpu.features ~= ".*qemu.*"))
  * @library /test/lib
  * @run main/othervm ClhsdbPstack false
  */
 
 /**
  * @test id=core
- * @bug 8190198
+ * @bug 8190198 8390621
  * @summary Test clhsdb pstack command on a core file
  * @requires vm.hasSA
+ * @requires !vm.ubsan
+ * @requires !vm.asan
+ * @requires vm.gc != "Z"
  * @library /test/lib
  * @run main/othervm/timeout=480 ClhsdbPstack true
  */
@@ -51,6 +57,17 @@ import jtreg.SkippedException;
 public class ClhsdbPstack {
 
     public static void main(String[] args) throws Exception {
+        if (Platform.isMusl()) {
+            if (!Platform.isX64()) {
+                throw new SkippedException("This platform is not supported.");
+            }
+
+            var libc = SATestUtils.getLibCPath();
+            if (SATestUtils.getDebugInfo(libc) == null) {
+                throw new SkippedException("libc debug info is not available.");
+            }
+        }
+
         boolean withCore = Boolean.parseBoolean(args[0]);
         System.out.println("Starting ClhsdbPstack test: withCore==" + withCore);
 
@@ -60,7 +77,7 @@ public class ClhsdbPstack {
             ClhsdbLauncher test = new ClhsdbLauncher();
             theApp = new LingeredApp();
             theApp.setForceCrash(withCore);
-            LingeredApp.startApp(theApp);
+            LingeredApp.startApp(theApp, CoreUtils.getAlwaysPretouchArg(withCore));
             System.out.println("Started LingeredApp with pid " + theApp.getPid());
 
             if (withCore) {
@@ -78,7 +95,6 @@ public class ClhsdbPstack {
                 expStrMap.put("pstack -v", List.of(
                     "No deadlocks found", "Common-Cleaner",
                     "Signal Dispatcher", "CompilerThread",
-                    "Sweeper thread", "Service Thread",
                     "Reference Handler", "Finalizer", "main"));
             }
 

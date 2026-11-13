@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,14 +34,12 @@ import java.io.PrintStream;
  * @test
  * @key headful
  * @bug 4379403
- * @run main/othervm DumpOnKey false
- * @run main/othervm DumpOnKey -Dsun.awt.nativedebug=true true
- * @run main/othervm DumpOnKey -Dsun.awt.nativedebug=true -Dawtdebug.on=true true
- * @run main/othervm DumpOnKey -Dsun.awt.nativedebug=false -Dawtdebug.on=true false
- * @run main/othervm DumpOnKey -Dsun.awt.nativedebug=true -Dawtdebug.on=false false
- * @run main/othervm DumpOnKey -Dsun.awt.nativedebug=false -Dawtdebug.on=false false
- * @run main/othervm/java.security.policy=dump.policy/secure=java.lang.SecurityManager DumpOnKey -Dsun.awt.nativedebug=true true
- * @run main/othervm/java.security.policy=dump.policy/secure=java.lang.SecurityManager DumpOnKey -Dsun.awt.nativedebug=true -Dawtdebug.on=false false
+ * @run main/othervm ${test.main.class} false
+ * @run main/othervm -Dsun.awt.nativedebug=true ${test.main.class} true
+ * @run main/othervm -Dsun.awt.nativedebug=true -Dawtdebug.on=true ${test.main.class} true
+ * @run main/othervm -Dsun.awt.nativedebug=false -Dawtdebug.on=true ${test.main.class} false
+ * @run main/othervm -Dsun.awt.nativedebug=true -Dawtdebug.on=false ${test.main.class} false
+ * @run main/othervm -Dsun.awt.nativedebug=false -Dawtdebug.on=false ${test.main.class} false
  */
 public final class DumpOnKey {
 

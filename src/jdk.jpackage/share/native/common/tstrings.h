@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,6 +47,7 @@
 #include <string>
 #include <sstream>
 #include <iostream>
+#include <new>
 #include <vector>
 
 #ifdef _MSC_VER
@@ -356,6 +357,11 @@ namespace tstrings {
             data << fromUtf8(msg);
         }
 
+        any& operator << (const std::string& msg) {
+            data << fromUtf8(msg);
+            return *this;
+        }
+
 #ifdef TSTRINGS_WITH_WCHAR
         any(std::wstring::const_pointer msg) {
             data << msg;
@@ -365,22 +371,22 @@ namespace tstrings {
             data << msg;
         }
 
-        any& operator << (const std::wstring& v) {
-            data << v;
+        any& operator << (const std::wstring& msg) {
+            data << msg;
             return *this;
         }
 
         // need this specialization instead std::wstring::pointer,
         // otherwise LPWSTR is handled as abstract pointer (void*)
-        any& operator << (LPWSTR v) {
-            data << (v ? v : L"NULL");
+        any& operator << (LPWSTR msg) {
+            data << (msg ? msg : L"NULL");
             return *this;
         }
 
         // need this specialization instead std::wstring::const_pointer,
         // otherwise LPCWSTR is handled as abstract pointer (const void*)
-        any& operator << (LPCWSTR v) {
-            data << (v ? v : L"NULL");
+        any& operator << (LPCWSTR msg) {
+            data << (msg ? msg : L"NULL");
             return *this;
         }
 

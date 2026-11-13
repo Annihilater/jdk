@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,6 +37,9 @@ import jdk.test.lib.util.FileUtils;
 
 import static jdk.test.lib.process.ProcessTools.*;
 
+import org.testng.ITestResult;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.AfterTest;
 import org.testng.annotations.BeforeTest;
 import org.testng.annotations.Test;
 import static org.testng.Assert.*;
@@ -47,7 +50,6 @@ import static org.testng.Assert.*;
  * @library /test/lib
  * @modules jdk.compiler jdk.jlink
  * @modules java.base/jdk.internal.module
- * @modules java.base/jdk.internal.org.objectweb.asm
  * @build jdk.test.lib.compiler.CompilerUtils
  *        jdk.test.lib.util.FileUtils
  *        jdk.test.lib.Platform
@@ -69,6 +71,8 @@ public class UserModuleTest {
     // the names of the modules in this test
     private static String[] modules = new String[] {"m1", "m2", "m3", "m4", "m5"};
 
+    private Path lastPerTestImageDir;
+
 
     private static boolean hasJmods() {
         if (!Files.exists(Paths.get(JAVA_HOME, "jmods"))) {
@@ -89,8 +93,7 @@ public class UserModuleTest {
             Path msrc = SRC_DIR.resolve(mn);
             assertTrue(CompilerUtils.compile(msrc, MODS_DIR,
                 "--module-source-path", SRC_DIR.toString(),
-                "--add-exports", "java.base/jdk.internal.module=" + mn,
-                "--add-exports", "java.base/jdk.internal.org.objectweb.asm=" + mn));
+                "--add-exports", "java.base/jdk.internal.module=" + mn));
         }
 
         if (Files.exists(IMAGE)) {
@@ -100,6 +103,22 @@ public class UserModuleTest {
         createImage(IMAGE, "m1", "m3");
 
         createJmods("m1", "m4");
+    }
+
+    @AfterMethod
+    public void cleanupPerTestImage(ITestResult result) throws IOException {
+        if (result.isSuccess() && lastPerTestImageDir != null
+                && Files.exists(lastPerTestImageDir)) {
+            FileUtils.deleteFileTreeWithRetry(lastPerTestImageDir);
+        }
+        lastPerTestImageDir = null;
+    }
+
+    @AfterTest(alwaysRun = true)
+    public void cleanupSharedImage() throws IOException {
+        if (Files.exists(IMAGE)) {
+            FileUtils.deleteFileTreeWithRetry(IMAGE);
+        }
     }
 
     /*
@@ -113,7 +132,6 @@ public class UserModuleTest {
         Path java = IMAGE.resolve("bin").resolve("java");
         assertTrue(executeProcess(java.toString(),
                         "--add-exports", "java.base/jdk.internal.module=m1,m4",
-                        "--add-exports", "java.base/jdk.internal.org.objectweb.asm=m1,m4",
                         "-m", MAIN_MID)
                         .outputTo(System.out)
                         .errorTo(System.out)
@@ -145,7 +163,6 @@ public class UserModuleTest {
         Path java = IMAGE.resolve("bin").resolve("java");
         assertTrue(executeProcess(java.toString(),
                                   "--add-exports", "java.base/jdk.internal.module=m1,m4",
-                                  "--add-exports", "java.base/jdk.internal.org.objectweb.asm=m1,m4",
                                   "-Djdk.system.module.finder.disabledFastPath",
                                   "-m", MAIN_MID)
                         .outputTo(System.out)
@@ -161,12 +178,11 @@ public class UserModuleTest {
     public void testDedupSet() throws Throwable {
         if (!hasJmods()) return;
 
-        Path dir = Paths.get("dedupSetTest");
+        Path dir = lastPerTestImageDir = Paths.get("dedupSetTest");
         createImage(dir, "m1", "m2", "m3", "m4");
         Path java = dir.resolve("bin").resolve("java");
         assertTrue(executeProcess(java.toString(),
                          "--add-exports", "java.base/jdk.internal.module=m1,m4",
-                         "--add-exports", "java.base/jdk.internal.org.objectweb.asm=m1,m4",
                          "-m", MAIN_MID)
                         .outputTo(System.out)
                         .errorTo(System.out)
@@ -177,7 +193,7 @@ public class UserModuleTest {
     public void testRequiresStatic() throws Throwable {
         if (!hasJmods()) return;
 
-        Path dir = Paths.get("requiresStatic");
+        Path dir = lastPerTestImageDir = Paths.get("requiresStatic");
         createImage(dir, "m5");
         Path java = dir.resolve("bin").resolve("java");
         assertTrue(executeProcess(java.toString(), "-m", "m5/p5.Main")
@@ -199,7 +215,7 @@ public class UserModuleTest {
     public void testRequiresStatic2() throws Throwable {
         if (!hasJmods()) return;
 
-        Path dir = Paths.get("requiresStatic2");
+        Path dir = lastPerTestImageDir = Paths.get("requiresStatic2");
         createImage(dir, "m3", "m5");
 
         Path java = dir.resolve("bin").resolve("java");
@@ -247,7 +263,7 @@ public class UserModuleTest {
         if (!hasJmods()) return;
 
         // create an image using JMOD files
-        Path dir = Paths.get("packagesTest");
+        Path dir = lastPerTestImageDir = Paths.get("packagesTest");
         String mp = Paths.get(JAVA_HOME, "jmods").toString() +
             File.pathSeparator + JMODS_DIR.toString();
 
@@ -262,7 +278,6 @@ public class UserModuleTest {
         Path java = dir.resolve("bin").resolve("java");
         assertTrue(executeProcess(java.toString(),
                         "--add-exports", "java.base/jdk.internal.module=m1,m4",
-                        "--add-exports", "java.base/jdk.internal.org.objectweb.asm=m1,m4",
                         "--add-modules=m1", "-m", "m4")
             .outputTo(System.out)
             .errorTo(System.out)
@@ -277,7 +292,7 @@ public class UserModuleTest {
         if (!hasJmods()) return;
 
         // create an image using JMOD files
-        Path dir = Paths.get("retainModuleTargetTest");
+        Path dir = lastPerTestImageDir = Paths.get("retainModuleTargetTest");
         String mp = Paths.get(JAVA_HOME, "jmods").toString() +
             File.pathSeparator + JMODS_DIR.toString();
 
@@ -292,7 +307,6 @@ public class UserModuleTest {
         Path java = dir.resolve("bin").resolve("java");
         assertTrue(executeProcess(java.toString(),
                         "--add-exports", "java.base/jdk.internal.module=m1,m4",
-                        "--add-exports", "java.base/jdk.internal.org.objectweb.asm=m1,m4",
                         "--add-modules=m1", "-m", "m4", "retainModuleTarget")
             .outputTo(System.out)
             .errorTo(System.out)

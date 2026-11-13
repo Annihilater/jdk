@@ -22,133 +22,59 @@
  *
  */
 
-#include "precompiled.hpp"
 
 #include "gc/shared/gc_globals.hpp"
-#include "gc/shared/workerPolicy.hpp"
+#include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahWorkerPolicy.hpp"
-#include "runtime/thread.hpp"
-
-uint ShenandoahWorkerPolicy::_prev_par_marking     = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_marking    = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_evac       = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_root_proc  = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_refs_proc  = 0;
-uint ShenandoahWorkerPolicy::_prev_fullgc          = 0;
-uint ShenandoahWorkerPolicy::_prev_degengc         = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_update_ref = 0;
-uint ShenandoahWorkerPolicy::_prev_par_update_ref  = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_cleanup    = 0;
-uint ShenandoahWorkerPolicy::_prev_conc_reset      = 0;
 
 uint ShenandoahWorkerPolicy::calc_workers_for_init_marking() {
-  uint active_workers = (_prev_par_marking == 0) ? ParallelGCThreads : _prev_par_marking;
-
-  _prev_par_marking =
-    WorkerPolicy::calc_active_workers(ParallelGCThreads,
-                                      active_workers,
-                                      Threads::number_of_non_daemon_threads());
-  return _prev_par_marking;
+  return ParallelGCThreads;
 }
 
 uint ShenandoahWorkerPolicy::calc_workers_for_conc_marking() {
-  uint active_workers = (_prev_conc_marking == 0) ?  ConcGCThreads : _prev_conc_marking;
-  _prev_conc_marking =
-    WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                           active_workers,
-                                           Threads::number_of_non_daemon_threads());
-  return _prev_conc_marking;
+  return concurrent_workers_count();
 }
 
-// Reuse the calculation result from init marking
+uint ShenandoahWorkerPolicy::calc_workers_for_rs_scanning() {
+  return concurrent_workers_count();
+}
+
 uint ShenandoahWorkerPolicy::calc_workers_for_final_marking() {
-  return _prev_par_marking;
+  return ParallelGCThreads;
 }
 
-// Calculate workers for concurrent refs processing
 uint ShenandoahWorkerPolicy::calc_workers_for_conc_refs_processing() {
-  uint active_workers = (_prev_conc_refs_proc == 0) ? ConcGCThreads : _prev_conc_refs_proc;
-  _prev_conc_refs_proc =
-    WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                           active_workers,
-                                           Threads::number_of_non_daemon_threads());
-  return _prev_conc_refs_proc;
+  return concurrent_workers_count();
 }
 
-// Calculate workers for concurrent root processing
 uint ShenandoahWorkerPolicy::calc_workers_for_conc_root_processing() {
-  uint active_workers = (_prev_conc_root_proc == 0) ? ConcGCThreads : _prev_conc_root_proc;
-  _prev_conc_root_proc =
-          WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                                 active_workers,
-                                                 Threads::number_of_non_daemon_threads());
-  return _prev_conc_root_proc;
+  return concurrent_workers_count();
 }
 
-// Calculate workers for concurrent evacuation (concurrent GC)
 uint ShenandoahWorkerPolicy::calc_workers_for_conc_evac() {
-  uint active_workers = (_prev_conc_evac == 0) ? ConcGCThreads : _prev_conc_evac;
-  _prev_conc_evac =
-    WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                           active_workers,
-                                           Threads::number_of_non_daemon_threads());
-  return _prev_conc_evac;
+  return concurrent_workers_count();
 }
 
-// Calculate workers for parallel fullgc
 uint ShenandoahWorkerPolicy::calc_workers_for_fullgc() {
-  uint active_workers = (_prev_fullgc == 0) ?  ParallelGCThreads : _prev_fullgc;
-  _prev_fullgc =
-    WorkerPolicy::calc_active_workers(ParallelGCThreads,
-                                      active_workers,
-                                      Threads::number_of_non_daemon_threads());
-  return _prev_fullgc;
+  return ParallelGCThreads;
 }
 
-// Calculate workers for parallel degenerated gc
-uint ShenandoahWorkerPolicy::calc_workers_for_stw_degenerated() {
-  uint active_workers = (_prev_degengc == 0) ?  ParallelGCThreads : _prev_degengc;
-  _prev_degengc =
-    WorkerPolicy::calc_active_workers(ParallelGCThreads,
-                                      active_workers,
-                                      Threads::number_of_non_daemon_threads());
-  return _prev_degengc;
-}
-
-// Calculate workers for concurrent reference update
 uint ShenandoahWorkerPolicy::calc_workers_for_conc_update_ref() {
-  uint active_workers = (_prev_conc_update_ref == 0) ? ConcGCThreads : _prev_conc_update_ref;
-  _prev_conc_update_ref =
-    WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                           active_workers,
-                                           Threads::number_of_non_daemon_threads());
-  return _prev_conc_update_ref;
+  return concurrent_workers_count();
 }
 
-// Calculate workers for parallel reference update
 uint ShenandoahWorkerPolicy::calc_workers_for_final_update_ref() {
-  uint active_workers = (_prev_par_update_ref == 0) ? ParallelGCThreads : _prev_par_update_ref;
-  _prev_par_update_ref =
-    WorkerPolicy::calc_active_workers(ParallelGCThreads,
-                                      active_workers,
-                                      Threads::number_of_non_daemon_threads());
-  return _prev_par_update_ref;
-}
-
-uint ShenandoahWorkerPolicy::calc_workers_for_conc_cleanup() {
-  uint active_workers = (_prev_conc_cleanup == 0) ? ConcGCThreads : _prev_conc_cleanup;
-  _prev_conc_cleanup =
-          WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                                 active_workers,
-                                                 Threads::number_of_non_daemon_threads());
-  return _prev_conc_cleanup;
+  return ParallelGCThreads;
 }
 
 uint ShenandoahWorkerPolicy::calc_workers_for_conc_reset() {
-  uint active_workers = (_prev_conc_reset == 0) ? ConcGCThreads : _prev_conc_reset;
-  _prev_conc_reset =
-          WorkerPolicy::calc_active_conc_workers(ConcGCThreads,
-                                                 active_workers,
-                                                 Threads::number_of_non_daemon_threads());
-  return _prev_conc_reset;
+  return concurrent_workers_count();
+}
+
+uint ShenandoahWorkerPolicy::calc_workers_for_conc_cleanup() {
+  return concurrent_workers_count();
+}
+
+uint ShenandoahWorkerPolicy::concurrent_workers_count() {
+  return checked_cast<uint>(ShenandoahHeap::heap()->control_thread()->concurrent_worker_count());
 }

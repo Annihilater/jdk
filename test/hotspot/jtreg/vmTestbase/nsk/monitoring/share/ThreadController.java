@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -604,6 +604,7 @@ class WaitingThread extends BaseThread {
 
         expectedMethods.add(ThreadsGroupLocks.PlainCountDownLatch.class.getName() + ".await");
         expectedMethods.add(Object.class.getName() + ".wait");
+        expectedMethods.add(Object.class.getName() + ".wait0");
 
         switch (controller.invocationType) {
             case ThreadController.JAVA_TYPE:
@@ -652,7 +653,7 @@ class SleepingThread extends BaseThread {
 
         this.threadsGroupLocks = threadsGroupLocks;
 
-        expectedLength += 3;
+        expectedLength++;
 
         expectedMethods.add(Thread.class.getName() + ".sleep");
         expectedMethods.add(SleepingThread.class.getName() + ".run");
@@ -683,6 +684,27 @@ class SleepingThread extends BaseThread {
 
     public boolean checkState(Thread.State state) {
         return state == Thread.State.TIMED_WAITING;
+    }
+
+    public boolean checkStackTrace(StackTraceElement[] elements) {
+        if (elements.length == 0) {
+            // ThreadMXBean.getThreadInfo(long) and getThreadInfo(long[]) return
+            // ThreadInfo without a stack trace, so there is nothing to check.
+            return true;
+        }
+        // Only the java.lang.Thread.sleep entry frame is required here.
+        // Frames above it are implementation details of sleep that change
+        // between releases, so they are not checked.
+        for (int i = elements.length - 1; i >= 0; i--) {
+            if (elements[i].getClassName().equals("java.lang.Thread")
+                    && elements[i].getMethodName().equals("sleep")) {
+                // The frames below the sleep entry are the test's own stack and still get checked.
+                return super.checkStackTrace(
+                        Arrays.copyOfRange(elements, i, elements.length));
+            }
+        }
+        logger.complain("No java.lang.Thread.sleep frame in the stack trace");
+        return false;
     }
 
     public void run() {
@@ -719,9 +741,14 @@ class RunningThread extends BaseThread {
         super(controller, name, log, threadsGroupLocks);
         this.threadsGroupLocks = threadsGroupLocks;
 
-        expectedLength += 2;
+        expectedLength += 3;
 
         expectedMethods.add(Thread.class.getName() + ".yield");
+        expectedMethods.add(Thread.class.getName() + ".getVirtualThread");
+        expectedMethods.add(Thread.class.getName() + ".currentCarrierThread");
+        expectedMethods.add(Thread.class.getName() + ".currentThread");
+        expectedMethods.add(Thread.class.getName() + ".currentThread0");
+        expectedMethods.add(Thread.class.getName() + ".yield0");
 
         switch (controller.invocationType) {
             case ThreadController.JAVA_TYPE:

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,10 @@
 /* @test
  * @summary Unit test for java.net.URI
  * @bug 4464135 4505046 4503239 4438319 4991359 4866303 7023363 7041800
- *      7171415 6933879
+ *      7171415 6339649 6933879 8037396 8272072 8051627 8297687 8353013
+ *      8391603
  * @author Mark Reinhold
+ * @run main/othervm Test
  */
 
 import java.io.ByteArrayInputStream;
@@ -1041,9 +1043,19 @@ public class Test {
         test("http://[1:2:3:4:5:6:7:8:9]").x().z();
         test("http://[1:2:3:4:5:6:7:8%]").x().z();
         test("http://[1:2:3:4:5:6:7:8%!/]").x().z();
+        // Oversized IPv4 octet in IPv4-compatible IPv6 address
         test("http://[::1.2.3.300]").x().z();
+        // Oversized IPv4 octet in IPv4-compatible IPv6 address, stressing NFE
+        test("http://[::1.2.3.4" + Long.MAX_VALUE + "]").x().z();
+        // Oversized IPv4 octet in IPv4-mapped IPv6 address
+        test("http://[::FFFF:1.2.3.300]").x().z();
+        // Oversized IPv4 octet in IPv4-mapped IPv6 address, stressing NFE
+        test("http://[::FFFF:1.2.3.4" + Long.MAX_VALUE + "]").x().z();
         test("http://1.2.3").psa().x().z();
+        // Oversized IPv4 octet
         test("http://1.2.3.300").psa().x().z();
+        // Oversized IPv4 octet, stressing NFE
+        test("http://1.2.3.4" + Long.MAX_VALUE).psa().x().z();
         test("http://1.2.3.4.5").psa().x().z();
         test("http://[1.2.3.4:5]").x().z();
         test("http://1:2:3:4:5:6:7:8").psa().x().z();
@@ -1137,11 +1149,58 @@ public class Test {
         test("a/../b:c").p("a/../b:c").z()
             .norm().p("./b:c").z();
 
+        // Relative URI empty path segment normalization
+        String[] slashes = {"/", "//", "///", "////"};
+        for (var s1 : slashes) {
+            test("/1" + s1).p("/1" + s1).z()
+                    .norm().p("/1/").z();
+            test("/1" + s1 + "2").p("/1" + s1 + "2").z()
+                    .norm().p("/1/2").z();
+            test("///1" + s1).p("/1" + s1).z()
+                    .norm().p("/1/").z();
+            test("///1" + s1 + "2").p("/1" + s1 + "2").z()
+                    .norm().p("/1/2").z();
+            for (var s2 : slashes) {
+                test("/1" + s1 + "2" + s2).p("/1" + s1 + "2" + s2).z()
+                        .norm().p("/1/2/").z();
+                test("///1" + s1 + "2" + s2).p("/1" + s1 + "2" + s2).z()
+                        .norm().p("/1/2/").z();
+            }
+        }
+
+        // Absolute URI empty path segment normalization
+        for (var s1 : slashes) {
+            test("//a" + s1).h("a").p(s1).z()
+                    .norm().h("a").p("/").z();
+            test("//a" + s1 + "1").h("a").p(s1 + "1").z()
+                    .norm().h("a").p("/1").z();
+            test("s://a" + s1).s("s").h("a").p(s1).z()
+                    .norm().s("s").h("a").p("/").z();
+            test("s://a" + s1 + "1").s("s").h("a").p(s1 + "1").z()
+                    .norm().s("s").h("a").p("/1").z();
+            for (var s2 : slashes) {
+                test("//a" + s1 + "1" + s2).h("a").p(s1 + "1" + s2).z()
+                        .norm().h("a").p("/1/").z();
+                test("//a" + s1 + "1" + s2 + "2").h("a").p(s1 + "1" + s2 + "2").z()
+                        .norm().h("a").p("/1/2").z();
+                test("s://a" + s1 + "1" + s2).s("s").h("a").p(s1 + "1" + s2).z()
+                        .norm().s("s").h("a").p("/1/").z();
+                test("s://a" + s1 + "1" + s2 + "2").s("s").h("a").p(s1 + "1" + s2 + "2").z()
+                        .norm().s("s").h("a").p("/1/2").z();
+                for (var s3 : slashes) {
+                    test("//a" + s1 + "1" + s2 + "2" + s3).h("a").p(s1 + "1" + s2 + "2" + s3).z()
+                            .norm().h("a").p("/1/2/").z();
+                    test("s://a" + s1 + "1" + s2 + "2" + s3).s("s").h("a").p(s1 + "1" + s2 + "2" + s3).z()
+                            .norm().s("s").h("a").p("/1/2/").z();
+                }
+            }
+        }
+
         // Normalization of already normalized URI should yield the
         // same URI
         URI u1 = URI.create("s://h/../p");
         URI u2 = u1.normalize();
-        eq(u1, u2);
+        xeq(u1, u2);
         eqeq(u1, u2);
 
         // Relativization
@@ -1333,37 +1392,121 @@ public class Test {
             .ta("s://a/%00").z();
     }
 
+    /** {@link #eqHashCompBidi(Object, Object, char) eqHashCompBidi(s, t, '=')} shortcut. */
+    private static void xeq(Object s, Object t) throws URISyntaxException {
+        eqHashCompBidi(s, t, '=');
+    }
 
-    static void eq0(URI u, URI v) throws URISyntaxException {
+    /** {@link #eqHashCompBidi(Object, Object, char) eqHashCompBidi(s, t, '<')} shortcut. */
+    private static void xlt(Object s, Object t) throws URISyntaxException {
+        eqHashCompBidi(s, t, '<');
+    }
+
+    /** {@link #eqHashCompBidi(Object, Object, char) eqHashCompBidi(s, t, '>')} shortcut. */
+    private static void xgt(Object s, Object t) throws URISyntaxException {
+        eqHashCompBidi(s, t, '>');
+    }
+
+    /**
+     * Verifies {@link URI#equals(Object)}, {@link URI#hashCode()}, and
+     * {@link URI#compareTo(URI)} are consistent with each other and match the
+     * expected relation.
+     * <p>
+     * This method is bidirectional, i.e., it compares {@code s} against
+     * {@code t}, and also the other way around. See
+     * {@link #eqHashCompUni(Object, Object, char) eqHashCompUni} for the
+     * unidirectional variant.
+     *
+     * @param s Either a URI, or a string to be converted to URI
+     * @param t Either a URI, or a string to be converted to URI
+     * @param expectedRelation One of following relation identifiers: {@code <},
+     * {@code >}, and {@code =}.
+     */
+    private static void eqHashCompBidi(Object s, Object t, char expectedRelation)
+            throws URISyntaxException {
+
+        // Obtain URIs
+        URI u = s instanceof URI ? (URI) s : new URI((String) s);
+        URI v = t instanceof URI ? (URI) t : new URI((String) t);
+
+        // Check `(u, v)`
+        eqHashCompUni(u, v, expectedRelation);
+
+        // Check `(v, u)`
+        final char substitutedRelation;
+        if ('<' == expectedRelation) {
+            substitutedRelation = '>';
+        } else if ('>' == expectedRelation) {
+            substitutedRelation = '<';
+        } else {
+            substitutedRelation = expectedRelation;
+        }
+        eqHashCompUni(v, u, substitutedRelation);
+
+    }
+
+    /**
+     * Verifies {@link URI#equals(Object)}, {@link URI#hashCode()}, and
+     * {@link URI#compareTo(URI)} are consistent with each other and match the
+     * expected relation.
+     * <p>
+     * This method is unidirectional, i.e., it only compares {@code u} against
+     * {@code v}, not the other way around. See
+     * {@link #eqHashCompBidi(Object, Object, char) eqHashCompBidi} for the
+     * bidirectional variant.
+     *
+     * @param s Either a URI, or a string to be converted to URI
+     * @param t Either a URI, or a string to be converted to URI
+     * @param expectedRelation One of following relation identifiers: {@code <},
+     * {@code >}, and {@code =}.
+     */
+    private static void eqHashCompUni(Object s, Object t, char expectedRelation)
+            throws URISyntaxException {
+
+        // Obtain URIs
+        URI u = s instanceof URI ? (URI) s : new URI((String) s);
+        URI v = t instanceof URI ? (URI) t : new URI((String) t);
+
+        // Check `compareTo`
         testCount++;
-        if (!u.equals(v))
-            throw new RuntimeException("Not equal: " + u + " " + v);
+        int comp = u.compareTo(v);
+        final boolean compMatched;
+        if (comp < 0) {
+            compMatched = '<' == expectedRelation;
+        } else if (comp > 0) {
+            compMatched = '>' == expectedRelation;
+        } else {
+            compMatched = '=' == expectedRelation;
+        }
+        if (!compMatched) {
+            throw new AssertionError(
+                    "Expected: %s %s %s, Actual: compareTo(): %s".formatted(
+                            u, expectedRelation, v, comp));
+        }
+
+        // Check `equals`
+        testCount++;
+        boolean eq = u.equals(v);
+        if (('=' == expectedRelation) != eq) {
+            throw new AssertionError(
+                    "Expected: %s %s %s, Actual: equals(): %s".formatted(
+                            u, expectedRelation, v, eq));
+        }
+
+        // Check `hashCode`: equal instances require equal hash codes
+        testCount++;
         int uh = u.hashCode();
         int vh = v.hashCode();
-        if (uh != vh)
-            throw new RuntimeException("Hash codes not equal: "
-                                       + u + " " + Integer.toHexString(uh) + " "
-                                       + v + " " + Integer.toHexString(vh));
-        out.println();
-        out.println(u + " == " + v
-                    + "  [" + Integer.toHexString(uh) + "]");
-    }
+        if (eq && uh != vh) {
+            throw new AssertionError(
+                    "Expected: %s %s %s, Actual: hashCode(): %s & %s".formatted(
+                            u, expectedRelation, v, uh, vh));
+        }
 
-    static void cmp0(URI u, URI v, boolean same)
-        throws URISyntaxException
-    {
-        int c = u.compareTo(v);
-        if ((c == 0) != same)
-            throw new RuntimeException("Comparison inconsistent: " + u + " " + v
-                                       + " " + c);
-    }
-
-    static void eq(URI u, URI v) throws URISyntaxException {
-        eq0(u, v);
-        cmp0(u, v, true);
     }
 
     static void eq(String expected, String actual) {
+        testCount++;
         if (expected == null && actual == null) {
             return;
         }
@@ -1380,54 +1523,6 @@ public class Test {
             throw new RuntimeException("Not ==: " + u + " " + v);
     }
 
-    static void ne0(URI u, URI v) throws URISyntaxException {
-        testCount++;
-        if (u.equals(v))
-            throw new RuntimeException("Equal: " + u + " " + v);
-        out.println();
-        out.println(u + " != " + v
-                    + "  [" + Integer.toHexString(u.hashCode())
-                    + " " + Integer.toHexString(v.hashCode())
-                    + "]");
-    }
-
-    static void ne(URI u, URI v) throws URISyntaxException {
-        ne0(u, v);
-        cmp0(u, v, false);
-    }
-
-    static void lt(URI u, URI v) throws URISyntaxException {
-        ne0(u, v);
-        int c = u.compareTo(v);
-        if (c >= 0) {
-            show(u);
-            show(v);
-            throw new RuntimeException("Not less than: " + u + " " + v
-                                       + " " + c);
-        }
-        out.println(u + " < " + v);
-    }
-
-    static void lt(String s, String t) throws URISyntaxException {
-        lt(new URI(s), new URI(t));
-    }
-
-    static void gt0(URI u, URI v) throws URISyntaxException {
-        ne0(u, v);
-        int c = u.compareTo(v);
-        if (c <= 0) {
-            show(u);
-            show(v);
-            throw new RuntimeException("Not greater than: " + u + " " + v
-                    + " " + c);
-        }
-        out.println(u + " < " + v);
-    }
-
-    static void gt(URI u, URI v) throws URISyntaxException {
-        lt(v, u);
-    }
-
     static void eqHashComp() throws URISyntaxException {
 
         header("Equality, hashing, and comparison");
@@ -1436,46 +1531,49 @@ public class Test {
         URI r = new URI("reg://some%20registry/b/c/d?q#f");
         URI s = new URI("http://jag:cafebabe@java.sun.com:94/b/c/d?q#f");
         URI t = new URI("http://example.com/%5bsegment%5d");
-        eq(o, o);
-        lt(o, r);
-        lt(s, o);
-        lt(s, r);
+        xeq(o, o);
+        xlt(o, r);
+        xlt(s, o);
+        xlt(s, r);
 
-        eq(o, new URI("MaILto:foo@bar.com"));
-        gt(o, new URI("mailto:foo@bar.COM"));
-        eq(r, new URI("rEg://some%20registry/b/c/d?q#f"));
-        gt(r, new URI("reg://Some%20Registry/b/c/d?q#f"));
-        gt(r, new URI("reg://some%20registry/b/c/D?q#f"));
-        eq(s, new URI("hTtP://jag:cafebabe@Java.Sun.COM:94/b/c/d?q#f"));
-        gt(s, new URI("http://jag:CafeBabe@java.sun.com:94/b/c/d?q#f"));
-        lt(s, new URI("http://jag:cafebabe@java.sun.com:94/b/c/d?r#f"));
-        lt(s, new URI("http://jag:cafebabe@java.sun.com:94/b/c/d?q#g"));
-        cmp0(t, new URI("http://example.com/%5Bsegment%5D"), true);
-        gt0(t, new URI("http://example.com/%5BSegment%5D"));
-        lt(new URI("http://example.com/%5Asegment%5D"), new URI("http://example.com/%5Bsegment%5D"));
-        eq(new URI("http://host/a%00bcd"), new URI("http://host/a%00bcd"));
-        ne(new URI("http://host/a%00bcd"), new URI("http://host/aZ00bcd"));
-        eq0(new URI("http://host/abc%e2def%C3ghi"),
-            new URI("http://host/abc%E2def%c3ghi"));
+        xeq(o, "MaILto:foo@bar.com");
+        xgt(o, "mailto:foo@bar.COM");
+        xeq(r, "rEg://some%20registry/b/c/d?q#f");
+        xgt(r, "reg://Some%20Registry/b/c/d?q#f");
+        xgt(r, "reg://some%20registry/b/c/D?q#f");
+        xeq(s, "hTtP://jag:cafebabe@Java.Sun.COM:94/b/c/d?q#f");
+        xgt(s, "http://jag:CafeBabe@java.sun.com:94/b/c/d?q#f");
+        xlt(s, "http://jag:cafebabe@java.sun.com:94/b/c/d?r#f");
+        xlt(s, "http://jag:cafebabe@java.sun.com:94/b/c/d?q#g");
+        xeq(t, "http://example.com/%5Bsegment%5D");
+        xgt(t, "http://example.com/%5BSegment%5D");
+        xlt("http://example.com/%5Asegment%5D", "http://example.com/%5Bsegment%5D");
+        xeq("http://host/a%00bcd", "http://host/a%00bcd");
+        xlt("http://host/a%00bcd", "http://host/aZ00bcd");
+        xeq("http://host/abc%e2def%C3ghi", "http://host/abc%E2def%c3ghi");
 
-        lt("p", "s:p");
-        lt("s:p", "T:p");
-        lt("S:p", "t:p");
-        lt("s:/p", "s:p");
-        lt("s:p", "s:q");
-        lt("s:p#f", "s:p#g");
-        lt("s://u@h:1", "s://v@h:1");
-        lt("s://u@h:1", "s://u@i:1");
-        lt("s://u@h:1", "s://v@h:2");
-        lt("s://a%20b", "s://a%20c");
-        lt("s://a%20b", "s://aab");
-        lt("s://AA", "s://A_");
-        lt("s:/p", "s:/q");
-        lt("s:/p?q", "s:/p?r");
-        lt("s:/p#f", "s:/p#g");
+        xlt("p", "s:p");
+        xlt("s:p", "T:p");
+        xlt("S:p", "t:p");
+        xlt("s:/p", "s:p");
+        xlt("s:p", "s:q");
+        xlt("s:p#f", "s:p#g");
+        xlt("s://u@h:1", "s://v@h:1");
+        xlt("s://u@h:1", "s://u@i:1");
+        xlt("s://u@h:1", "s://v@h:2");
+        xlt("s://h", "s://h:0");
+        xlt("s://h", "s://h:" + Integer.MAX_VALUE);
+        xlt("s://h:0", "s://h:" + Integer.MAX_VALUE);
+        xeq("s://h:" + Integer.MAX_VALUE, "s://H:" + Integer.MAX_VALUE);
+        xlt("s://a%20b", "s://a%20c");
+        xlt("s://a%20b", "s://aab");
+        xlt("s://AA", "s://A_");
+        xlt("s:/p", "s:/q");
+        xlt("s:/p?q", "s:/p?r");
+        xlt("s:/p#f", "s:/p#g");
 
-        lt("s://h", "s://h/p");
-        lt("s://h/p", "s://h/p?q");
+        xlt("s://h", "s://h/p");
+        xlt("s://h/p", "s://h/p?q");
 
     }
 
@@ -1490,13 +1588,13 @@ public class Test {
 
         ByteArrayInputStream bi = new ByteArrayInputStream(bo.toByteArray());
         ObjectInputStream oi = new ObjectInputStream(bi);
+        final URI uri;
         try {
-            Object o = oi.readObject();
-            eq(u, (URI)o);
+            uri = (URI) oi.readObject();
         } catch (ClassNotFoundException x) {
-            x.printStackTrace();
-            throw new RuntimeException(x.toString());
+            throw new RuntimeException(x);
         }
+        xeq(u, uri);
 
         testCount++;
     }
@@ -1612,9 +1710,60 @@ public class Test {
     // miscellaneous bugs/rfes that don't fit in with the test framework
 
     static void bugs() {
+        header("Bugs");
         b6339649();
         b6933879();
         b8037396();
+        b8051627();
+        b8272072();
+        b8297687();
+        b8353013();
+    }
+
+    private static void b8297687() {
+        // constructors that take a hostname should fail
+        test("ftps", "p.e.local|SIT@p.e.local", "/path", null)
+                .x().z();
+        test("ftps", null,"p.e.local|SIT@p.e.local", -1, "/path", null, null)
+                .x().z();
+        // constructors that take an authority component should succeed
+        test("ftps", "p.e.local|SIT@p.e.local", "/path", null,null)
+                .s("ftps")
+                .sp("//p.e.local%7CSIT@p.e.local/path")
+                .spd("//p.e.local|SIT@p.e.local/path")
+                .u("p.e.local%7CSIT")
+                .ud("p.e.local|SIT")
+                .h("p.e.local")
+                .n(-1)
+                .p("/path")
+                .pd("/path")
+                .z();
+
+        // check index in exception for constructors that should fail
+        try {
+            URI uri = new URI("ftps", "p.e.local|SIT@p.e.local", "/path", null);
+            throw new AssertionError("Expected URISyntaxException not thrown for " + uri);
+        } catch (URISyntaxException ex) {
+            if (ex.getMessage().contains("at index 16")) {
+                 System.out.println("Got expected exception: " + ex);
+            } else {
+                throw new AssertionError("Exception does not point at index 16", ex);
+            }
+        }
+        testCount++;
+
+        // check index in exception for constructors that should fail
+        try {
+            URI uri = new URI("ftps", null, "p.e.local|SIT@p.e.local", -1, "/path", null, null);
+            throw new AssertionError("Expected URISyntaxException not thrown for " + uri);
+        } catch (URISyntaxException ex) {
+            if (ex.getMessage().contains("at index 16")) {
+                System.out.println("Got expected exception: " + ex);
+            } else {
+                throw new AssertionError("Exception does not point at index 16", ex);
+            }
+        }
+        testCount++;
     }
 
     // 6339649 - include detail message from nested exception
@@ -1626,6 +1775,7 @@ public class Test {
                 throw new RuntimeException ("No detail message");
             }
         }
+        testCount++;
     }
 
     // 6933879 - check that "." and "_" characters are allowed in IPv6 scope_id.
@@ -1671,6 +1821,100 @@ public class Test {
         eq("/a%20b%5Bc%20d%5D", u.getRawPath());
         eq("a%20b[c%20d]", u.getRawQuery());
         eq("a%20b[c%20d]", u.getRawFragment());
+    }
+
+    // 8051627 - Invariants about java.net.URI resolve and relativize are wrong
+    private static void b8051627() {
+        try {
+            // Let u be a normalized absolute URI u which ends with "/" and
+            // v be a normalized relative URI v which does not start with "." or "/", then
+            // u.relativize(u.resolve(v)).equals(v) should be true
+            reltivizeAfterResolveTest("http://a/b/", "c/d", "c/d");
+            reltivizeAfterResolveTest("http://a/b/", "g;x?y#s", "g;x?y#s");
+
+            // when the URI condition is not met, u.relativize(u.resolve(v)).equals(v) may be false
+            // In the following examples, that should be false
+            reltivizeAfterResolveTest("http://a/b", "c/d", "http://a/c/d");
+            reltivizeAfterResolveTest("http://a/b/", "../c/d", "http://a/c/d");
+            reltivizeAfterResolveTest("http://a/b/", "/c/d", "http://a/c/d");
+            reltivizeAfterResolveTest("http://a/b/", "http://a/b/c/d", "c/d");
+
+            // Let u be a normalized absolute URI u which ends with "/" and
+            // v be a normalized absolute URI v, then
+            // u.resolve(u.relativize(v)).equals(v) should be true
+            resolveAfterRelativizeTest("http://a/b/", "http://a/b/c/d", "http://a/b/c/d");
+            resolveAfterRelativizeTest("http://a/b/", "http://a/b/c/g;x?y#s", "http://a/b/c/g;x?y#s");
+
+            // when the URI condition is not met, u.resolve(u.relativize(v)).equals(v) may be false
+            // In the following examples, that should be false
+            resolveAfterRelativizeTest("http://a/b", "http://a/b/c/d", "http://a/c/d");
+            resolveAfterRelativizeTest("http://a/b/", "c/d", "http://a/b/c/d");
+        } catch (URISyntaxException e) {
+            throw new AssertionError("shouldn't ever happen", e);
+        }
+    }
+    private static void reltivizeAfterResolveTest(String base, String target, String expected)
+        throws URISyntaxException {
+            URI baseURI = URI.create(base);
+            URI targetURI = URI.create(target);
+            xeq(expected, baseURI.relativize(baseURI.resolve(targetURI)));
+    }
+    private static void resolveAfterRelativizeTest(String base, String target, String expected)
+        throws URISyntaxException {
+            URI baseURI = URI.create(base);
+            URI targetURI = URI.create(target);
+            xeq(expected, baseURI.resolve(baseURI.relativize(targetURI)));
+    }
+
+    // 8272072 - Resolving URI relative path with no "/" may lead to incorrect toString
+    private static void b8272072() {
+        try {
+            URI baseURI = new URI("http://example.com");
+            URI relativeURI = new URI("test");
+            URI resolvedURI = baseURI.resolve(relativeURI);
+
+            xeq("http://example.com/test", resolvedURI);
+
+            baseURI = new URI("relativeBase");
+            resolvedURI = baseURI.resolve(relativeURI);
+
+            xeq("test", resolvedURI);
+        } catch (URISyntaxException e) {
+            throw new AssertionError("shouldn't ever happen", e);
+        }
+    }
+
+    // 8353013 - Increase test coverage for cases where the authority component of a hierarchical
+    // URI has a host component that starts with a number.
+    private static void b8353013() {
+        testCreate("https://0.0.0.1").s("https").h("0.0.0.1").p("").z();
+        testCreate("https://00.0.0.2").s("https").h("00.0.0.2").p("").z();
+        testCreate("https://000.0.0.3").s("https").h("000.0.0.3").p("").z();
+        testCreate("https://0000.0.0.4").s("https").h("0000.0.0.4").p("").z();
+
+        testCreate("https://00000.0.0.5").s("https").h("00000.0.0.5").p("").z();
+        testCreate("https://00001.0.0.6").s("https").h("00001.0.0.6").p("").z();
+
+        testCreate("https://01.0.0.1").s("https").h("01.0.0.1").p("").z();
+
+        testCreate("https://111111.2.3.com").s("https").h("111111.2.3.com").p("").z();
+
+        testCreate("https://1.example.com").s("https").h("1.example.com").p("").z();
+        testCreate("https://12.example.com").s("https").h("12.example.com").p("").z();
+        testCreate("https://123.example.com").s("https").h("123.example.com").p("").z();
+        testCreate("https://1234.example.com").s("https").h("1234.example.com").p("").z();
+        testCreate("https://12345.example.com").s("https").h("12345.example.com").p("").z();
+
+        testCreate("https://98765432101.example.com").s("https").h("98765432101.example.com").p("").z();
+        testCreate("https://98765432101.www.example.com/").s("https").h("98765432101.www.example.com").p("/").z();
+        testCreate("https://98765432101.www.example.com").s("https").h("98765432101.www.example.com").p("").z();
+
+        testCreate("https://9223372036854775808.example.com").s("https").h("9223372036854775808.example.com").p("").z();
+        testCreate("https://9223372036854775808.www.example.com").s("https").h("9223372036854775808.www.example.com").p("").z();
+        testCreate("https://9223372036854775808.xyz.abc.com").s("https").h("9223372036854775808.xyz.abc.com").p("").z();
+        testCreate("https://9223372036854775808.xyz.abc.pqr.com").s("https").h("9223372036854775808.xyz.abc.pqr.com").p("").z();
+
+        testCreate("https://256.example.com").s("https").h("256.example.com").p("").z();
     }
 
     public static void main(String[] args) throws Exception {

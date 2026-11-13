@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "opto/callnode.hpp"
 #include "opto/cfgnode.hpp"
 #include "opto/matcher.hpp"
@@ -32,51 +31,80 @@
 #include "opto/phaseX.hpp"
 #include "opto/regmask.hpp"
 #include "opto/type.hpp"
+#include "opto/valuetypenode.hpp"
 #include "utilities/vmError.hpp"
 
 //=============================================================================
 //------------------------------MultiNode--------------------------------------
 const RegMask &MultiNode::out_RegMask() const {
-  return RegMask::Empty;
+  return RegMask::EMPTY;
 }
 
-Node *MultiNode::match( const ProjNode *proj, const Matcher *m ) { return proj->clone(); }
+Node* MultiNode::match(const ProjNode* proj, const Matcher* m) { return proj->clone(); }
 
 //------------------------------proj_out---------------------------------------
 // Get a named projection or null if not found
 ProjNode* MultiNode::proj_out_or_null(uint which_proj) const {
   assert((Opcode() != Op_If && Opcode() != Op_RangeCheck) || which_proj == (uint)true || which_proj == (uint)false, "must be 1 or 0");
-  for( DUIterator_Fast imax, i = fast_outs(imax); i < imax; i++ ) {
-    Node *p = fast_out(i);
-    if (p->is_Proj()) {
-      ProjNode *proj = p->as_Proj();
-      if (proj->_con == which_proj) {
-        assert((Opcode() != Op_If && Opcode() != Op_RangeCheck) || proj->Opcode() == (which_proj ? Op_IfTrue : Op_IfFalse), "bad if #2");
-        return proj;
-      }
-    } else {
-      assert(p == this && this->is_Start(), "else must be proj");
-      continue;
-    }
-  }
-  return NULL;
+  assert(number_of_projs(which_proj) <= 1, "only when there's a single projection");
+  ProjNode* proj = find_first(which_proj);
+  assert(proj == nullptr || (Opcode() != Op_If && Opcode() != Op_RangeCheck) || proj->Opcode() == (which_proj ? Op_IfTrue : Op_IfFalse),
+         "incorrect projection node at If/RangeCheck: IfTrue on false path or IfFalse on true path");
+  return proj;
 }
 
 ProjNode* MultiNode::proj_out_or_null(uint which_proj, bool is_io_use) const {
-  for (DUIterator_Fast imax, i = fast_outs(imax); i < imax; i++) {
-    ProjNode* proj = fast_out(i)->isa_Proj();
-    if (proj != NULL && (proj->_con == which_proj) && (proj->_is_io_use == is_io_use)) {
-      return proj;
+  assert(number_of_projs(which_proj, is_io_use) <= 1, "only when there's a single projection");
+  return find_first(which_proj, is_io_use);
+}
+
+template<class Callback> ProjNode* MultiNode::apply_to_projs(Callback callback, uint which_proj, bool is_io_use) const {
+  auto filter = [&](ProjNode* proj) {
+    if (proj->_is_io_use == is_io_use && callback(proj) == BREAK_AND_RETURN_CURRENT_PROJ) {
+      return BREAK_AND_RETURN_CURRENT_PROJ;
     }
-  }
-  return NULL;
+    return CONTINUE;
+  };
+  return apply_to_projs(filter, which_proj);
+}
+
+uint MultiNode::number_of_projs(uint which_proj) const {
+  uint cnt = 0;
+  auto count_projs = [&](ProjNode* proj) {
+    cnt++;
+  };
+  for_each_proj(count_projs, which_proj);
+  return cnt;
+}
+
+uint MultiNode::number_of_projs(uint which_proj, bool is_io_use) const {
+  uint cnt = 0;
+  auto count_projs = [&](ProjNode* proj) {
+    cnt++;
+  };
+  for_each_proj(count_projs, which_proj, is_io_use);
+  return cnt;
+}
+
+ProjNode* MultiNode::find_first(uint which_proj) const {
+  auto find_proj = [&](ProjNode* proj) {
+    return BREAK_AND_RETURN_CURRENT_PROJ;
+  };
+  return apply_to_projs(find_proj, which_proj);
+}
+
+ProjNode* MultiNode::find_first(uint which_proj, bool is_io_use) const {
+  auto find_proj = [](ProjNode* proj) {
+    return BREAK_AND_RETURN_CURRENT_PROJ;
+  };
+  return apply_to_projs(find_proj, which_proj, is_io_use);
 }
 
 // Get a named projection
 ProjNode* MultiNode::proj_out(uint which_proj) const {
   assert((Opcode() != Op_If && Opcode() != Op_RangeCheck) || outcnt() == 2, "bad if #1");
   ProjNode* p = proj_out_or_null(which_proj);
-  assert(p != NULL, "named projection %u not found", which_proj);
+  assert(p != nullptr, "named projection %u not found", which_proj);
   return p;
 }
 
@@ -103,34 +131,24 @@ const Type* ProjNode::proj_type(const Type* t) const {
     return Type::BOTTOM;
   }
   t = t->is_tuple()->field_at(_con);
-  Node* n = in(0);
-  if ((_con == TypeFunc::Parms) &&
-      n->is_CallStaticJava() && n->as_CallStaticJava()->is_boxing_method()) {
+  CallStaticJavaNode* call = in(0)->isa_CallStaticJava();
+  if (call != nullptr && call->is_boxing_method()) {
     // The result of autoboxing is always non-null on normal path.
-    t = t->join_speculative(TypePtr::NOTNULL);
+    if (call->tf()->returns_value_type_as_fields()) {
+      // Last returned value is the null marker
+      if (_con == call->tf()->range_cc()->cnt() - 1) {
+        t = TypeInt::ONE;
+      }
+    } else if (_con == TypeFunc::Parms) {
+      t = t->join_speculative(TypePtr::NOTNULL);
+    }
   }
   return t;
 }
 
 const Type *ProjNode::bottom_type() const {
-  if (in(0) == NULL) return Type::TOP;
+  if (in(0) == nullptr) return Type::TOP;
   return proj_type(in(0)->bottom_type());
-}
-
-const TypePtr *ProjNode::adr_type() const {
-  if (bottom_type() == Type::MEMORY) {
-    // in(0) might be a narrow MemBar; otherwise we will report TypePtr::BOTTOM
-    Node* ctrl = in(0);
-    if (ctrl == NULL)  return NULL; // node is dead
-    const TypePtr* adr_type = ctrl->adr_type();
-    #ifdef ASSERT
-    if (!VMError::is_error_reported() && !Node::in_dump())
-      assert(adr_type != NULL, "source must have adr_type");
-    #endif
-    return adr_type;
-  }
-  assert(bottom_type()->base() != Type::Memory, "no other memories?");
-  return NULL;
 }
 
 bool ProjNode::pinned() const { return in(0)->pinned(); }
@@ -142,7 +160,7 @@ void ProjNode::dump_compact_spec(outputStream *st) const {
     Node* o = this->out(i);
     if (not_a_node(o)) {
       st->print("[?]");
-    } else if (o == NULL) {
+    } else if (o == nullptr) {
       st->print("[_]");
     } else {
       st->print("[%d]", o->_idx);
@@ -155,7 +173,7 @@ void ProjNode::dump_compact_spec(outputStream *st) const {
 //----------------------------check_con----------------------------------------
 void ProjNode::check_con() const {
   Node* n = in(0);
-  if (n == NULL)       return;  // should be assert, but NodeHash makes bogons
+  if (n == nullptr)    return;  // should be assert, but NodeHash makes bogons
   if (n->is_Mach())    return;  // mach. projs. are not type-safe
   if (n->is_Start())   return;  // alas, starts can have mach. projs. also
   if (_con == SCMemProjNode::SCMEMPROJCON ) return;
@@ -164,16 +182,55 @@ void ProjNode::check_con() const {
   assert(_con < t->is_tuple()->cnt(), "ProjNode::_con must be in range");
 }
 
+//------------------------------Identity---------------------------------------
+Node* ProjNode::Identity(PhaseGVN* phase) {
+  if (in(0) != nullptr && in(0)->Opcode() == Op_Tuple) {
+    // Jumping over Tuples: the i-th projection of a Tuple is the i-th input of the Tuple.
+    return in(0)->in(_con);
+  }
+
+  CallStaticJavaNode* call = in(0)->isa_CallStaticJava();
+  if (call != nullptr) {
+    if (call->is_boxing_method() && call->method()->return_type()->is_value_klass()) {
+      // Boxing (for example, via Integer.valueOf(int))
+      if (call->tf()->returns_value_type_as_fields()) {
+        if (_con == TypeFunc::Parms) {
+          // Oop projection: Keep it to avoid re-buffering. If unused,
+          // it will go away and enable removal of the boxing call.
+          return this;
+        } else if (_con == TypeFunc::Parms + 1) {
+          // Field projection: Use unboxed input value
+          return call->in(TypeFunc::Parms);
+        }
+        // The null marker projection is removed by ProjNode::proj_type.
+      }
+    } else if (call->is_unboxing_method() && _con == TypeFunc::Parms) {
+      // Unboxing (for example, via Integer.intValue())
+      // Use field value of boxed input value object
+      if (call->method()->has_scalarized_args()) {
+        return call->in(TypeFunc::Parms + 1);
+      } else {
+        Node* arg = call->in(TypeFunc::Parms);
+        if (arg->is_ValueType()) {
+          assert(!phase->type(arg)->maybe_null(), "missing receiver null check?");
+          return arg->as_ValueType()->field_value(0);
+        }
+      }
+    }
+  }
+  return this;
+}
+
 //------------------------------Value------------------------------------------
 const Type* ProjNode::Value(PhaseGVN* phase) const {
-  if (in(0) == NULL) return Type::TOP;
+  if (in(0) == nullptr) return Type::TOP;
   return proj_type(phase->type(in(0)));
 }
 
 //------------------------------out_RegMask------------------------------------
 // Pass the buck uphill
 const RegMask &ProjNode::out_RegMask() const {
-  return RegMask::Empty;
+  return RegMask::EMPTY;
 }
 
 //------------------------------ideal_reg--------------------------------------
@@ -183,14 +240,14 @@ uint ProjNode::ideal_reg() const {
 
 //-------------------------------is_uncommon_trap_proj----------------------------
 // Return uncommon trap call node if proj is for "proj->[region->..]call_uct"
-// NULL otherwise
-CallStaticJavaNode* ProjNode::is_uncommon_trap_proj(Deoptimization::DeoptReason reason) {
-  int path_limit = 10;
-  Node* out = this;
+// null otherwise
+CallStaticJavaNode* ProjNode::is_uncommon_trap_proj(Deoptimization::DeoptReason reason) const {
+  const int path_limit = 10;
+  const Node* out = this;
   for (int ct = 0; ct < path_limit; ct++) {
-    out = out->unique_ctrl_out();
-    if (out == NULL)
-      return NULL;
+    out = out->unique_ctrl_out_or_null();
+    if (out == nullptr)
+      return nullptr;
     if (out->is_CallStaticJava()) {
       CallStaticJavaNode* call = out->as_CallStaticJava();
       int req = call->uncommon_trap_request();
@@ -200,12 +257,12 @@ CallStaticJavaNode* ProjNode::is_uncommon_trap_proj(Deoptimization::DeoptReason 
           return call;
         }
       }
-      return NULL; // don't do further after call
+      return nullptr; // don't do further after call
     }
     if (out->Opcode() != Op_Region)
-      return NULL;
+      return nullptr;
   }
-  return NULL;
+  return nullptr;
 }
 
 //-------------------------------is_uncommon_trap_if_pattern-------------------------
@@ -213,34 +270,39 @@ CallStaticJavaNode* ProjNode::is_uncommon_trap_proj(Deoptimization::DeoptReason 
 //                                                 |
 //                                                 V
 //                                             other_proj->[region->..]call_uct"
-// NULL otherwise
-// "must_reason_predicate" means the uct reason must be Reason_predicate
-CallStaticJavaNode* ProjNode::is_uncommon_trap_if_pattern(Deoptimization::DeoptReason reason) {
-  Node *in0 = in(0);
-  if (!in0->is_If()) return NULL;
-  // Variation of a dead If node.
-  if (in0->outcnt() < 2)  return NULL;
-  IfNode* iff = in0->as_If();
-
-  // we need "If(Conv2B(Opaque1(...)))" pattern for reason_predicate
-  if (reason != Deoptimization::Reason_none) {
-    if (iff->in(1)->Opcode() != Op_Conv2B ||
-       iff->in(1)->in(1)->Opcode() != Op_Opaque1) {
-      return NULL;
-    }
+// or null otherwise.
+CallStaticJavaNode* ProjNode::is_uncommon_trap_if_pattern(Deoptimization::DeoptReason reason) const {
+  Node* iff = in(0);
+  if (!iff->is_If() || iff->outcnt() < 2) {
+    // Not a projection of an If or variation of a dead If node.
+    return nullptr;
   }
-
-  ProjNode* other_proj = iff->proj_out(1-_con);
-  CallStaticJavaNode* call = other_proj->is_uncommon_trap_proj(reason);
-  if (call != NULL) {
-    assert(reason == Deoptimization::Reason_none ||
-           Compile::current()->is_predicate_opaq(iff->in(1)->in(1)), "should be on the list");
-    return call;
-  }
-  return NULL;
+  return as_IfProj()->other_if_proj()->is_uncommon_trap_proj(reason);
 }
 
-ProjNode* ProjNode::other_if_proj() const {
-  assert(_con == 0 || _con == 1, "not an if?");
-  return in(0)->as_If()->proj_out(1-_con);
+const TypePtr* ProjNode::out_adr_type_impl() const {
+  if (bottom_type() != Type::MEMORY) {
+    assert(bottom_type()->base() != Type::Memory, "no other memories?");
+    return nullptr;
+  }
+
+  Node* ctrl = in(0);
+  // node is dead or we are in the process of removing a dead subgraph
+  if (ctrl == nullptr || ctrl->is_top()) {
+    return nullptr;
+  }
+
+  const TypePtr* adr_type = ctrl->out_adr_type();
+#ifdef ASSERT
+  if (!VMError::is_error_reported() && !Node::in_dump()) {
+    assert(adr_type != nullptr, "source must have adr_type");
+  }
+#endif // ASSERT
+  return adr_type;
+}
+
+NarrowMemProjNode::NarrowMemProjNode(InitializeNode* src, const TypePtr* adr_type)
+  : ProjNode(src, TypeFunc::Memory), _adr_type(adr_type) {
+  assert(Compile::current()->have_alias_type(adr_type), "alias index should have been allocated already");
+  init_class_id(Class_NarrowMemProj);
 }

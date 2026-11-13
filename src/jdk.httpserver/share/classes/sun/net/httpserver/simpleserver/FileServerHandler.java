@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2005, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,6 +44,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpHandlers;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static com.sun.net.httpserver.HttpExchange.RSPBODY_EMPTY;
 
 /**
  * A basic HTTP file server handler for static content.
@@ -55,6 +58,9 @@ public final class FileServerHandler implements HttpHandler {
     private static final List<String> SUPPORTED_METHODS = List.of("HEAD", "GET");
     private static final List<String> UNSUPPORTED_METHODS =
             List.of("CONNECT", "DELETE", "OPTIONS", "PATCH", "POST", "PUT", "TRACE");
+    private static final String FAVICON_RESOURCE_PATH =
+            "/sun/net/httpserver/simpleserver/resources/favicon.ico";
+    private static final String FAVICON_LAST_MODIFIED = "Mon, 23 May 1995 11:11:11 GMT";
 
     private final Path root;
     private final UnaryOperator<String> mimeTable;
@@ -62,12 +68,6 @@ public final class FileServerHandler implements HttpHandler {
 
     private FileServerHandler(Path root, UnaryOperator<String> mimeTable) {
         root = root.normalize();
-
-        @SuppressWarnings("removal")
-        var securityManager = System.getSecurityManager();
-        if (securityManager != null)
-            securityManager.checkRead(pathForSecurityCheck(root.toString()));
-
         if (!Files.exists(root))
             throw new IllegalArgumentException("Path does not exist: " + root);
         if (!root.isAbsolute())
@@ -79,11 +79,6 @@ public final class FileServerHandler implements HttpHandler {
         this.root = root;
         this.mimeTable = mimeTable;
         this.logger = System.getLogger("com.sun.net.httpserver");
-    }
-
-    private static String pathForSecurityCheck(String path) {
-        var separator = String.valueOf(File.separatorChar);
-        return path.endsWith(separator) ? (path + "-") : (path + separator + "-");
     }
 
     private static final HttpHandler NOT_IMPLEMENTED_HANDLER =
@@ -112,16 +107,22 @@ public final class FileServerHandler implements HttpHandler {
 
     private void handleSupportedMethod(HttpExchange exchange, Path path, boolean writeBody)
         throws IOException {
+        boolean requestURIEndsWithSlash = pathEndsWithSlash(exchange);
         if (Files.isDirectory(path)) {
-            if (missingSlash(exchange)) {
+            if (!requestURIEndsWithSlash) {
                 handleMovedPermanently(exchange);
                 return;
             }
-            if (indexFile(path) != null) {
-                serveFile(exchange, indexFile(path), writeBody);
+            Path indexFile = indexFile(path);
+            if (indexFile != null) {
+                serveFile(exchange, indexFile, writeBody);
             } else {
                 listFiles(exchange, path, writeBody);
             }
+        }
+        // Disallow non-directory paths ending with slash
+        else if (requestURIEndsWithSlash) {
+            handleNotFound(exchange);
         } else {
             serveFile(exchange, path, writeBody);
         }
@@ -129,11 +130,7 @@ public final class FileServerHandler implements HttpHandler {
 
     private void handleMovedPermanently(HttpExchange exchange) throws IOException {
         exchange.getResponseHeaders().set("Location", getRedirectURI(exchange.getRequestURI()));
-        exchange.sendResponseHeaders(301, -1);
-    }
-
-    private void handleForbidden(HttpExchange exchange) throws IOException {
-        exchange.sendResponseHeaders(403, -1);
+        exchange.sendResponseHeaders(301, RSPBODY_EMPTY);
     }
 
     private void handleNotFound(HttpExchange exchange) throws IOException {
@@ -146,7 +143,7 @@ public final class FileServerHandler implements HttpHandler {
 
         if (exchange.getRequestMethod().equals("HEAD")) {
             exchange.getResponseHeaders().set("Content-Length", Integer.toString(bytes.length));
-            exchange.sendResponseHeaders(404, -1);
+            exchange.sendResponseHeaders(404, RSPBODY_EMPTY);
         } else {
             exchange.sendResponseHeaders(404, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
@@ -157,7 +154,7 @@ public final class FileServerHandler implements HttpHandler {
 
     private static void discardRequestBody(HttpExchange exchange) throws IOException {
         try (InputStream is = exchange.getRequestBody()) {
-            is.readAllBytes();
+            is.skip(Integer.MAX_VALUE);
         }
     }
 
@@ -167,8 +164,8 @@ public final class FileServerHandler implements HttpHandler {
         return query == null ? redirectPath : redirectPath + "?" + query;
     }
 
-    private static boolean missingSlash(HttpExchange exchange) {
-        return !exchange.getRequestURI().getPath().endsWith("/");
+    private static boolean pathEndsWithSlash(HttpExchange exchange) {
+        return exchange.getRequestURI().getPath().endsWith("/");
     }
 
     private static String contextPath(HttpExchange exchange) {
@@ -225,9 +222,13 @@ public final class FileServerHandler implements HttpHandler {
             // resolve each path segment against the root
             Path path = root;
             for (var segment : pathSegment) {
+                if (!URIPathSegment.isSupported(segment) || segment.contains(File.separator)) {
+                    // checking for separator rules out anomalies like UNCs on Windows
+                    return null;  // stop resolution, null results in 404 response
+                }
                 path = path.resolve(segment);
                 if (!Files.isReadable(path) || isHiddenOrSymLink(path)) {
-                    return null;  // stop resolution, null results in 404 response
+                    return null;  // stop resolution
                 }
             }
             path = path.normalize();
@@ -245,6 +246,31 @@ public final class FileServerHandler implements HttpHandler {
         return Files.exists(html) ? html : Files.exists(htm) ? htm : null;
     }
 
+    private static boolean isFavIconRequest(HttpExchange exchange) {
+        return "/favicon.ico".equals(exchange.getRequestURI().getPath());
+    }
+
+    private void serveDefaultFavIcon(HttpExchange exchange, boolean writeBody)
+            throws IOException
+    {
+        var respHdrs = exchange.getResponseHeaders();
+        try (var stream = getClass().getModule().getResourceAsStream(FAVICON_RESOURCE_PATH)) {
+            var bytes = stream.readAllBytes();
+            respHdrs.set("Content-Type", "image/x-icon");
+            respHdrs.set("Last-Modified", FAVICON_LAST_MODIFIED);
+            if (writeBody) {
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } else {
+                respHdrs.set("Content-Length", Integer.toString(bytes.length));
+                exchange.sendResponseHeaders(200, RSPBODY_EMPTY);
+            }
+        }
+    }
+
+
     private void serveFile(HttpExchange exchange, Path path, boolean writeBody)
         throws IOException
     {
@@ -259,7 +285,7 @@ public final class FileServerHandler implements HttpHandler {
             }
         } else {
             respHdrs.set("Content-Length", Long.toString(Files.size(path)));
-            exchange.sendResponseHeaders(200, -1);
+            exchange.sendResponseHeaders(200, RSPBODY_EMPTY);
         }
     }
 
@@ -277,7 +303,7 @@ public final class FileServerHandler implements HttpHandler {
             }
         } else {
             respHdrs.set("Content-Length", Integer.toString(bodyBytes.length));
-            exchange.sendResponseHeaders(200, -1);
+            exchange.sendResponseHeaders(200, RSPBODY_EMPTY);
         }
     }
 
@@ -345,7 +371,7 @@ public final class FileServerHandler implements HttpHandler {
 
     // A non-exhaustive map of reserved-HTML and special characters to their
     // equivalent entity.
-    private static final Map<Integer,String> RESERVED_CHARS = Map.of(
+    private static final Map<Integer, String> RESERVED_CHARS = Map.of(
             (int) '&'  , "&amp;"   ,
             (int) '<'  , "&lt;"    ,
             (int) '>'  , "&gt;"    ,
@@ -366,17 +392,26 @@ public final class FileServerHandler implements HttpHandler {
         assert List.of("GET", "HEAD").contains(exchange.getRequestMethod());
         try (exchange) {
             discardRequestBody(exchange);
+            boolean isHeadRequest = exchange.getRequestMethod().equals("HEAD");
             Path path = mapToPath(exchange, root);
             if (path != null) {
                 exchange.setAttribute("request-path", path.toString());  // store for OutputFilter
                 if (!Files.exists(path) || !Files.isReadable(path) || isHiddenOrSymLink(path)) {
                     handleNotFound(exchange);
-                } else if (exchange.getRequestMethod().equals("HEAD")) {
+                } else if (isHeadRequest) {
                     handleHEAD(exchange, path);
                 } else {
                     handleGET(exchange, path);
                 }
             } else {
+                if (isFavIconRequest(exchange)) {
+                    try {
+                        serveDefaultFavIcon(exchange, !isHeadRequest);
+                        return;
+                    } catch (IOException ignore) {
+                        // fall through to send the not-found response
+                    }
+                }
                 exchange.setAttribute("request-path", "could not resolve request URI path");
                 handleNotFound(exchange);
             }

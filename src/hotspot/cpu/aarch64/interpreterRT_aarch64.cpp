@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, 2020, Red Hat Inc. All rights reserved.
  * Copyright (c) 2021, Azul Systems, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -24,7 +24,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "interpreter/interp_masm.hpp"
 #include "interpreter/interpreter.hpp"
@@ -169,7 +168,7 @@ void InterpreterRuntime::SignatureHandlerGenerator::pass_object() {
     __ cbnz(temp(), L);
     __ mov(r0, zr);
     __ bind(L);
-    static_assert(sizeof(jobject) == wordSize, "");
+    static_assert(sizeof(jobject) == wordSize);
     __ str(r0, Address(to(), next_stack_offset(sizeof(jobject))));
   }
 }
@@ -182,7 +181,7 @@ void InterpreterRuntime::SignatureHandlerGenerator::generate(uint64_t fingerprin
   __ lea(r0, ExternalAddress(Interpreter::result_handler(method()->result_type())));
   __ ret(lr);
 
-  __ flush();
+  __ invalidate_icache();
 }
 
 
@@ -258,6 +257,11 @@ class SlowSignatureHandler
     }
   }
 
+  virtual void pass_valuetype() {
+    // values are handled with oops, like objects
+    pass_object();
+  }
+
   virtual void pass_long() {
     intptr_t value = *double_slot_addr();
     if (pass_gpr(value) < 0) {
@@ -267,7 +271,7 @@ class SlowSignatureHandler
 
   virtual void pass_object() {
     intptr_t* addr = single_slot_addr();
-    intptr_t value = *addr == 0 ? NULL : (intptr_t)addr;
+    intptr_t value = *addr == 0 ? (intptr_t)0 : (intptr_t)addr;
     if (pass_gpr(value) < 0) {
       pass_stack<>(value);
     }

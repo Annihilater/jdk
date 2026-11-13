@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,9 @@
 package sun.jvm.hotspot.utilities;
 
 import java.io.*;
+import java.util.*;
 import sun.jvm.hotspot.debugger.*;
 import sun.jvm.hotspot.gc.shared.OopStorage;
-import sun.jvm.hotspot.memory.*;
 import sun.jvm.hotspot.oops.*;
 import sun.jvm.hotspot.runtime.*;
 
@@ -41,6 +41,9 @@ import sun.jvm.hotspot.runtime.*;
  */
 
 public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
+
+    public static record DumperFlatObject(long objectID, ValueKlass klass, FlattenedValue valueObj) {};
+
     // the function iterates heap and calls Oop type specific writers
     protected void write() throws IOException {
         javaLangClass = "java/lang/Class";
@@ -58,6 +61,7 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
                     }
 
                     public boolean doObj(Oop oop) {
+                        Deque<DumperFlatObject> flatObjects = new ArrayDeque<>();
                         try {
                             writeHeapRecordPrologue(calculateOopDumpRecordSize(oop));
                             if (oop instanceof TypeArray) {
@@ -68,7 +72,7 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
                                 Klass bottomType = oak.getBottomKlass();
                                 if (bottomType instanceof InstanceKlass ||
                                     bottomType instanceof TypeArrayKlass) {
-                                    writeObjectArray((ObjArray)oop);
+                                    writeObjectArray((ObjArray)oop, flatObjects);
                                 } else {
                                     writeInternalObject(oop);
                                 }
@@ -77,28 +81,35 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
                                 Klass klass = instance.getKlass();
                                 Symbol name = klass.getName();
                                 if (name.equals(javaLangString)) {
-                                    writeString(instance);
+                                    writeString(instance, flatObjects);
                                 } else if (name.equals(javaLangClass)) {
-                                    writeClass(instance);
+                                    writeClass(instance, flatObjects);
                                 } else if (name.equals(javaLangThread)) {
-                                    writeThread(instance);
+                                    writeThread(instance, flatObjects);
                                 } else {
                                     klass = klass.getSuper();
                                     while (klass != null) {
                                         name = klass.getName();
                                         if (name.equals(javaLangThread)) {
-                                            writeThread(instance);
-                                            return false;
+                                            writeThread(instance, flatObjects);
+                                            break;
                                         }
                                         klass = klass.getSuper();
                                     }
-                                    writeInstance(instance);
+                                    if (klass == null) {
+                                        // instance is not a thread or its inherited class,
+                                        // so it should be dumped here as a normal instance.
+                                        writeInstance(instance, flatObjects);
+                                    }
                                 }
                             } else {
                                 // not-a-Java-visible oop
                                 writeInternalObject(oop);
                             }
                             writeHeapRecordEpilogue();
+                            while (!flatObjects.isEmpty()) {
+                                writeInstance(flatObjects.pop(), flatObjects);
+                            }
                         } catch (IOException exp) {
                             throw new RuntimeException(exp);
                         }
@@ -121,6 +132,9 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
 
                 // write JNI global handles
                 writeGlobalJNIHandles();
+
+                // write classes in null class loader data
+                writeStickyClasses();
 
         } catch (RuntimeException re) {
             handleRuntimeException(re);
@@ -169,6 +183,9 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
         }
     }
 
+    protected void writeStickyClasses() throws IOException {
+    }
+
     protected void writeGlobalJNIHandle(Address handleAddr) throws IOException {
     }
 
@@ -185,24 +202,28 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
     }
 
     // write Java object array
-    protected void writeObjectArray(ObjArray array) throws IOException {
+    protected void writeObjectArray(ObjArray array, Deque<AbstractHeapGraphWriter.DumperFlatObject> flatObjects) throws IOException {
         writeObject(array);
     }
 
-    protected void writeInstance(Instance instance) throws IOException {
+    protected void writeInstance(Instance instance, Deque<AbstractHeapGraphWriter.DumperFlatObject> flatObjects) throws IOException {
         writeObject(instance);
     }
 
-    protected void writeString(Instance instance) throws IOException {
-        writeInstance(instance);
+    protected void writeInstance(DumperFlatObject flatObj, Deque<DumperFlatObject> flatObjects) throws IOException {
+        writeInstance(flatObj.valueObj(), flatObjects);
     }
 
-    protected void writeClass(Instance instance) throws IOException {
-        writeInstance(instance);
+    protected void writeString(Instance instance, Deque<DumperFlatObject> flatObjects) throws IOException {
+        writeInstance(instance, flatObjects);
     }
 
-    protected void writeThread(Instance instance) throws IOException {
-        writeInstance(instance);
+    protected void writeClass(Instance instance, Deque<DumperFlatObject> flatObjects) throws IOException {
+        writeInstance(instance, flatObjects);
+    }
+
+    protected void writeThread(Instance instance, Deque<DumperFlatObject> flatObjects) throws IOException {
+        writeInstance(instance, flatObjects);
     }
 
     protected void writeObject(Oop oop) throws IOException {
@@ -431,14 +452,14 @@ public abstract class AbstractHeapGraphWriter implements HeapGraphWriter {
     // HeapVisitor, OopVisitor methods can't throw any non-runtime
     // exception. But, derived class write methods (which are called
     // from visitor callbacks) may throw IOException. Hence, we throw
-    // RuntimeException with origianal IOException as cause from the
+    // RuntimeException with original IOException as cause from the
     // visitor methods. This method gets back the original IOException
     // (if any) and re-throws the same.
     protected void handleRuntimeException(RuntimeException re)
         throws IOException {
         Throwable cause = re.getCause();
-        if (cause != null && cause instanceof IOException) {
-            throw (IOException) cause;
+        if (cause instanceof IOException io) {
+            throw io;
         } else {
             // some other RuntimeException, just re-throw
             throw re;

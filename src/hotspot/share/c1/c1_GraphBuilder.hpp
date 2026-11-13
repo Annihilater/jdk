@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,8 @@
 #ifndef SHARE_C1_C1_GRAPHBUILDER_HPP
 #define SHARE_C1_C1_GRAPHBUILDER_HPP
 
-#include "c1/c1_IR.hpp"
 #include "c1/c1_Instruction.hpp"
+#include "c1/c1_IR.hpp"
 #include "c1/c1_ValueMap.hpp"
 #include "c1/c1_ValueStack.hpp"
 #include "ci/ciMethodData.hpp"
@@ -35,7 +35,26 @@
 
 class MemoryBuffer;
 
+class DelayedFieldAccess : public CompilationResourceObj {
+private:
+  Value            _obj;
+  ciInstanceKlass* _holder;
+  int              _offset;
+  ValueStack*      _state_before;
+
+public:
+  DelayedFieldAccess(Value obj, ciInstanceKlass* holder, int offset, ValueStack* state_before)
+  : _obj(obj), _holder(holder) , _offset(offset), _state_before(state_before) { }
+
+  Value obj() const { return _obj; }
+  ciInstanceKlass* holder() const { return _holder; }
+  int offset() const { return _offset; }
+  void inc_offset(int offset) { _offset += offset; }
+  ValueStack* state_before() const { return _state_before; }
+};
+
 class GraphBuilder {
+  friend class JfrResolution;
  private:
   // Per-scope data. These are pushed and popped as we descend into
   // inlined methods. Currently in order to generate good code in the
@@ -127,7 +146,7 @@ class GraphBuilder {
 
     // How to get a block to be parsed
     void add_to_work_list(BlockBegin* block);
-    // How to remove the next block to be parsed; returns NULL if none left
+    // How to remove the next block to be parsed; returns null if none left
     BlockBegin* remove_from_work_list();
     // Indicates parse is over
     bool is_work_list_empty() const;
@@ -191,6 +210,10 @@ class GraphBuilder {
   Instruction*      _last;                       // the last instruction added
   bool              _skip_block;                 // skip processing of the rest of this block
 
+  // support for optimization of accesses to flat fields and flat arrays
+  DelayedFieldAccess* _pending_field_access;
+  DelayedLoadIndexed* _pending_load_indexed;
+
   // accessors
   ScopeData*        scope_data() const           { return _scope_data; }
   Compilation*      compilation() const          { return _compilation; }
@@ -208,6 +231,12 @@ class GraphBuilder {
   Bytecodes::Code   code() const                 { return stream()->cur_bc(); }
   int               bci() const                  { return stream()->cur_bci(); }
   int               next_bci() const             { return stream()->next_bci(); }
+  bool              has_pending_field_access()   { return _pending_field_access != nullptr; }
+  DelayedFieldAccess* pending_field_access()     { return _pending_field_access; }
+  void              set_pending_field_access(DelayedFieldAccess* delayed) { _pending_field_access = delayed; }
+  bool              has_pending_load_indexed()   { return _pending_load_indexed != nullptr; }
+  DelayedLoadIndexed* pending_load_indexed()     { return _pending_load_indexed; }
+  void              set_pending_load_indexed(DelayedLoadIndexed* delayed) { _pending_load_indexed = delayed; }
 
   // unified bailout support
   void bailout(const char* msg) const            { compilation()->bailout(msg); }
@@ -233,10 +262,13 @@ class GraphBuilder {
   void load_local(ValueType* type, int index);
   void store_local(ValueType* type, int index);
   void store_local(ValueStack* state, Value value, int index);
+
+  ValueStack* state_before_for_indexed_access(BasicType type, int array_idx);
+
   void load_indexed (BasicType type);
   void store_indexed(BasicType type);
   void stack_op(Bytecodes::Code code);
-  void arithmetic_op(ValueType* type, Bytecodes::Code code, ValueStack* state_before = NULL);
+  void arithmetic_op(ValueType* type, Bytecodes::Code code, ValueStack* state_before = nullptr);
   void negate_op(ValueType* type);
   void shift_op(ValueType* type, Bytecodes::Code code);
   void logic_op(ValueType* type, Bytecodes::Code code);
@@ -265,7 +297,16 @@ class GraphBuilder {
   void monitorexit(Value x, int bci);
   void new_multi_array(int dimensions);
   void throw_op(int bci);
-  Value round_fp(Value fp_value);
+
+  // value types
+  struct CopyNullChecks {
+    bool needs_src;
+    bool needs_dst;
+  };
+
+  void copy_value_content(ciValueKlass* vk, Value src, int src_off, Value dest, int dest_off, ValueStack* state_before,
+                          CopyNullChecks& null_checks, ciField* enclosing_field = nullptr);
+  Value load_null_reset_value(ciValueKlass* vk);
 
   // stack/code manipulation helpers
   Instruction* append_with_bci(Instruction* instr, int bci);
@@ -308,7 +349,7 @@ class GraphBuilder {
   ValueStack* copy_state_exhandling();
   ValueStack* copy_state_for_exception_with_bci(int bci);
   ValueStack* copy_state_for_exception();
-  ValueStack* copy_state_if_bb(bool is_bb) { return (is_bb || compilation()->is_optimistic()) ? copy_state_before() : NULL; }
+  ValueStack* copy_state_if_bb(bool is_bb) { return (is_bb || compilation()->is_optimistic()) ? copy_state_before() : nullptr; }
   ValueStack* copy_state_indexed_access() { return compilation()->is_optimistic() ? copy_state_before() : copy_state_for_exception(); }
 
   //
@@ -349,9 +390,9 @@ class GraphBuilder {
   void build_graph_for_intrinsic(ciMethod* callee, bool ignore_return);
 
   // inliners
-  bool try_inline(           ciMethod* callee, bool holder_known, bool ignore_return, Bytecodes::Code bc = Bytecodes::_illegal, Value receiver = NULL);
+  bool try_inline(           ciMethod* callee, bool holder_known, bool ignore_return, Bytecodes::Code bc = Bytecodes::_illegal, Value receiver = nullptr);
   bool try_inline_intrinsics(ciMethod* callee, bool ignore_return = false);
-  bool try_inline_full(      ciMethod* callee, bool holder_known, bool ignore_return, Bytecodes::Code bc = Bytecodes::_illegal, Value receiver = NULL);
+  bool try_inline_full(      ciMethod* callee, bool holder_known, bool ignore_return, Bytecodes::Code bc = Bytecodes::_illegal, Value receiver = nullptr);
   bool try_inline_jsr(int jsr_dest_bci);
 
   const char* check_can_parse(ciMethod* callee) const;
@@ -378,11 +419,12 @@ class GraphBuilder {
   void append_unsafe_CAS(ciMethod* callee);
   void append_unsafe_get_and_set(ciMethod* callee, bool is_add);
   void append_char_access(ciMethod* callee, bool is_store);
+  void append_alloc_array_copy(ciMethod* callee);
 
   void print_inlining(ciMethod* callee, const char* msg, bool success = true);
 
   void profile_call(ciMethod* callee, Value recv, ciKlass* predicted_holder, Values* obj_args, bool inlined);
-  void profile_return_type(Value ret, ciMethod* callee, ciMethod* m = NULL, int bci = -1);
+  void profile_return_type(Value ret, ciMethod* callee, ciMethod* m = nullptr, int bci = -1);
   void profile_invocation(ciMethod* inlinee, ValueStack* state);
 
   // Shortcuts to profiling control.
@@ -394,6 +436,8 @@ class GraphBuilder {
   bool profile_parameters()    { return _compilation->profile_parameters();    }
   bool profile_arguments()     { return _compilation->profile_arguments();     }
   bool profile_return()        { return _compilation->profile_return();        }
+  bool profile_array_accesses(){ return _compilation->profile_array_accesses();}
+  bool profile_acmp()          { return _compilation->profile_acmp();          }
 
   Values* args_list_for_profiling(ciMethod* target, int& start, bool may_have_receiver);
   Values* collect_args_for_profiling(Values* args, ciMethod* target, bool may_have_receiver);

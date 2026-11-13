@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,11 +48,11 @@ import java.util.regex.Pattern;
 import javax.tools.JavaFileManager;
 
 import com.sun.tools.javac.api.BasicJavacTask;
+import com.sun.tools.javac.code.Preview;
 import com.sun.tools.javac.file.CacheFSInfo;
 import com.sun.tools.javac.file.BaseFileManager;
 import com.sun.tools.javac.file.JavacFileManager;
 import com.sun.tools.javac.jvm.Target;
-import com.sun.tools.javac.main.CommandLine.UnmatchedQuote;
 import com.sun.tools.javac.platform.PlatformDescription;
 import com.sun.tools.javac.processing.AnnotationProcessingError;
 import com.sun.tools.javac.resources.CompilerProperties.Errors;
@@ -60,6 +60,9 @@ import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.util.JCDiagnostic.DiagnosticInfo;
 import com.sun.tools.javac.util.Log.PrefixKind;
 import com.sun.tools.javac.util.Log.WriterKind;
+
+import jdk.internal.opt.CommandLine;
+import jdk.internal.opt.CommandLine.UnmatchedQuote;
 
 /** This class provides a command line interface to the javac compiler.
  *
@@ -298,6 +301,12 @@ public class Main {
             fileManager.handleOption(Option.MULTIRELEASE.primaryName, list.iterator());
         }
 
+        // pass preview mode to the file manager:
+        if (fileManager.isSupportedOption(Option.PREVIEWMODE.primaryName) == 1) {
+            Preview preview = Preview.instance(context);
+            fileManager.handleOption(Option.PREVIEWMODE.primaryName, List.of(String.valueOf(preview.isEnabled())).iterator());
+        }
+
         // init JavaCompiler
         JavaCompiler comp = JavaCompiler.instance(context);
 
@@ -369,9 +378,10 @@ public class Main {
     }
 
     void printArgumentsToFile(String... params) {
-        Path out = Paths.get(String.format("javac.%s.args",
+        Path tmpDir = Paths.get(System.getProperty("java.io.tmpdir"));
+        Path out = tmpDir.resolve(String.format("javac.%s.args",
                 new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime())));
-        String strOut = "";
+        String strOut = "# javac crashed, this report includes the parameters passed to it in the @-file format\n";
         try {
             try (Writer w = Files.newBufferedWriter(out)) {
                 for (String param : params) {

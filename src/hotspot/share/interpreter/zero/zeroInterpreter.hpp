@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,8 +22,8 @@
  *
  */
 
-#ifndef SHARE_INTERPRETER_ZEROINTERPRETER_HPP
-#define SHARE_INTERPRETER_ZEROINTERPRETER_HPP
+#ifndef SHARE_INTERPRETER_ZERO_ZEROINTERPRETER_HPP
+#define SHARE_INTERPRETER_ZERO_ZEROINTERPRETER_HPP
 
 #include "interpreter/abstractInterpreter.hpp"
 #include "utilities/macros.hpp"
@@ -36,7 +36,6 @@ class InterpreterCodelet;
 // of the c++ interpreter
 
 class ZeroInterpreter: public AbstractInterpreter {
-  friend class VMStructs;
  public:
   // Initialization/debugging
   static void       initialize_stub();
@@ -57,6 +56,7 @@ class ZeroInterpreter: public AbstractInterpreter {
 
   static address    return_entry  (TosState state, int length, Bytecodes::Code code);
   static address    deopt_entry   (TosState state, int length);
+  static address    cont_popframe_reexecute_entry();
 
   static address    remove_activation_entry() { return (address)-1; }
   static address    remove_activation_early_entry(TosState state);
@@ -68,13 +68,14 @@ class ZeroInterpreter: public AbstractInterpreter {
                          address   osr_buf,
                          TRAPS);
 
-  static address throw_NullPointerException_entry() { return NULL; }
-  static address throw_ArithmeticException_entry()  { return NULL; }
-  static address throw_StackOverflowError_entry()   { return NULL; }
+  static address throw_NullPointerException_entry() { return nullptr; }
+  static address throw_ArithmeticException_entry()  { return nullptr; }
+  static address throw_StackOverflowError_entry()   { return nullptr; }
+  static address cont_resume_interpreter_adapter()  { return nullptr; }
 
 # include "zeroInterpreter_zero.hpp"
 };
 
 #endif // ZERO
 
-#endif // SHARE_INTERPRETER_ZEROINTERPRETER_HPP
+#endif // SHARE_INTERPRETER_ZERO_ZEROINTERPRETER_HPP

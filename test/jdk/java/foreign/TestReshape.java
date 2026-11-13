@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,24 +23,28 @@
 
 /*
  * @test
- * @run testng TestReshape
+ * @run junit TestReshape
  */
 
-import jdk.incubator.foreign.MemoryLayout;
-import jdk.incubator.foreign.SequenceLayout;
-
+import java.lang.foreign.MemoryLayout;
+import java.lang.foreign.SequenceLayout;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.stream.LongStream;
 
-import jdk.incubator.foreign.ValueLayout;
-import org.testng.annotations.*;
-import static org.testng.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class TestReshape {
 
-    @Test(dataProvider = "shapes")
+    @ParameterizedTest
+    @MethodSource("shapes")
     public void testReshape(MemoryLayout layout, long[] expectedShape) {
         long flattenedSize = LongStream.of(expectedShape).reduce(1L, Math::multiplyExact);
         SequenceLayout seq_flattened = MemoryLayout.sequenceLayout(flattenedSize, layout);
@@ -48,50 +52,40 @@ public class TestReshape {
         for (long[] shape : new Shape(expectedShape)) {
             SequenceLayout seq_shaped = seq_flattened.reshape(shape);
             assertDimensions(seq_shaped, expectedShape);
-            assertEquals(seq_shaped.flatten(), seq_flattened);
+            assertEquals(seq_flattened, seq_shaped.flatten());
         }
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testInvalidReshape() {
         SequenceLayout seq = MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_INT);
-        seq.reshape(3, 2);
+        assertThrows(IllegalArgumentException.class, () -> {
+            seq.reshape(3, 2);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadReshapeInference() {
         SequenceLayout seq = MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_INT);
-        seq.reshape(-1, -1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            seq.reshape(-1, -1);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadReshapeParameterZero() {
         SequenceLayout seq = MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_INT);
-        seq.reshape(0, 4);
+        assertThrows(IllegalArgumentException.class, () -> {
+            seq.reshape(0, 4);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadReshapeParameterNegative() {
         SequenceLayout seq = MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_INT);
-        seq.reshape(-2, 2);
-    }
-
-    @Test(expectedExceptions = UnsupportedOperationException.class)
-    public void testReshapeOnUnboundSequence() {
-        SequenceLayout seq = MemoryLayout.sequenceLayout(ValueLayout.JAVA_INT);
-        seq.reshape(3, 2);
-    }
-
-    @Test(expectedExceptions = UnsupportedOperationException.class)
-    public void testFlattenOnUnboundSequence() {
-        SequenceLayout seq = MemoryLayout.sequenceLayout(ValueLayout.JAVA_INT);
-        seq.flatten();
-    }
-
-    @Test(expectedExceptions = UnsupportedOperationException.class)
-    public void testFlattenOnUnboundNestedSequence() {
-        SequenceLayout seq = MemoryLayout.sequenceLayout(4, MemoryLayout.sequenceLayout(ValueLayout.JAVA_INT));
-        seq.flatten();
+        assertThrows(IllegalArgumentException.class, () -> {
+            seq.reshape(-2, 2);
+        });
     }
 
     static void assertDimensions(SequenceLayout layout, long... dims) {
@@ -100,7 +94,7 @@ public class TestReshape {
             if (prev != null) {
                 layout = (SequenceLayout)prev.elementLayout();
             }
-            assertEquals(layout.elementCount().getAsLong(), dims[i]);
+            assertEquals(dims[i], layout.elementCount());
             prev = layout;
         }
     }
@@ -129,7 +123,6 @@ public class TestReshape {
             ValueLayout.JAVA_INT
     );
 
-    @DataProvider(name = "shapes")
     Object[][] shapes() {
         return new Object[][] {
                 { ValueLayout.JAVA_BYTE, new long[] { 256 } },

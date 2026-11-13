@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@
 
 #include "c1/c1_Instruction.hpp"
 #include "ci/ciExceptionHandler.hpp"
-#include "ci/ciMethod.hpp"
 #include "ci/ciStreams.hpp"
 #include "memory/allocation.hpp"
 
@@ -51,8 +50,8 @@ class XHandler: public CompilationResourceObj {
   // creation
   XHandler(ciExceptionHandler* desc)
     : _desc(desc)
-    , _entry_block(NULL)
-    , _entry_code(NULL)
+    , _entry_block(nullptr)
+    , _entry_code(nullptr)
     , _entry_pco(-1)
     , _phi_operand(-1)
     , _scope_count(-1)
@@ -137,7 +136,7 @@ class IRScope: public CompilationResourceObj {
  private:
   // hierarchy
   Compilation*  _compilation;                    // the current compilation
-  IRScope*      _caller;                         // the caller scope, or NULL
+  IRScope*      _caller;                         // the caller scope, or null
   int           _level;                          // the inlining level
   ciMethod*     _method;                         // the corresponding method
   IRScopeList   _callees;                        // the inlined method scopes
@@ -146,9 +145,10 @@ class IRScope: public CompilationResourceObj {
   XHandlers*    _xhandlers;                      // the exception handlers
   int           _number_of_locks;                // the number of monitor lock slots needed
   bool          _monitor_pairing_ok;             // the monitor pairing info
-  bool          _wrote_final;                    // has written final field
+  bool          _wrote_non_strict_final;         // has written non-strict final field
   bool          _wrote_fields;                   // has written fields
   bool          _wrote_volatile;                 // has written volatile field
+  bool          _wrote_stable;                   // has written @Stable field
   BlockBegin*   _start;                          // the start block, successsors are method entries
 
   ResourceBitMap _requires_phi_function;         // bit is set if phi functions at loop headers are necessary for a local variable
@@ -169,24 +169,26 @@ class IRScope: public CompilationResourceObj {
   BitMap&       requires_phi_function()          { return _requires_phi_function; }
 
   // hierarchy
-  bool          is_top_scope() const             { return _caller == NULL; }
+  bool          is_top_scope() const             { return _caller == nullptr; }
   void          add_callee(IRScope* callee)      { _callees.append(callee); }
   int           number_of_callees() const        { return _callees.length(); }
   IRScope*      callee_no(int i) const           { return _callees.at(i); }
 
   // accessors, graph
-  bool          is_valid() const                 { return start() != NULL; }
+  bool          is_valid() const                 { return start() != nullptr; }
   XHandlers*    xhandlers() const                { return _xhandlers; }
   int           number_of_locks() const          { return _number_of_locks; }
   void          set_min_number_of_locks(int n)   { if (n > _number_of_locks) _number_of_locks = n; }
   bool          monitor_pairing_ok() const       { return _monitor_pairing_ok; }
   BlockBegin*   start() const                    { return _start; }
-  void          set_wrote_final()                { _wrote_final = true; }
-  bool          wrote_final    () const          { return _wrote_final; }
+  void          set_wrote_non_strict_final()     { _wrote_non_strict_final = true; }
+  bool          wrote_non_strict_final() const   { return _wrote_non_strict_final; }
   void          set_wrote_fields()               { _wrote_fields = true; }
   bool          wrote_fields    () const         { return _wrote_fields; }
   void          set_wrote_volatile()             { _wrote_volatile = true; }
   bool          wrote_volatile    () const       { return _wrote_volatile; }
+  void          set_wrote_stable()               { _wrote_stable = true; }
+  bool          wrote_stable() const             { return _wrote_stable; }
 };
 
 
@@ -206,6 +208,7 @@ class IRScopeDebugInfo: public CompilationResourceObj {
   GrowableArray<ScopeValue*>*   _expressions;
   GrowableArray<MonitorValue*>* _monitors;
   IRScopeDebugInfo*             _caller;
+  bool                          _should_reexecute;
 
  public:
   IRScopeDebugInfo(IRScope*                      scope,
@@ -213,13 +216,15 @@ class IRScopeDebugInfo: public CompilationResourceObj {
                    GrowableArray<ScopeValue*>*   locals,
                    GrowableArray<ScopeValue*>*   expressions,
                    GrowableArray<MonitorValue*>* monitors,
-                   IRScopeDebugInfo*             caller):
+                   IRScopeDebugInfo*             caller,
+                   bool                          should_reexecute):
       _scope(scope)
     , _bci(bci)
     , _locals(locals)
     , _expressions(expressions)
     , _monitors(monitors)
-    , _caller(caller) {}
+    , _caller(caller)
+    , _should_reexecute(should_reexecute) {}
 
 
   IRScope*                      scope()       { return _scope;       }
@@ -232,8 +237,8 @@ class IRScopeDebugInfo: public CompilationResourceObj {
   //Whether we should reexecute this bytecode for deopt
   bool should_reexecute();
 
-  void record_debug_info(DebugInformationRecorder* recorder, int pc_offset, bool reexecute, bool is_method_handle_invoke = false) {
-    if (caller() != NULL) {
+  void record_debug_info(DebugInformationRecorder* recorder, int pc_offset, bool reexecute, bool maybe_return_as_fields = false) {
+    if (caller() != nullptr) {
       // Order is significant:  Must record caller first.
       caller()->record_debug_info(recorder, pc_offset, false/*reexecute*/);
     }
@@ -241,13 +246,17 @@ class IRScopeDebugInfo: public CompilationResourceObj {
     DebugToken* expvals = recorder->create_scope_values(expressions());
     DebugToken* monvals = recorder->create_monitor_values(monitors());
     // reexecute allowed only for the topmost frame
-    bool return_oop = false; // This flag will be ignored since it used only for C2 with escape analysis.
+    bool return_oop = false;
+    bool return_scalarized = false;
+    if (maybe_return_as_fields) {
+      return_oop = true;
+      return_scalarized = true;
+    }
     bool rethrow_exception = false;
-    bool is_opt_native = false;
     bool has_ea_local_in_scope = false;
     bool arg_escape = false;
     recorder->describe_scope(pc_offset, methodHandle(), scope()->method(), bci(),
-                             reexecute, rethrow_exception, is_method_handle_invoke, is_opt_native, return_oop,
+                             reexecute, rethrow_exception, return_oop, return_scalarized,
                              has_ea_local_in_scope, arg_escape, locvals, expvals, monvals);
   }
 };
@@ -261,7 +270,6 @@ class CodeEmitInfo: public CompilationResourceObj {
   XHandlers*        _exception_handlers;
   OopMap*           _oop_map;
   ValueStack*       _stack;                      // used by deoptimization (contains also monitors
-  bool              _is_method_handle_invoke;    // true if the associated call site is a MethodHandle call site.
   bool              _deoptimize_on_exception;
   bool              _force_reexecute;            // force the reexecute flag on, used for patching stub
 
@@ -274,7 +282,7 @@ class CodeEmitInfo: public CompilationResourceObj {
   CodeEmitInfo(ValueStack* stack, XHandlers* exception_handlers, bool deoptimize_on_exception = false);
 
   // make a copy
-  CodeEmitInfo(CodeEmitInfo* info, ValueStack* stack = NULL);
+  CodeEmitInfo(CodeEmitInfo* info, ValueStack* stack = nullptr);
 
   // accessors
   OopMap* oop_map()                              { return _oop_map; }
@@ -285,10 +293,7 @@ class CodeEmitInfo: public CompilationResourceObj {
   bool deoptimize_on_exception() const           { return _deoptimize_on_exception; }
 
   void add_register_oop(LIR_Opr opr);
-  void record_debug_info(DebugInformationRecorder* recorder, int pc_offset);
-
-  bool     is_method_handle_invoke() const { return _is_method_handle_invoke;     }
-  void set_is_method_handle_invoke(bool x) {        _is_method_handle_invoke = x; }
+  void record_debug_info(DebugInformationRecorder* recorder, int pc_offset, bool maybe_return_as_fields = false);
 
   bool     force_reexecute() const         { return _force_reexecute;             }
   void     set_force_reexecute()           { _force_reexecute = true;             }
@@ -332,7 +337,7 @@ class IR: public CompilationResourceObj {
 
   // The linear-scan order and the code emission order are equal, but
   // this may change in future
-  BlockList* linear_scan_order() {  assert(_code != NULL, "not computed"); return _code; }
+  BlockList* linear_scan_order() {  assert(_code != nullptr, "not computed"); return _code; }
 
   // iteration
   void iterate_preorder   (BlockClosure* closure);
@@ -342,7 +347,10 @@ class IR: public CompilationResourceObj {
   // debugging
   static void print(BlockBegin* start, bool cfg_only, bool live_only = false) PRODUCT_RETURN;
   void print(bool cfg_only, bool live_only = false)                           PRODUCT_RETURN;
-  void verify()                                                               PRODUCT_RETURN;
+
+  void expand_with_neighborhood(BlockList& blocks)                          NOT_DEBUG_RETURN;
+  void verify_local(BlockList&)                                             NOT_DEBUG_RETURN;
+  void verify()                                                             NOT_DEBUG_RETURN;
 };
 
 

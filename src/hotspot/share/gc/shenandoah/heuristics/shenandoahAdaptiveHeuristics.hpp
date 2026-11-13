@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2018, 2019, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2018, 2026, Red Hat, Inc. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,106 +27,102 @@
 #define SHARE_GC_SHENANDOAH_HEURISTICS_SHENANDOAHADAPTIVEHEURISTICS_HPP
 
 #include "gc/shenandoah/heuristics/shenandoahHeuristics.hpp"
-#include "gc/shenandoah/shenandoahPhaseTimings.hpp"
+#include "gc/shenandoah/shenandoahAllocRate.hpp"
+#include "gc/shenandoah/shenandoahCycleDuration.hpp"
 #include "utilities/numberSeq.hpp"
 
-class ShenandoahAllocationRate : public CHeapObj<mtGC> {
- public:
-  explicit ShenandoahAllocationRate();
-  void allocation_counter_reset();
 
-  double sample(size_t allocated);
-
-  double instantaneous_rate(size_t allocated) const;
-  double upper_bound(double sds) const;
-  bool is_spiking(double rate, double threshold) const;
-
- private:
-
-  double instantaneous_rate(double time, size_t allocated) const;
-
-  double _last_sample_time;
-  size_t _last_sample_value;
-  double _interval_sec;
-  TruncatedSeq _rate;
-  TruncatedSeq _rate_avg;
-};
-
+/*
+ * The adaptive heuristic tracks the allocation behavior and average cycle
+ * time of the application. It attempts to start a cycle with enough time
+ * to complete before the available memory is exhausted. It errors on the
+ * side of starting cycles early to avoid allocation failures.
+ *
+ * This heuristic limits the number of regions for evacuation such that the
+ * evacuation reserve is respected. This helps it avoid allocation failures
+ * during evacuation. It preferentially selects regions with the most garbage.
+ */
 class ShenandoahAdaptiveHeuristics : public ShenandoahHeuristics {
 public:
-  ShenandoahAdaptiveHeuristics();
+  explicit ShenandoahAdaptiveHeuristics(ShenandoahSpaceInfo* space_info);
 
-  virtual ~ShenandoahAdaptiveHeuristics();
+  void initialize() override;
 
-  virtual void choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,
-                                                     RegionData* data, size_t size,
-                                                     size_t actual_free);
+  void post_initialize() override;
 
-  void record_cycle_start();
-  void record_success_concurrent();
-  void record_success_degenerated();
-  void record_success_full();
+  // At the end of GC(N), we idle GC until necessary to start the next GC.  Compute the threshold of memory that can be allocated
+  // before we need to start the next GC.
+  void start_idle_span() override;
 
-  virtual bool should_start_gc();
+  void record_concurrent_completion() override;
 
-  virtual const char* name()     { return "Adaptive"; }
-  virtual bool is_diagnostic()   { return false; }
-  virtual bool is_experimental() { return false; }
+  bool should_start_gc() override;
+
+  // In preparation for a span during which GC will be idle, compute the headroom adjustment that will be used to
+  // detect when GC needs to trigger.
+  void compute_headroom_adjustment() override;
 
  private:
-  // These are used to adjust the margin of error and the spike threshold
-  // in response to GC cycle outcomes. These values are shared, but the
-  // margin of error and spike threshold trend in opposite directions.
-  const static double FULL_PENALTY_SD;
-  const static double DEGENERATE_PENALTY_SD;
+  void adjust_margin_of_error(double amount);
 
-  const static double MINIMUM_CONFIDENCE;
-  const static double MAXIMUM_CONFIDENCE;
+  // Returns number of bytes that can be allocated before we need to trigger next GC, given available in bytes.
+  size_t allocatable(size_t available) const {
+    return available > _headroom_adjustment ? available - _headroom_adjustment : 0;
+  }
 
-  const static double LOWEST_EXPECTED_AVAILABLE_AT_END;
-  const static double HIGHEST_EXPECTED_AVAILABLE_AT_END;
+protected:
+  void adjust_penalty(intx step) override;
+  void choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,
+                                             RegionData* data, size_t size,
+                                             size_t actual_free) override;
 
-  friend class ShenandoahAllocationRate;
+
+  ShenandoahCycleDuration _cycles;
 
   // Used to record the last trigger that signaled to start a GC.
-  // This itself is used to decide whether or not to adjust the margin of
-  // error for the average cycle time and allocation rate or the allocation
-  // spike detection threshold.
+  // This itself is used to decide whether to adjust the margin of
+  // error for the average cycle time.
   enum Trigger {
-    SPIKE, RATE, OTHER
+    RATE, OTHER
   };
-
-  void adjust_last_trigger_parameters(double amount);
-  void adjust_margin_of_error(double amount);
-  void adjust_spike_threshold(double amount);
-
-  ShenandoahAllocationRate _allocation_rate;
 
   // The margin of error expressed in standard deviations to add to our
   // average cycle time and allocation rate. As this value increases we
-  // tend to over estimate the rate at which mutators will deplete the
+  // tend to overestimate the rate at which mutators will deplete the
   // heap. In other words, erring on the side of caution will trigger more
   // concurrent GCs.
   double _margin_of_error_sd;
 
-  // The allocation spike threshold is expressed in standard deviations.
-  // If the standard deviation of the most recent sample of the allocation
-  // rate exceeds this threshold, a GC cycle is started. As this value
-  // decreases the sensitivity to allocation spikes increases. In other
-  // words, lowering the spike threshold will tend to increase the number
-  // of concurrent GCs.
-  double _spike_threshold_sd;
-
   // Remember which trigger is responsible for the last GC cycle. When the
   // outcome of the cycle is evaluated we will adjust the parameters for the
-  // corresponding triggers. Note that successful outcomes will raise
-  // the spike threshold and lower the margin of error.
+  // corresponding triggers.
   Trigger _last_trigger;
 
   // Keep track of the available memory at the end of a GC cycle. This
   // establishes what is 'normal' for the application and is used as a
   // source of feedback to adjust trigger parameters.
   TruncatedSeq _available;
+
+  // bytes of headroom at which we should trigger GC
+  size_t _headroom_adjustment;
+
+  // A conservative minimum threshold of free space that we'll try to maintain when possible.
+  // For example, we might trigger a concurrent gc if we are likely to drop below
+  // this threshold, or we might consider this when dynamically resizing generations
+  // in the generational case. Controlled by global flag ShenandoahMinFreeThreshold.
+  static size_t min_free_threshold(size_t capacity);
+
+  void accept_trigger_with_type(Trigger trigger_type) {
+    _last_trigger = trigger_type;
+    accept_trigger();
+  }
+
+  bool trigger_learning(size_t available, size_t capacity);
+  bool trigger_average_allocation_rate(const ShenandoahAnticipatedConsumption& rate, size_t allocatable_bytes);
+  bool trigger_accelerating_allocation_rate(const ShenandoahAnticipatedConsumption& rate, size_t allocatable_bytes);
+
+private:
+  void maybe_log_rate_trigger_parameters(const ShenandoahAnticipatedConsumption & consumption, size_t allocatable_bytes) const;
 };
 
 #endif // SHARE_GC_SHENANDOAH_HEURISTICS_SHENANDOAHADAPTIVEHEURISTICS_HPP

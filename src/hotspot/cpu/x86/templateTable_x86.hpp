@@ -25,12 +25,9 @@
 #ifndef CPU_X86_TEMPLATETABLE_X86_HPP
 #define CPU_X86_TEMPLATETABLE_X86_HPP
 
-  static void prepare_invoke(int byte_no,
-                             Register method,         // linked method (or i-klass)
-                             Register index = noreg,  // itable index, MethodType, etc.
-                             Register recv  = noreg,  // if caller wants to see it
-                             Register flags = noreg   // if caller wants to test it
-                             );
+  static void prepare_invoke(Register cache,
+                             Register recv,
+                             Register flags);
   static void invokevirtual_helper(Register index, Register recv,
                                    Register flags);
   static void volatile_barrier(Assembler::Membar_mask_bits order_constraint);
@@ -40,7 +37,9 @@
   static void index_check_without_pop(Register array, Register index);
 
   static void putfield_or_static_helper(int byte_no, bool is_static, RewriteControl rc,
-                                        Register obj, Register off, Register flags);
-  static void fast_storefield_helper(Address field, Register rax);
+                                        Register obj, Register off, Register tos_state, Register flags);
+  static void fast_storefield_helper(Address field, Register obj, Register flags);
+
+  static void invoke_is_substitutable(Register aobj, Register bobj, Label& is_subst, Label& not_subst);
 
 #endif // CPU_X86_TEMPLATETABLE_X86_HPP

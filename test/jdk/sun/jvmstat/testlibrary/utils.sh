@@ -40,7 +40,7 @@ setup() {
 
     OS=`uname -s`
     case ${OS} in
-    Windows_* | CYGWIN*)
+    Windows_* | CYGWIN* | MSYS* | MINGW*)
         PS=";"
         FS="\\"
         ;;
@@ -54,7 +54,7 @@ setup() {
 verify_os() {
     OS=`uname -s`
     case ${OS} in
-    Windows_95 | Windows_98 | Windows_ME | CYGWIN* )
+    Windows_95 | Windows_98 | Windows_ME | CYGWIN* | MSYS* | MINGW* )
         echo "Test bypassed: jvmstat feature not supported on ${OS}"
         exit 0
         ;;
@@ -178,7 +178,7 @@ kill_proc_common() {
         # check if it's still hanging around
         if [ $? -eq 0 ]
         then
-            # it's still lingering, now it it hard
+            # it's still lingering, now hit it hard
             kill -KILL ${kpid} 2>/dev/null
             if [ $? -ne 0 ]
             then

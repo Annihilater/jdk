@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -413,13 +413,13 @@ public interface ReferenceType
     /**
      * Returns a list containing each {@link Method}
      * declared or inherited by this type. Methods from superclasses
-     * or superinterfaces that that have been hidden or overridden
+     * or superinterfaces that have been hidden or overridden
      * are not included.
      * <p>
      * Note that despite this exclusion, multiple inherited methods
      * with the same signature can be present in the returned list, but
      * at most one can be a member of a {@link ClassType}.
-     * See JLS section 8.4.6 for details.
+     * See JLS section 8.4.8 for details.
      * <p>
      * For arrays ({@link ArrayType}) and primitive classes, the returned
      * list is always empty.
@@ -454,7 +454,7 @@ public interface ReferenceType
      * find overloaded methods.
      * <p>
      * Overridden and hidden methods are not included.
-     * See JLS (8.4.6) for details.
+     * See JLS (8.4.8) for details.
      * <p>
      * For arrays ({@link ArrayType}) and primitive classes, the returned
      * list is always empty.
@@ -478,7 +478,7 @@ public interface ReferenceType
      * <li><code>(IIII)Z</code>
      * </ul>
      * This method follows the inheritance rules specified
-     * in the JLS (8.4.6) to determine visibility.
+     * in the JLS (8.4.8) to determine visibility.
      * <p>
      * At most one method in the list is a concrete method and a
      * component of {@link ClassType}; any other methods in the list
@@ -519,7 +519,13 @@ public interface ReferenceType
      * The Field must be valid for this type;
      * that is, it must be declared in this type, a superclass, a
      * superinterface, or an implemented interface.
-     *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     * This method does not prevent a
+     * {@linkplain java.lang.reflect.Field#isStrictInit() strictly-initialized field}
+     * from being read before it has been initialized.
+     *      </div>
+     * </div>
      * @param field the field containing the requested value
      * @return the {@link Value} of the instance field.
      * @throws java.lang.IllegalArgumentException if the field is not valid for
@@ -533,6 +539,13 @@ public interface ReferenceType
      * The Fields must be valid for this type;
      * that is, they must be declared in this type, a superclass, a
      * superinterface, or an implemented interface.
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     * This method does not prevent a
+     * {@linkplain java.lang.reflect.Field#isStrictInit() strictly-initialized field}
+     * from being read before it has been initialized.
+     *      </div>
+     * </div>
      *
      * @param fields a list of {@link Field} objects containing the
      * requested values.

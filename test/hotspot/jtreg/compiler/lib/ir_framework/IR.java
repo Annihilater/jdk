@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,8 @@
 
 package compiler.lib.ir_framework;
 
-import compiler.lib.ir_framework.driver.IRViolationException;
+import compiler.lib.ir_framework.driver.irmatching.IRViolationException;
+import compiler.lib.ir_framework.shared.TestFormatException;
 
 import java.lang.annotation.Repeatable;
 import java.lang.annotation.Retention;
@@ -54,12 +55,12 @@ import java.lang.annotation.RetentionPolicy;
  * For any other flag specified either by user code (e.g. {@link Scenario#Scenario(int, String...)},
  * {@link TestFramework#runWithFlags(String...) etc.} or as part of the JTreg whitelist, IR verification is applied.
  * To restrict the application of IR rules when certain flags are present that could change the IR, each {@code @IR}
- * annotation can specify additional preconditions on the allowed test VM flags that must hold when an IR rule is applied.
+ * annotation can specify additional preconditions on the allowed Test VM flags that must hold when an IR rule is applied.
  * If the specified preconditions fail, then the framework does not apply the IR rule. These preconditions can be
- * set with {@link #applyIf()}, {@link #applyIfNot()}, {@link #applyIfAnd()}, or {@link #applyIfOr()}.
+ * set with {@link #applyIf()}, {@link #applyIfAnd()}, or {@link #applyIfOr()}.
  * <p>
- * Examples on how to write tests with IR rules can be found in {@link jdk.test.lib.hotspot.ir_framework.examples.IRExample}
- * and also as part of the internal testing in {@link jdk.test.lib.hotspot.ir_framework.tests.TestIRMatching}.
+ * Examples on how to write tests with IR rules can be found in {@link ir_framework.examples.IRExample}
+ * and also as part of the internal testing in {@link ir_framework.tests.TestIRMatching}.
  *
  * @see Test
  * @see IRNode
@@ -85,6 +86,15 @@ public @interface IR {
     String[] counts() default {};
 
     /**
+     * Define a list of {@link CompilePhase} enums to apply the IR rule constraint attributes {@link #failOn()} and/or
+     * {@link #counts()} on. By default, IR matching is applied on the predefined default phase of an IR node
+     * placeholder string as defined in {@link IRNode}. For non-IR node constraints (i.e. user-defined regexes with no
+     * definition in {@link IRNode}), a compile phase must explicitly be set. Otherwise, a {@link TestFormatException}
+     * is reported.
+     */
+    CompilePhase[] phase() default { CompilePhase.DEFAULT };
+
+    /**
      * Define a single VM flag precondition which <i>must hold</i> when applying the IR rule. If the VM flag precondition
      * fails, then the IR rule is not applied. This is useful if a commonly used flag alters the IR in such a way that an IR rule
      * would fail.
@@ -93,24 +103,10 @@ public @interface IR {
      * with the type of the VM flag. A number based flag value can be proceeded with an additional comparator
      * ({@code =, !=, <, <=, =>, >}) where the equality operator is optional (default if no comparator is specified).
      * <p>
-     * This is the inverse of {@link #applyIfNot()}. For multiple preconditions, use {@link #applyIfAnd()} or
-     * {@link #applyIfOr()} depending on the use case.
+     * For multiple preconditions, use {@link #applyIfAnd()} or {@link #applyIfOr()} depending on the use case.
      */
     String[] applyIf() default {};
 
-    /**
-     * Define a single VM flag precondition which <i>must <b>not</b> hold</i> when applying the IR rule. If, however,
-     * the VM flag precondition holds, then the IR rule is not applied. This could also be defined as <i>negative</i>
-     * precondition. This is useful if a commonly used flag alters the IR in such a way that an IR rule would fail.
-     * <p>
-     * The precondition is a (flag, value) string pair where the flag must be a valid VM flag and the value must conform
-     * with the type of the VM flag. A number based flag value can be proceeded with an additional comparator
-     * ({@code =, !=, <, <=, =>, >}) where the equality operator is optional (default if no comparator is specified).
-     * <p>
-     * This is the inverse of {@link #applyIf()}. For multiple preconditions, use {@link #applyIfAnd()} or
-     * {@link #applyIfOr()} depending on the use case.
-     */
-    String[] applyIfNot() default {};
 
     /**
      * Define a list of at least two VM flag precondition which <i><b>all</b> must hold</i> when applying the IR rule.
@@ -122,8 +118,7 @@ public @interface IR {
      * with the type of the VM flag. A number based flag value can be proceeded with an additional comparator
      * ({@code =, !=, <, <=, =>, >}) where the equality operator is optional (default if no comparator is specified).
      * <p>
-     * Use  {@link #applyIfOr()} for disjunction and for single precondition constraints use {@link #applyIf()} or
-     * {@link #applyIfNot()} depending on the use case.
+     * Use  {@link #applyIfOr()} for disjunction and for single precondition constraints use {@link #applyIf()}.
      */
     String[] applyIfAnd() default {};
 
@@ -137,8 +132,49 @@ public @interface IR {
      * with the type of the VM flag. A number based flag value can be proceeded with an additional comparator
      * ({@code =, !=, <, <=, =>, >}) where the equality operator is optional (default if no comparator is specified).
      * <p>
-     * Use  {@link #applyIfAnd()} for conjunction and for single precondition constraints use {@link #applyIf()} or
-     * {@link #applyIfNot()} depending on the use case.
+     * Use  {@link #applyIfAnd()} for conjunction and for single precondition constraints use {@link #applyIf()}.
      */
     String[] applyIfOr() default {};
+
+    /**
+     * Accepts a single pair composed of a platform string followed by a true/false
+     * value where a true value necessitates that we are currently testing on that platform and vice versa.
+     * IR checks are enforced only if the specified platform constraint is met.
+     */
+    String[] applyIfPlatform() default {};
+
+    /**
+     * Accepts a list of pairs where each pair is composed of a platform string followed by a true/false
+     * value where a true value necessitates that we are currently testing on that platform and vice versa.
+     * IR checks are enforced only if all the specified platform constraints are met.
+     */
+    String[] applyIfPlatformAnd() default {};
+
+    /**
+     * Accepts a list of pairs where each pair is composed of a platform string followed by a true/false
+     * value where a true value necessitates that we are currently testing on that platform and vice versa.
+     * IR checks are enforced if any of the specified platform constraints are met.
+     */
+    String[] applyIfPlatformOr() default {};
+
+    /**
+     * Accepts a single feature pair which is composed of CPU feature string followed by a true/false
+     * value where a true value necessitates existence of CPU feature and vice versa.
+     * IR verifications checks are enforced only if the specified feature constraint is met.
+     */
+    String[] applyIfCPUFeature() default {};
+
+    /**
+     * Accepts a list of feature pairs where each pair is composed of target feature string followed by a true/false
+     * value where a true value necessitates existence of target feature and vice versa.
+     * IR verifications checks are enforced only if all the specified feature constraints are met.
+     */
+    String[] applyIfCPUFeatureAnd() default {};
+
+     /**
+     * Accepts a list of feature pairs where each pair is composed of target feature string followed by a true/false
+     * value where a true value necessitates existence of target feature and vice versa.
+     * IR verifications checks are enforced if any of the specified feature constraint is met.
+     */
+    String[] applyIfCPUFeatureOr() default {};
 }

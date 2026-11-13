@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,7 +34,6 @@ import java.awt.Graphics2D;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.font.FontRenderContext;
-import java.awt.Graphics;
 import java.awt.GraphicsConfiguration;
 import java.awt.Image;
 import java.awt.Paint;
@@ -47,7 +46,6 @@ import java.awt.RenderingHints.Key;
 import java.awt.font.GlyphVector;
 
 import java.awt.geom.AffineTransform;
-import java.awt.geom.Rectangle2D;
 import java.awt.geom.NoninvertibleTransformException;
 import java.awt.image.BufferedImage;
 import java.awt.image.BufferedImageOp;
@@ -97,6 +95,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
         mGraphics = graphics;
     }
 
+    @Override
     public PrinterJob getPrinterJob() {
         return mPrinterJob;
     }
@@ -104,6 +103,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
     /**
      * Returns the device configuration associated with this Graphics2D.
      */
+    @Override
     public GraphicsConfiguration getDeviceConfiguration() {
         return ((RasterPrinterJob)mPrinterJob).getPrinterGraphicsConfig();
     }
@@ -117,6 +117,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      *                       this graphics context.
      * @since      1.0
      */
+    @Override
     public Graphics create() {
         return new ProxyGraphics2D((Graphics2D) mGraphics.create(),
                                    mPrinterJob);
@@ -134,6 +135,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param  y   the <i>y</i> coordinate.
      * @since   1.0
      */
+    @Override
     public void translate(int x, int y) {
         mGraphics.translate(x, y);
     }
@@ -149,6 +151,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      *          [   0    0    1   ]
      * </pre>
      */
+    @Override
     public void translate(double tx, double ty) {
         mGraphics.translate(tx, ty);
     }
@@ -167,6 +170,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * x axis toward the positive y axis.
      * @param theta The angle of rotation in radians.
      */
+    @Override
     public void rotate(double theta) {
         mGraphics.rotate(theta);
     }
@@ -186,6 +190,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param x The x coordinate of the origin of the rotation
      * @param y The x coordinate of the origin of the rotation
      */
+    @Override
     public void rotate(double theta, double x, double y) {
         mGraphics.rotate(theta, x, y);
     }
@@ -201,6 +206,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      *          [   0    0    1   ]
      * </pre>
      */
+    @Override
     public void scale(double sx, double sy) {
         mGraphics.scale(sx, sy);
     }
@@ -220,6 +226,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param shy The factor by which coordinates are shifted towards the
      * positive Y axis direction according to their X coordinate
      */
+    @Override
     public void shear(double shx, double shy) {
         mGraphics.shear(shx, shy);
     }
@@ -231,6 +238,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see       java.awt.Graphics#setColor
      * @since     1.0
      */
+    @Override
     public Color getColor() {
         return mGraphics.getColor();
     }
@@ -244,6 +252,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see       java.awt.Graphics#getColor
      * @since     1.0
      */
+    @Override
     public void setColor(Color c) {
         mGraphics.setColor(c);
     }
@@ -256,6 +265,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * overwrite the destination with the current color.
      * @since   1.0
      */
+    @Override
     public void setPaintMode() {
         mGraphics.setPaintMode();
     }
@@ -276,6 +286,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param     c1 the XOR alternation color
      * @since     1.0
      */
+    @Override
     public void setXORMode(Color c1) {
         mGraphics.setXORMode(c1);
     }
@@ -287,6 +298,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see       java.awt.Graphics#setFont
      * @since     1.0
      */
+    @Override
     public Font getFont() {
         return mGraphics.getFont();
     }
@@ -302,6 +314,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see     java.awt.Graphics#drawBytes(byte[], int, int, int, int)
      * @since   1.0
     */
+    @Override
     public void setFont(Font font) {
         mGraphics.setFont(font);
     }
@@ -315,6 +328,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see       java.awt.Graphics#getFontMetrics()
      * @since     1.0
      */
+    @Override
     public FontMetrics getFontMetrics(Font f) {
         return mGraphics.getFontMetrics(f);
     }
@@ -323,6 +337,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
     * Get the rendering context of the font
     * within this Graphics2D context.
     */
+    @Override
     public FontRenderContext getFontRenderContext() {
         return mGraphics.getFontRenderContext();
     }
@@ -338,6 +353,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#setClip(Shape)
      * @since       1.1
      */
+    @Override
     public Rectangle getClipBounds() {
         return mGraphics.getClipBounds();
     }
@@ -357,6 +373,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #setClip(int, int, int, int)
      * @see #setClip(Shape)
      */
+    @Override
     public void clipRect(int x, int y, int width, int height) {
         mGraphics.clipRect(x, y, width, height);
     }
@@ -374,6 +391,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#setClip(Shape)
      * @since       1.1
      */
+    @Override
     public void setClip(int x, int y, int width, int height) {
         mGraphics.setClip(x, y, width, height);
     }
@@ -388,6 +406,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#setClip(Shape)
      * @since       1.1
      */
+    @Override
     public Shape getClip() {
         return mGraphics.getClip();
     }
@@ -406,6 +425,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#setClip(int, int, int, int)
      * @since       1.1
      */
+    @Override
     public void setClip(Shape clip) {
         mGraphics.setClip(clip);
     }
@@ -431,6 +451,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param       dy the vertical distance to copy the pixels.
      * @since       1.0
      */
+    @Override
     public void copyArea(int x, int y, int width, int height,
                          int dx, int dy) {
         mGraphics.copyArea(x, y, width, height, dx, dy);
@@ -446,6 +467,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param   y2  the second point's <i>y</i> coordinate.
      * @since   1.0
      */
+    @Override
     public void drawLine(int x1, int y1, int x2, int y2) {
         mGraphics.drawLine(x1, y1, x2, y2);
     }
@@ -471,6 +493,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see           java.awt.Graphics#clearRect
      * @since         1.0
      */
+    @Override
     public void fillRect(int x, int y, int width, int height) {
         mGraphics.fillRect(x, y, width, height);
     }
@@ -495,6 +518,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#setXORMode(java.awt.Color)
      * @since       1.0
      */
+    @Override
     public void clearRect(int x, int y, int width, int height) {
         mGraphics.clearRect(x, y, width, height);
     }
@@ -516,6 +540,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see        java.awt.Graphics#fillRoundRect
      * @since      1.0
      */
+    @Override
     public void drawRoundRect(int x, int y, int width, int height,
                               int arcWidth, int arcHeight) {
         mGraphics.drawRoundRect(x, y, width, height, arcWidth, arcHeight);
@@ -538,6 +563,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#drawRoundRect
      * @since       1.0
      */
+    @Override
     public void fillRoundRect(int x, int y, int width, int height,
                                        int arcWidth, int arcHeight) {
         mGraphics.fillRoundRect(x, y, width, height, arcWidth, arcHeight);
@@ -561,6 +587,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#fillOval
      * @since       1.0
      */
+    @Override
     public void drawOval(int x, int y, int width, int height) {
         mGraphics.drawOval(x, y, width, height);
     }
@@ -577,6 +604,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#drawOval
      * @since       1.0
      */
+    @Override
     public void fillOval(int x, int y, int width, int height) {
         mGraphics.fillOval(x, y, width, height);
     }
@@ -611,6 +639,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#fillArc
      * @since       1.0
      */
+    @Override
     public void drawArc(int x, int y, int width, int height,
                                  int startAngle, int arcAngle) {
         mGraphics.drawArc(x, y, width, height, startAngle, arcAngle);
@@ -645,6 +674,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#drawArc
      * @since       1.0
      */
+    @Override
     public void fillArc(int x, int y, int width, int height,
                         int startAngle, int arcAngle) {
         mGraphics.fillArc(x, y, width, height, startAngle, arcAngle);
@@ -662,6 +692,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#drawPolygon(int[], int[], int)
      * @since       1.1
      */
+    @Override
     public void drawPolyline(int[] xPoints, int[] yPoints,
                              int nPoints) {
         mGraphics.drawPolyline(xPoints, yPoints, nPoints);
@@ -680,13 +711,14 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * 1&nbsp;&le;&nbsp;<i>i</i>&nbsp;&le;&nbsp;{@code nPoints}.
      * The figure is automatically closed by drawing a line connecting
      * the final point to the first point, if those points are different.
-     * @param        xPoints   a an array of {@code x} coordinates.
-     * @param        yPoints   a an array of {@code y} coordinates.
-     * @param        nPoints   a the total number of points.
+     * @param        xPoints   an array of {@code x} coordinates.
+     * @param        yPoints   an array of {@code y} coordinates.
+     * @param        nPoints   the total number of points.
      * @see          java.awt.Graphics#fillPolygon
      * @see          java.awt.Graphics#drawPolyline
      * @since        1.0
      */
+    @Override
     public void drawPolygon(int[] xPoints, int[] yPoints,
                             int nPoints) {
         mGraphics.drawPolygon(xPoints, yPoints, nPoints);
@@ -707,12 +739,13 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * <p>
      * The area inside the polygon is defined using an
      * even-odd fill rule, also known as the alternating rule.
-     * @param        xPoints   a an array of {@code x} coordinates.
-     * @param        yPoints   a an array of {@code y} coordinates.
-     * @param        nPoints   a the total number of points.
+     * @param        xPoints   an array of {@code x} coordinates.
+     * @param        yPoints   an array of {@code y} coordinates.
+     * @param        nPoints   the total number of points.
      * @see          java.awt.Graphics#drawPolygon(int[], int[], int)
      * @since        1.0
      */
+    @Override
     public void fillPolygon(int[] xPoints, int[] yPoints,
                             int nPoints) {
         mGraphics.fillPolygon(xPoints, yPoints, nPoints);
@@ -730,6 +763,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#drawChars
      * @since       1.0
      */
+    @Override
     public void drawString(String str, int x, int y) {
         mGraphics.drawString(str, x, y);
     }
@@ -754,6 +788,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #setComposite
      * @see #setClip
      */
+    @Override
     public void drawString(AttributedCharacterIterator iterator,
                                     int x, int y) {
         mGraphics.drawString(iterator, x, y);
@@ -779,6 +814,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #setComposite
      * @see #setClip
      */
+    @Override
     public void drawString(AttributedCharacterIterator iterator,
                                     float x, float y) {
         mGraphics.drawString(iterator, x, y);
@@ -809,6 +845,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see      java.awt.image.ImageObserver#imageUpdate(java.awt.Image, int, int, int, int, int)
      * @since    1.0
      */
+    @Override
     public boolean drawImage(Image img, int x, int y,
                              ImageObserver observer) {
 
@@ -849,6 +886,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see      java.awt.image.ImageObserver#imageUpdate(java.awt.Image, int, int, int, int, int)
      * @since    1.0
      */
+    @Override
     public boolean drawImage(Image img, int x, int y,
                              int width, int height,
                              ImageObserver observer) {
@@ -887,6 +925,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see      java.awt.image.ImageObserver#imageUpdate(java.awt.Image, int, int, int, int, int)
      * @since    1.0
      */
+    @Override
     public boolean drawImage(Image img, int x, int y,
                              Color bgcolor,
                              ImageObserver observer) {
@@ -946,6 +985,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see      java.awt.image.ImageObserver#imageUpdate(java.awt.Image, int, int, int, int, int)
      * @since    1.0
      */
+    @Override
     public boolean drawImage(Image img, int x, int y,
                              int width, int height,
                              Color bgcolor,
@@ -1015,6 +1055,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.image.ImageObserver#imageUpdate(java.awt.Image, int, int, int, int, int)
      * @since       1.1
      */
+    @Override
     public boolean drawImage(Image img,
                                       int dx1, int dy1, int dx2, int dy2,
                                       int sx1, int sy1, int sx2, int sy2,
@@ -1077,6 +1118,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.image.ImageObserver#imageUpdate(java.awt.Image, int, int, int, int, int)
      * @since       1.1
      */
+    @Override
     public boolean drawImage(Image img,
                              int dx1, int dy1, int dx2, int dy2,
                              int sx1, int sy1, int sx2, int sy2,
@@ -1197,6 +1239,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public void drawRenderedImage(RenderedImage img,
                                   AffineTransform xform) {
         mGraphics.drawRenderedImage(img, xform);
@@ -1204,6 +1247,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
 
 
 
+    @Override
     public void drawRenderableImage(RenderableImage img,
                                     AffineTransform xform) {
 
@@ -1257,6 +1301,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see         java.awt.Graphics#create
      * @since       1.0
      */
+    @Override
     public void dispose() {
         mGraphics.dispose();
     }
@@ -1264,6 +1309,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
     /**
      * Empty finalizer as no clean up needed here.
      */
+    @Override
     @SuppressWarnings("removal")
     public void finalize() {
     }
@@ -1285,6 +1331,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #setClip
      * @see #setComposite
      */
+    @Override
     public void draw(Shape s) {
         mGraphics.draw(s);
     }
@@ -1309,6 +1356,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public boolean drawImage(Image img,
                              AffineTransform xform,
                              ImageObserver obs) {
@@ -1333,6 +1381,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public void drawImage(BufferedImage img,
                           BufferedImageOp op,
                           int x,
@@ -1357,6 +1406,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public void drawString(String str,
                            float x,
                            float y) {
@@ -1378,6 +1428,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public void drawGlyphVector(GlyphVector g,
                                 float x,
                                 float y) {
@@ -1396,6 +1447,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public void fill(Shape s) {
         mGraphics.fill(s);
     }
@@ -1418,6 +1470,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #clip
      * @see #setClip
      */
+    @Override
     public boolean hit(Rectangle rect,
                        Shape s,
                        boolean onStroke) {
@@ -1435,6 +1488,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see java.awt.Graphics#setPaintMode
      * @see java.awt.AlphaComposite
      */
+    @Override
     public void setComposite(Composite comp) {
         mGraphics.setComposite(comp);
     }
@@ -1448,6 +1502,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see java.awt.GradientPaint
      * @see java.awt.TexturePaint
      */
+    @Override
     public void setPaint(Paint paint) {
         mGraphics.setPaint(paint);
     }
@@ -1458,6 +1513,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * the rendering process.
      * @see java.awt.BasicStroke
      */
+    @Override
     public void setStroke(Stroke s) {
         mGraphics.setStroke(s);
     }
@@ -1471,6 +1527,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * hint category.
      * @see RenderingHints
      */
+    @Override
     public void setRenderingHint(Key hintCategory, Object hintValue) {
         mGraphics.setRenderingHint(hintCategory, hintValue);
     }
@@ -1481,6 +1538,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @return The preferences for rendering algorithms.
      * @see RenderingHints
      */
+    @Override
     public Object getRenderingHint(Key hintCategory) {
         return mGraphics.getRenderingHint(hintCategory);
     }
@@ -1492,6 +1550,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param hints The rendering hints to be set
      * @see RenderingHints
      */
+    @Override
     public void setRenderingHints(Map<?,?> hints) {
         mGraphics.setRenderingHints(hints);
     }
@@ -1503,6 +1562,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @param hints The rendering hints to be set
      * @see RenderingHints
      */
+    @Override
     public void addRenderingHints(Map<?,?> hints) {
         mGraphics.addRenderingHints(hints);
     }
@@ -1513,6 +1573,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * overall time/quality trade-off in the rendering process.
      * @see RenderingHints
      */
+    @Override
     public RenderingHints getRenderingHints() {
         return mGraphics.getRenderingHints();
     }
@@ -1520,7 +1581,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
     /**
      * Composes a Transform object with the transform in this
      * Graphics2D according to the rule last-specified-first-applied.
-     * If the currrent transform is Cx, the result of composition
+     * If the current transform is Cx, the result of composition
      * with Tx is a new transform Cx'.  Cx' becomes the current
      * transform for this Graphics2D.
      * Transforming a point p by the updated transform Cx' is
@@ -1534,6 +1595,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #setTransform
      * @see AffineTransform
      */
+    @Override
     public void transform(AffineTransform Tx) {
         mGraphics.transform(Tx);
     }
@@ -1544,6 +1606,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #transform
      * @see AffineTransform
      */
+    @Override
     public void setTransform(AffineTransform Tx) {
         mGraphics.setTransform(Tx);
     }
@@ -1553,6 +1616,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #transform
      * @see #setTransform
      */
+    @Override
     public AffineTransform getTransform() {
         return mGraphics.getTransform();
     }
@@ -1562,6 +1626,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #setPaint
      * @see java.awt.Graphics#setColor
      */
+    @Override
     public Paint getPaint() {
         return mGraphics.getPaint();
     }
@@ -1570,13 +1635,14 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * Returns the current Composite in the Graphics2D state.
      * @see #setComposite
      */
+    @Override
     public Composite getComposite() {
         return mGraphics.getComposite();
     }
 
     /**
      * Sets the background color in this context used for clearing a region.
-     * When Graphics2D is constructed for a component, the backgroung color is
+     * When Graphics2D is constructed for a component, the background color is
      * inherited from the component. Setting the background color in the
      * Graphics2D context only affects the subsequent clearRect() calls and
      * not the background color of the component. To change the background
@@ -1586,6 +1652,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * @see #getBackground
      * @see Graphics#clearRect
      */
+    @Override
     public void setBackground(Color color) {
         mGraphics.setBackground(color);
     }
@@ -1594,6 +1661,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * Returns the background color used for clearing a region.
      * @see #setBackground
      */
+    @Override
     public Color getBackground() {
         return mGraphics.getBackground();
     }
@@ -1602,6 +1670,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * Returns the current Stroke in the Graphics2D state.
      * @see #setStroke
      */
+    @Override
     public Stroke getStroke() {
         return mGraphics.getStroke();
     }
@@ -1615,6 +1684,7 @@ public class ProxyGraphics2D extends Graphics2D implements PrinterGraphics {
      * To make the clip larger, use any setClip method.
      * @param s The Shape to be intersected with the current clip.
      */
+     @Override
      public void clip(Shape s) {
         mGraphics.clip(s);
      }

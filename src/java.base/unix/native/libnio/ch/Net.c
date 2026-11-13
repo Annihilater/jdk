@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <string.h>
@@ -41,18 +42,17 @@
 #include "nio_util.h"
 #include "nio.h"
 
-#ifdef _AIX
-#include <stdlib.h>
-#include <sys/utsname.h>
-#endif
-
 /**
  * IP_MULTICAST_ALL supported since 2.6.31 but may not be available at
  * build time.
+ * IPV6_MULTICAST_ALL supported since 4.20
  */
 #ifdef __linux__
   #ifndef IP_MULTICAST_ALL
     #define IP_MULTICAST_ALL    49
+  #endif
+  #ifndef IPV6_MULTICAST_ALL
+    #define IPV6_MULTICAST_ALL    29
   #endif
 #endif
 
@@ -91,36 +91,60 @@ static void initGroupSourceReq(JNIEnv* env, jbyteArray group, jint index,
 
 #ifdef _AIX
 
-/*
- * Checks whether or not "socket extensions for multicast source filters" is supported.
- * Returns JNI_TRUE if it is supported, JNI_FALSE otherwise
- */
-static jboolean isSourceFilterSupported(){
-    static jboolean alreadyChecked = JNI_FALSE;
-    static jboolean result = JNI_TRUE;
-    if (alreadyChecked != JNI_TRUE){
-        struct utsname uts;
-        memset(&uts, 0, sizeof(uts));
-        strcpy(uts.sysname, "?");
-        const int utsRes = uname(&uts);
-        int major = -1;
-        int minor = -1;
-        major = atoi(uts.version);
-        minor = atoi(uts.release);
-        if (strcmp(uts.sysname, "AIX") == 0) {
-            if (major < 6 || (major == 6 && minor < 1)) {// unsupported on aix < 6.1
-                result = JNI_FALSE;
-            }
-        }
-        alreadyChecked = JNI_TRUE;
-    }
-    return result;
+static jboolean isIPv4MappedGroup(struct group_source_req *req) {
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&req->gsr_group;
+    return IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr) ? JNI_TRUE : JNI_FALSE;
 }
 
 #endif  /* _AIX */
 
 static jclass isa_class;        /* java.net.InetSocketAddress */
 static jmethodID isa_ctorID;    /* InetSocketAddress(InetAddress, int) */
+
+static jint handleSocketErrorWithMessage(JNIEnv *env, jint errorValue,
+                                         const char* message)
+{
+    char *xn;
+    switch (errorValue) {
+        case EINPROGRESS:       /* Non-blocking connect */
+            return 0;
+#ifdef EPROTO
+        case EPROTO:
+            xn = JNU_JAVANETPKG "ProtocolException";
+            break;
+#endif
+        case ECONNREFUSED:
+        case ETIMEDOUT:
+        case ENOTCONN:
+            xn = JNU_JAVANETPKG "ConnectException";
+            break;
+
+        case EHOSTUNREACH:
+            xn = JNU_JAVANETPKG "NoRouteToHostException";
+            break;
+        case EADDRINUSE:  /* Fall through */
+        case EADDRNOTAVAIL:
+        case EACCES:
+            xn = JNU_JAVANETPKG "BindException";
+            break;
+        default:
+            xn = JNU_JAVANETPKG "SocketException";
+            break;
+    }
+    errno = errorValue;
+    if (message == NULL) {
+        JNU_ThrowByNameWithLastError(env, xn, "NioSocketError");
+    } else {
+        JNU_ThrowByNameWithMessageAndLastError(env, xn, message);
+    }
+    return IOS_THROWN;
+}
+
+/* Declared in nio_util.h */
+jint handleSocketError(JNIEnv *env, jint errorValue)
+{
+    return handleSocketErrorWithMessage(env, errorValue, NULL);
+}
 
 JNIEXPORT void JNICALL
 Java_sun_nio_ch_Net_initIDs(JNIEnv *env, jclass clazz)
@@ -156,13 +180,18 @@ Java_sun_nio_ch_Net_isExclusiveBindAvailable(JNIEnv *env, jclass clazz) {
 }
 
 JNIEXPORT jboolean JNICALL
+Java_sun_nio_ch_Net_shouldShutdownWriteBeforeClose0(JNIEnv *env, jclass clazz) {
+    return JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_sun_nio_ch_Net_shouldSetBothIPv4AndIPv6Options0(JNIEnv* env, jclass cl)
 {
 #if defined(__linux__)
-    /* Set both IPv4 and IPv6 socket options when setting multicast options */
+    /* Set both IPv4 and IPv6 socket options when setting IPPROTO_IPV6 options */
     return JNI_TRUE;
 #else
-    /* Do not set both IPv4 and IPv6 socket options when setting multicast options */
+    /* Do not set both IPv4 and IPv6 socket options when setting IPPROTO_IPV6 options */
     return JNI_FALSE;
 #endif
 }
@@ -170,7 +199,7 @@ Java_sun_nio_ch_Net_shouldSetBothIPv4AndIPv6Options0(JNIEnv* env, jclass cl)
 JNIEXPORT jboolean JNICALL
 Java_sun_nio_ch_Net_canIPv6SocketJoinIPv4Group0(JNIEnv* env, jclass cl)
 {
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_AIX)
     /* IPv6 sockets can join IPv4 multicast groups */
     return JNI_TRUE;
 #else
@@ -182,7 +211,7 @@ Java_sun_nio_ch_Net_canIPv6SocketJoinIPv4Group0(JNIEnv* env, jclass cl)
 JNIEXPORT jboolean JNICALL
 Java_sun_nio_ch_Net_canJoin6WithIPv4Group0(JNIEnv* env, jclass cl)
 {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_AIX)
     /* IPV6_ADD_MEMBERSHIP can be used to join IPv4 multicast groups */
     return JNI_TRUE;
 #else
@@ -200,7 +229,7 @@ Java_sun_nio_ch_Net_canUseIPv6OptionsWithIPv4LocalAddress0(JNIEnv* env, jclass c
 
 JNIEXPORT jint JNICALL
 Java_sun_nio_ch_Net_socket0(JNIEnv *env, jclass cl, jboolean preferIPv6,
-                            jboolean stream, jboolean reuse, jboolean ignored)
+                            jboolean stream, jboolean reuse)
 {
     int fd;
     int type = (stream ? SOCK_STREAM : SOCK_DGRAM);
@@ -216,8 +245,7 @@ Java_sun_nio_ch_Net_socket0(JNIEnv *env, jclass cl, jboolean preferIPv6,
      */
     if (domain == AF_INET6 && ipv4_available()) {
         int arg = 0;
-        if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&arg,
-                       sizeof(int)) < 0) {
+        if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&arg, sizeof(int)) < 0) {
             JNU_ThrowByNameWithLastError(env,
                                          JNU_JAVANETPKG "SocketException",
                                          "Unable to set IPV6_V6ONLY");
@@ -228,8 +256,7 @@ Java_sun_nio_ch_Net_socket0(JNIEnv *env, jclass cl, jboolean preferIPv6,
 
     if (reuse) {
         int arg = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&arg,
-                       sizeof(arg)) < 0) {
+        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&arg, sizeof(arg)) < 0) {
             JNU_ThrowByNameWithLastError(env,
                                          JNU_JAVANETPKG "SocketException",
                                          "Unable to set SO_REUSEADDR");
@@ -239,10 +266,13 @@ Java_sun_nio_ch_Net_socket0(JNIEnv *env, jclass cl, jboolean preferIPv6,
     }
 
 #if defined(__linux__)
-    if (type == SOCK_DGRAM) {
+    /*
+     * IPv4 or IPv6 datagram socket: disable IP_MULTICAST_ALL (Linux 2.6.31)
+     * Not supported by the Linux binary compatibility layer on BSD
+     */
+    if (type == SOCK_DGRAM && ipv4_available()) {
         int arg = 0;
-        int level = (domain == AF_INET6) ? IPPROTO_IPV6 : IPPROTO_IP;
-        if ((setsockopt(fd, level, IP_MULTICAST_ALL, (char*)&arg, sizeof(arg)) < 0) &&
+        if ((setsockopt(fd, IPPROTO_IP, IP_MULTICAST_ALL, (char*)&arg, sizeof(arg)) < 0) &&
             (errno != ENOPROTOOPT)) {
             JNU_ThrowByNameWithLastError(env,
                                          JNU_JAVANETPKG "SocketException",
@@ -252,14 +282,14 @@ Java_sun_nio_ch_Net_socket0(JNIEnv *env, jclass cl, jboolean preferIPv6,
         }
     }
 
-    /* By default, Linux uses the route default */
-    if (domain == AF_INET6 && type == SOCK_DGRAM) {
-        int arg = 1;
-        if (setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &arg,
-                       sizeof(arg)) < 0) {
+    /* IPv6 datagram socket: disable IPV6_MULTICAST_ALL (Linux 4.20) if supported */
+    if (type == SOCK_DGRAM && domain == AF_INET6) {
+        int arg = 0;
+        if ((setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_ALL, (char*)&arg, sizeof(arg)) < 0) &&
+            (errno != ENOPROTOOPT)) {
             JNU_ThrowByNameWithLastError(env,
                                          JNU_JAVANETPKG "SocketException",
-                                         "Unable to set IPV6_MULTICAST_HOPS");
+                                         "Unable to set IPV6_MULTICAST_ALL");
             close(fd);
             return -1;
         }
@@ -359,7 +389,6 @@ Java_sun_nio_ch_Net_accept(JNIEnv *env, jclass clazz, jobject fdo, jobject newfd
         }
         /* ECONNABORTED => restart accept */
     }
-
     if (newfd < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return IOS_UNAVAILABLE;
@@ -368,14 +397,18 @@ Java_sun_nio_ch_Net_accept(JNIEnv *env, jclass clazz, jobject fdo, jobject newfd
         JNU_ThrowIOExceptionWithLastError(env, "Accept failed");
         return IOS_THROWN;
     }
-
     setfdval(env, newfdo, newfd);
 
     remote_ia = NET_SockaddrToInetAddress(env, &sa, (int *)&remote_port);
-    CHECK_NULL_RETURN(remote_ia, IOS_THROWN);
-
+    if (remote_ia == NULL) {
+        close(newfd);
+        return IOS_THROWN;
+    }
     isa = (*env)->NewObject(env, isa_class, isa_ctorID, remote_ia, remote_port);
-    CHECK_NULL_RETURN(isa, IOS_THROWN);
+    if (isa == NULL) {
+        close(newfd);
+        return IOS_THROWN;
+    }
     (*env)->SetObjectArrayElement(env, isaa, 0, isa);
 
     return 1;
@@ -529,7 +562,6 @@ Java_sun_nio_ch_Net_setIntOption0(JNIEnv *env, jclass clazz, jobject fdo,
                                   jboolean mayNeedConversion, jint level,
                                   jint opt, jint arg, jboolean isIPv6)
 {
-    int result;
     struct linger linger;
     u_char carg;
     void *parg;
@@ -588,14 +620,6 @@ Java_sun_nio_ch_Net_joinOrDrop4(JNIEnv *env, jobject this, jboolean join, jobjec
         optval = (void*)&mreq;
         optlen = sizeof(mreq);
     } else {
-
-#ifdef _AIX
-        /* check AIX for support of source filtering */
-        if (isSourceFilterSupported() != JNI_TRUE){
-            return IOS_UNAVAILABLE;
-        }
-#endif
-
         mreq_source.imr_multiaddr.s_addr = htonl(group);
         mreq_source.imr_sourceaddr.s_addr = htonl(source);
         mreq_source.imr_interface.s_addr = htonl(interf);
@@ -611,11 +635,21 @@ Java_sun_nio_ch_Net_joinOrDrop4(JNIEnv *env, jobject this, jboolean join, jobjec
         n = setsockopt(fdval(env,fdo), IPPROTO_IP, opt, optval, optlen);
     }
 #endif
+#ifdef _AIX
+    // workaround AIX bug where IP_ADD_MEMBERSHIP fails intermittently
+    if (n < 0 && errno == EAGAIN) {
+        int countdown = 3;
+        while (n < 0 && errno == EAGAIN && countdown > 0) {
+            n = setsockopt(fdval(env,fdo), IPPROTO_IP, opt, optval, optlen);
+            countdown--;
+        }
+    }
+#endif
 
     if (n < 0) {
         if (join && (errno == ENOPROTOOPT || errno == EOPNOTSUPP))
             return IOS_UNAVAILABLE;
-        handleSocketError(env, errno);
+        handleSocketErrorWithMessage(env, errno, "setsockopt failed");
     }
     return 0;
 }
@@ -631,14 +665,6 @@ Java_sun_nio_ch_Net_blockOrUnblock4(JNIEnv *env, jobject this, jboolean block, j
     struct ip_mreq_source mreq_source;
     int n;
     int opt = (block) ? IP_BLOCK_SOURCE : IP_UNBLOCK_SOURCE;
-
-#ifdef _AIX
-    /* check AIX for support of source filtering */
-    if (isSourceFilterSupported() != JNI_TRUE){
-        return IOS_UNAVAILABLE;
-    }
-#endif
-
     mreq_source.imr_multiaddr.s_addr = htonl(group);
     mreq_source.imr_sourceaddr.s_addr = htonl(source);
     mreq_source.imr_interface.s_addr = htonl(interf);
@@ -659,7 +685,9 @@ Java_sun_nio_ch_Net_joinOrDrop6(JNIEnv *env, jobject this, jboolean join, jobjec
                                 jbyteArray group, jint index, jbyteArray source)
 {
     struct ipv6_mreq mreq6;
+#ifndef __APPLE__
     struct group_source_req req;
+#endif
     int opt, n, optlen;
     void* optval;
 
@@ -692,7 +720,12 @@ Java_sun_nio_ch_Net_joinOrDrop6(JNIEnv *env, jobject this, jboolean join, jobjec
     if (n < 0) {
         if (join && (errno == ENOPROTOOPT || errno == EOPNOTSUPP))
             return IOS_UNAVAILABLE;
-        handleSocketError(env, errno);
+#ifdef _AIX
+        // AIX rejects MCAST_*_SOURCE_GROUP for IPv4-mapped groups with EINVAL
+        if (source != NULL && errno == EINVAL && isIPv4MappedGroup(&req))
+            return IOS_UNAVAILABLE;
+#endif
+        handleSocketErrorWithMessage(env, errno, "setsockopt failed");
     }
     return 0;
 }
@@ -716,6 +749,11 @@ Java_sun_nio_ch_Net_blockOrUnblock6(JNIEnv *env, jobject this, jboolean block, j
     if (n < 0) {
         if (block && (errno == ENOPROTOOPT || errno == EOPNOTSUPP))
             return IOS_UNAVAILABLE;
+#ifdef _AIX
+        // AIX rejects MCAST_BLOCK/UNBLOCK_SOURCE for IPv4-mapped groups with EINVAL
+        if (errno == EINVAL && isIPv4MappedGroup(&req))
+            return IOS_UNAVAILABLE;
+#endif
         handleSocketError(env, errno);
     }
     return 0;
@@ -795,7 +833,10 @@ JNIEXPORT jint JNICALL
 Java_sun_nio_ch_Net_available(JNIEnv *env, jclass cl, jobject fdo)
 {
     int count = 0;
-    if (NET_SocketAvailable(fdval(env, fdo), &count) != 0) {
+    int result;
+    RESTARTABLE(ioctl(fdval(env, fdo), FIONREAD, &count), result);
+
+    if (result != 0) {
         handleSocketError(env, errno);
         return IOS_THROWN;
     }
@@ -851,13 +892,13 @@ Java_sun_nio_ch_Net_pollConnect(JNIEnv *env, jobject this, jobject fdo, jlong ti
         errno = 0;
         result = getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &n);
         if (result < 0) {
-            handleSocketError(env, errno);
+            handleSocketErrorWithMessage(env, errno, "getsockopt failed");
             return JNI_FALSE;
         } else if (error) {
-            handleSocketError(env, error);
+            handleSocketErrorWithMessage(env, error, "connect failed");
             return JNI_FALSE;
         } else if ((poller.revents & POLLHUP) != 0) {
-            handleSocketError(env, ENOTCONN);
+            handleSocketErrorWithMessage(env, ENOTCONN, "peer closed connection after accepting");
             return JNI_FALSE;
         }
         // connected
@@ -911,40 +952,4 @@ Java_sun_nio_ch_Net_sendOOB(JNIEnv* env, jclass this, jobject fdo, jbyte b)
 {
     int n = send(fdval(env, fdo), (const void*)&b, 1, MSG_OOB);
     return convertReturnVal(env, n, JNI_FALSE);
-}
-
-/* Declared in nio_util.h */
-
-jint handleSocketError(JNIEnv *env, jint errorValue)
-{
-    char *xn;
-    switch (errorValue) {
-        case EINPROGRESS:       /* Non-blocking connect */
-            return 0;
-#ifdef EPROTO
-        case EPROTO:
-            xn = JNU_JAVANETPKG "ProtocolException";
-            break;
-#endif
-        case ECONNREFUSED:
-        case ETIMEDOUT:
-        case ENOTCONN:
-            xn = JNU_JAVANETPKG "ConnectException";
-            break;
-
-        case EHOSTUNREACH:
-            xn = JNU_JAVANETPKG "NoRouteToHostException";
-            break;
-        case EADDRINUSE:  /* Fall through */
-        case EADDRNOTAVAIL:
-        case EACCES:
-            xn = JNU_JAVANETPKG "BindException";
-            break;
-        default:
-            xn = JNU_JAVANETPKG "SocketException";
-            break;
-    }
-    errno = errorValue;
-    JNU_ThrowByNameWithLastError(env, xn, "NioSocketError");
-    return IOS_THROWN;
 }

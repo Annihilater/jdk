@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,15 +25,24 @@
 
 package build.tools.cldrconverter;
 
+import static build.tools.cldrconverter.CLDRConverter.METAZONE_ID_PREFIX;
+import static build.tools.cldrconverter.CLDRConverter.TIMEZONE_ID_PREFIX;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 class Bundle {
@@ -47,21 +56,21 @@ class Bundle {
                                                     FORMATDATA);
     }
 
-    private final static Map<String, Bundle> bundles = new HashMap<>();
+    private static final Map<String, Bundle> bundles = new HashMap<>();
 
-    private final static String[] NUMBER_PATTERN_KEYS = {
+    private static final String[] NUMBER_PATTERN_KEYS = {
         "NumberPatterns/decimal",
         "NumberPatterns/currency",
         "NumberPatterns/percent",
         "NumberPatterns/accounting"
     };
 
-    private final static String[] COMPACT_NUMBER_PATTERN_KEYS = {
-            "short.CompactNumberPatterns",
-            "long.CompactNumberPatterns"
+    private static final String[] COMPACT_NUMBER_PATTERN_KEYS = {
+        "short.CompactNumberPatterns",
+        "long.CompactNumberPatterns"
     };
 
-    private final static String[] NUMBER_ELEMENT_KEYS = {
+    private static final String[] NUMBER_ELEMENT_KEYS = {
         "NumberElements/decimal",
         "NumberElements/group",
         "NumberElements/list",
@@ -75,49 +84,69 @@ class Bundle {
         "NumberElements/nan",
         "NumberElements/currencyDecimal",
         "NumberElements/currencyGroup",
+        "NumberElements/lenientMinusSigns",
     };
 
-    private final static String[] TIME_PATTERN_KEYS = {
+    private static final String[] TIME_PATTERN_KEYS = {
         "DateTimePatterns/full-time",
         "DateTimePatterns/long-time",
         "DateTimePatterns/medium-time",
         "DateTimePatterns/short-time",
     };
 
-    private final static String[] DATE_PATTERN_KEYS = {
+    private static final String[] DATE_PATTERN_KEYS = {
         "DateTimePatterns/full-date",
         "DateTimePatterns/long-date",
         "DateTimePatterns/medium-date",
         "DateTimePatterns/short-date",
     };
 
-    private final static String[] DATETIME_PATTERN_KEYS = {
+    private static final String[] DATETIME_PATTERN_KEYS = {
         "DateTimePatterns/full-dateTime",
         "DateTimePatterns/long-dateTime",
         "DateTimePatterns/medium-dateTime",
         "DateTimePatterns/short-dateTime",
     };
 
-    private final static String[] ERA_KEYS = {
+    private static final String[] ERA_KEYS = {
         "long.Eras",
         "Eras",
         "narrow.Eras"
     };
 
+    static final String[] LIST_PATTERN_KEYS = {
+            "ListPatterns_standard",
+            "ListPatterns_or",
+            "ListPatterns_unit",
+    };
+
+    // DateFormatItem prefix
+    static final String DATEFORMATITEM_KEY_PREFIX = "DateFormatItem.";
+    static final String DATEFORMATITEM_INPUT_REGIONS_PREFIX = "DateFormatItemInputRegions.";
+
     // Keys for individual time zone names
-    private final static String TZ_GEN_LONG_KEY = "timezone.displayname.generic.long";
-    private final static String TZ_GEN_SHORT_KEY = "timezone.displayname.generic.short";
-    private final static String TZ_STD_LONG_KEY = "timezone.displayname.standard.long";
-    private final static String TZ_STD_SHORT_KEY = "timezone.displayname.standard.short";
-    private final static String TZ_DST_LONG_KEY = "timezone.displayname.daylight.long";
-    private final static String TZ_DST_SHORT_KEY = "timezone.displayname.daylight.short";
-    private final static String[] ZONE_NAME_KEYS = {
+    private static final String TZ_GEN_LONG_KEY = "timezone.displayname.generic.long";
+    private static final String TZ_GEN_SHORT_KEY = "timezone.displayname.generic.short";
+    private static final String TZ_STD_LONG_KEY = "timezone.displayname.standard.long";
+    private static final String TZ_STD_SHORT_KEY = "timezone.displayname.standard.short";
+    private static final String TZ_DST_LONG_KEY = "timezone.displayname.daylight.long";
+    private static final String TZ_DST_SHORT_KEY = "timezone.displayname.daylight.short";
+    private static final String[] ZONE_NAME_KEYS = {
         TZ_STD_LONG_KEY,
         TZ_STD_SHORT_KEY,
         TZ_DST_LONG_KEY,
         TZ_DST_SHORT_KEY,
         TZ_GEN_LONG_KEY,
         TZ_GEN_SHORT_KEY
+    };
+
+    private static final CLDRConverter.ZoneNameSlot[] ZONE_NAME_SLOTS = {
+        CLDRConverter.ZoneNameSlot.STD_LONG,
+        CLDRConverter.ZoneNameSlot.STD_SHORT,
+        CLDRConverter.ZoneNameSlot.DST_LONG,
+        CLDRConverter.ZoneNameSlot.DST_SHORT,
+        CLDRConverter.ZoneNameSlot.GEN_LONG,
+        CLDRConverter.ZoneNameSlot.GEN_SHORT
     };
 
     private final String id;
@@ -184,7 +213,6 @@ class Bundle {
         String[] cldrBundles = getCLDRPath().split(",");
 
         // myMap contains resources for id.
-        @SuppressWarnings("unchecked")
         Map<String, Object> myMap = new HashMap<>();
         int index;
         for (index = 0; index < cldrBundles.length; index++) {
@@ -197,9 +225,7 @@ class Bundle {
         // parentsMap contains resources from id's parents.
         Map<String, Object> parentsMap = new HashMap<>();
         for (int i = cldrBundles.length - 1; i > index; i--) {
-            if (!("no".equals(cldrBundles[i]) || cldrBundles[i].startsWith("no_"))) {
-                parentsMap.putAll(CLDRConverter.getCLDRBundle(cldrBundles[i]));
-            }
+            parentsMap.putAll(CLDRConverter.getCLDRBundle(cldrBundles[i]));
         }
         // Duplicate myMap as parentsMap for "root" so that the
         // fallback works. This is a hack, though.
@@ -262,7 +288,7 @@ class Bundle {
         CLDRConverter.handleAliases(myMap);
 
         // another hack: parentsMap is not used for date-time resources.
-        if ("root".equals(id)) {
+        if (isRoot()) {
             parentsMap = null;
         }
 
@@ -287,16 +313,24 @@ class Bundle {
             handleDateTimeFormatPatterns(TIME_PATTERN_KEYS, myMap, parentsMap, calendarType, "TimePatterns");
             handleDateTimeFormatPatterns(DATE_PATTERN_KEYS, myMap, parentsMap, calendarType, "DatePatterns");
             handleDateTimeFormatPatterns(DATETIME_PATTERN_KEYS, myMap, parentsMap, calendarType, "DateTimePatterns");
+
+            // Skeleton
+            handleSkeletonPatterns(myMap, calendarType);
+        }
+
+        // Skeleton input regions
+        if (isRoot()) {
+            skeletonInputRegions(myMap);
         }
 
         // First, weed out any empty timezone or metazone names from myMap.
         for (Iterator<String> it = myMap.keySet().iterator(); it.hasNext();) {
             String key = it.next();
-            if (key.startsWith(CLDRConverter.TIMEZONE_ID_PREFIX)
-                    || key.startsWith(CLDRConverter.METAZONE_ID_PREFIX)) {
+            if (key.startsWith(TIMEZONE_ID_PREFIX)
+                    || key.startsWith(METAZONE_ID_PREFIX)) {
                 @SuppressWarnings("unchecked")
                 Map<String, String> nameMap = (Map<String, String>) myMap.get(key);
-                if (nameMap.isEmpty()) {
+                if (nameMap.isEmpty() && !CLDRConverter.metazoneNameAliases.containsKey(key)) {
                     // Some zones have only exemplarCity, which become empty.
                     // Remove those from the map.
                     it.remove();
@@ -306,43 +340,23 @@ class Bundle {
         }
         for (Iterator<String> it = myMap.keySet().iterator(); it.hasNext();) {
             String key = it.next();
-                if (key.startsWith(CLDRConverter.TIMEZONE_ID_PREFIX)
-                    || key.startsWith(CLDRConverter.METAZONE_ID_PREFIX)) {
+                if (key.startsWith(TIMEZONE_ID_PREFIX)
+                    || key.startsWith(METAZONE_ID_PREFIX)) {
                 @SuppressWarnings("unchecked")
                 Map<String, String> nameMap = (Map<String, String>) myMap.get(key);
 
                 // Convert key/value pairs to an array.
                 String[] names = new String[ZONE_NAME_KEYS.length];
-                int ix = 0;
-                for (String nameKey : ZONE_NAME_KEYS) {
-                    String name = nameMap.get(nameKey);
-                    if (name == null && parentsMap != null) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, String> parentNames = (Map<String, String>) parentsMap.get(key);
-                        if (parentNames != null) {
-                            name = parentNames.get(nameKey);
-                        }
-                    }
-                    names[ix++] = name;
+                for (int i = 0; i < names.length; i++) {
+                    names[i] = resolveZoneName(myMap, parentsMap, key, i, new HashSet<>());
                 }
                 if (hasNulls(names)) {
                     String metaKey = toMetaZoneKey(key);
                     if (metaKey != null) {
-                        Object obj = myMap.get(metaKey);
-                        if (obj instanceof String[]) {
-                            String[] metaNames = (String[]) obj;
-                            for (int i = 0; i < names.length; i++) {
-                                if (names[i] == null) {
-                                    names[i] = metaNames[i];
-                                }
-                            }
-                        } else if (obj instanceof Map) {
-                            @SuppressWarnings("unchecked")
-                            Map<String, String> m = (Map<String, String>) obj;
-                            for (int i = 0; i < names.length; i++) {
-                                if (names[i] == null) {
-                                    names[i] = m.get(ZONE_NAME_KEYS[i]);
-                                }
+                        for (int i = 0; i < names.length; i++) {
+                            if (names[i] == null) {
+                                names[i] = resolveZoneName(myMap, parentsMap, metaKey, i,
+                                        new HashSet<>());
                             }
                         }
                     }
@@ -391,6 +405,39 @@ class Bundle {
 
         targetMap = myMap;
         return myMap;
+    }
+
+    // Resolve a name slot from this locale, its parents, or a metazone alias.
+    // Track visited aliases to prevent cycles.
+    private static String resolveZoneName(Map<String, Object> map, Map<String, Object> parents,
+                                          String key, int index, Set<String> resolving) {
+        String name = zoneName(map, key, index);
+        if (name == null) {
+            name = zoneName(parents, key, index);
+        }
+        if (name != null) {
+            return name;
+        }
+
+        CLDRConverter.MetazoneNameAlias alias = CLDRConverter.metazoneNameAliases.get(key);
+        if (alias != null && alias.slots().contains(ZONE_NAME_SLOTS[index]) && resolving.add(key)) {
+            return resolveZoneName(map, parents, alias.targetKey(), index, resolving);
+        }
+        return null;
+    }
+
+    // Read a name slot from either the parsed name map or the converted array.
+    @SuppressWarnings("unchecked")
+    private static String zoneName(Map<String, Object> map, String key, int index) {
+        if (map == null) {
+            return null;
+        }
+        return switch (map.get(key)) {
+            case Map<?, ?> m -> (String)m.get(ZONE_NAME_KEYS[index]);
+            case String[] n -> n[index];
+            case null -> null;
+            default -> null;
+        };
     }
 
     private void handleMultipleInheritance(Map<String, Object> map, Map<String, Object> parents, String key) {
@@ -493,10 +540,8 @@ class Bundle {
                     value = new String[] {"", value[0]};
                     break;
                 }
-                if (!key.equals(realKey)) {
-                    map.put(realKey, value);
-                    map.put("java.time." + realKey, value);
-                }
+                map.put(realKey, value);
+                map.put("java.time." + realKey, value);
             }
             realKeys[index] = realKey;
             eraNames[index++] = value;
@@ -523,12 +568,15 @@ class Bundle {
                         pattern = (String) parentsMap.remove(key);
                     }
                     if (pattern != null) {
+                        // escape reserved chars, excluding date/time patterns, eg, "{1} {0}"
+                        String transPattern = key.endsWith("-dateTime") ? pattern : escapeReservedChars(pattern);
+
                         // Perform date-time format pattern conversion which is
                         // applicable to both SimpleDateFormat and j.t.f.DateTimeFormatter.
-                        String transPattern = translateDateFormatLetters(calendarType, pattern, this::convertDateTimePatternLetter);
+                        transPattern = translateDateFormatLetters(calendarType, key, transPattern, this::convertDateTimePatternLetter);
                         dateTimePatterns.add(i, transPattern);
                         // Additionally, perform SDF specific date-time format pattern conversion
-                        sdfPatterns.add(i, translateDateFormatLetters(calendarType, transPattern, this::convertSDFLetter));
+                        sdfPatterns.add(i, translateDateFormatLetters(calendarType, key, transPattern, this::convertSDFLetter));
                     } else {
                         dateTimePatterns.add(i, null);
                         sdfPatterns.add(i, null);
@@ -551,7 +599,7 @@ class Bundle {
         }
     }
 
-    private String translateDateFormatLetters(CalendarType calendarType, String cldrFormat, ConvertDateTimeLetters converter) {
+    private String translateDateFormatLetters(CalendarType calendarType, String patternKey, String cldrFormat, ConvertDateTimeLetters converter) {
         String pattern = cldrFormat;
         int length = pattern.length();
         boolean inQuote = false;
@@ -570,7 +618,7 @@ class Bundle {
                     if (nextc == '\'') {
                         i++;
                         if (count != 0) {
-                            converter.convert(calendarType, lastLetter, count, jrePattern);
+                            converter.convert(calendarType, patternKey, lastLetter, count, jrePattern);
                             lastLetter = 0;
                             count = 0;
                         }
@@ -580,7 +628,7 @@ class Bundle {
                 }
                 if (!inQuote) {
                     if (count != 0) {
-                        converter.convert(calendarType, lastLetter, count, jrePattern);
+                        converter.convert(calendarType, patternKey, lastLetter, count, jrePattern);
                         lastLetter = 0;
                         count = 0;
                     }
@@ -597,7 +645,7 @@ class Bundle {
             }
             if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z')) {
                 if (count != 0) {
-                    converter.convert(calendarType, lastLetter, count, jrePattern);
+                    converter.convert(calendarType, patternKey, lastLetter, count, jrePattern);
                     lastLetter = 0;
                     count = 0;
                 }
@@ -610,7 +658,7 @@ class Bundle {
                 count++;
                 continue;
             }
-            converter.convert(calendarType, lastLetter, count, jrePattern);
+            converter.convert(calendarType, patternKey, lastLetter, count, jrePattern);
             lastLetter = c;
             count = 1;
         }
@@ -620,7 +668,7 @@ class Bundle {
         }
 
         if (count != 0) {
-            converter.convert(calendarType, lastLetter, count, jrePattern);
+            converter.convert(calendarType, patternKey, lastLetter, count, jrePattern);
         }
         if (cldrFormat.contentEquals(jrePattern)) {
             return cldrFormat;
@@ -629,11 +677,11 @@ class Bundle {
     }
 
     private String toMetaZoneKey(String tzKey) {
-        if (tzKey.startsWith(CLDRConverter.TIMEZONE_ID_PREFIX)) {
-            String tz = tzKey.substring(CLDRConverter.TIMEZONE_ID_PREFIX.length());
+        if (tzKey.startsWith(TIMEZONE_ID_PREFIX)) {
+            String tz = tzKey.substring(TIMEZONE_ID_PREFIX.length());
             String meta = CLDRConverter.handlerMetaZones.get(tz);
             if (meta != null) {
-                return CLDRConverter.METAZONE_ID_PREFIX + meta;
+                return METAZONE_ID_PREFIX + meta;
             }
         }
         return null;
@@ -644,11 +692,12 @@ class Bundle {
      * on the support given by the SimpleDateFormat and the j.t.f.DateTimeFormatter
      * for date-time formatting.
      */
-    private void convertDateTimePatternLetter(CalendarType calendarType, char cldrLetter, int count, StringBuilder sb) {
+    private void convertDateTimePatternLetter(CalendarType calendarType, String patternKey, char cldrLetter, int count, StringBuilder sb) {
         switch (cldrLetter) {
             case 'u':
-                // Change cldr letter 'u' to 'y', as 'u' is interpreted as
-                // "Extended year (numeric)" in CLDR/LDML,
+            case 'U':
+                // Change cldr letter 'u'/'U' to 'y', as 'u' is interpreted as
+                // "Extended year (numeric)", and 'U' as "Cyclic year" in CLDR/LDML,
                 // which is not supported in SimpleDateFormat and
                 // j.t.f.DateTimeFormatter, so it is replaced with 'y'
                 // as the best approximation
@@ -665,7 +714,7 @@ class Bundle {
      * Perform a conversion of CLDR date-time format pattern letter which is
      * specific to the SimpleDateFormat.
      */
-    private void convertSDFLetter(CalendarType calendarType, char cldrLetter, int count, StringBuilder sb) {
+    private void convertSDFLetter(CalendarType calendarType, String patternKey, char cldrLetter, int count, StringBuilder sb) {
         switch (cldrLetter) {
             case 'G':
                 if (calendarType != CalendarType.GREGORIAN) {
@@ -704,6 +753,17 @@ class Bundle {
                 appendN('z', count, sb);
                 break;
 
+            case 'y':
+                // If the style is FULL/LONG for a Japanese Calendar, make the
+                // count == 4 for Gan-nen
+                if (calendarType == CalendarType.JAPANESE &&
+                        (patternKey.contains("full-") ||
+                         patternKey.contains("long-"))) {
+                    count = 4;
+                }
+                appendN(cldrLetter, count, sb);
+                break;
+
             case 'Z':
                 if (count == 4 || count == 5) {
                     sb.append("XXX");
@@ -715,7 +775,7 @@ class Bundle {
                 // this is a workaround in which 'B' character
                 // appearing in CLDR date-time pattern is replaced
                 // with 'a' character and hence resolved with am/pm strings.
-                // This workaround is based on the the fallback mechanism
+                // This workaround is based on the fallback mechanism
                 // specified in LDML spec for 'B' character, when a locale
                 // does not have data for day period ('B')
                 appendN('a', count, sb);
@@ -742,9 +802,23 @@ class Bundle {
         return false;
     }
 
+    private void handleSkeletonPatterns(Map<String, Object> myMap, CalendarType calendarType) {
+        String calendarPrefix = calendarType.keyElementName();
+        myMap.putAll(myMap.entrySet().stream()
+            .filter(e -> e.getKey().startsWith(Bundle.DATEFORMATITEM_KEY_PREFIX))
+            .collect(Collectors.toMap(
+                e -> calendarPrefix + e.getKey(),
+                e -> translateDateFormatLetters(calendarType,
+                        e.getKey(),
+                        escapeReservedChars((String)e.getValue()),
+                        this::convertDateTimePatternLetter)
+            ))
+        );
+    }
+
     @FunctionalInterface
     private interface ConvertDateTimeLetters {
-        void convert(CalendarType calendarType, char cldrLetter, int count, StringBuilder sb);
+        void convert(CalendarType calendarType, String patternKey, char cldrLetter, int count, StringBuilder sb);
     }
 
     /**
@@ -789,5 +863,50 @@ class Bundle {
                     }});
         }
         return numArray;
+    }
+
+    private static void skeletonInputRegions(Map<String, Object> myMap) {
+        myMap.putAll(myMap.entrySet().stream()
+                .filter(e -> e.getKey().startsWith(Bundle.DATEFORMATITEM_INPUT_REGIONS_PREFIX))
+                .collect(Collectors.toMap(
+                        e -> e.getKey(),
+                        e -> ((String)e.getValue()).trim()
+                ))
+        );
+    }
+
+    /**
+     * Escape reserved pattern characters or optional start/ends,
+     * '#', '{', '}', '[', and ']' in the pattern string.
+     *
+     * @param pattern original pattern string
+     * @return escaped pattern string
+     * @see DateTimeFormatterBuilder#appendPattern
+     */
+    private static String escapeReservedChars(String pattern) {
+        StringBuilder out = new StringBuilder();
+        boolean inQuote = false;
+
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            if (c == '\'') {
+                if (i + 1 < pattern.length() && pattern.charAt(i + 1) == '\'') {
+                    // single quote literal
+                    out.append("''");
+                    i++;
+                } else {
+                    inQuote = !inQuote;
+                    out.append(c);
+                }
+            } else if (!inQuote &&
+                (c == '#' || c == '{' || c == '}' || c == '[' || c == ']')) {
+                // escape the reserved char
+                out.append('\'').append(c).append('\'');
+            } else {
+                out.append(c);
+            }
+        }
+
+        return out.toString();
     }
 }

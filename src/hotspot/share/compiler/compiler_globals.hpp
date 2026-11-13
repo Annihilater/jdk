@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,9 +33,6 @@
 #ifdef COMPILER2
 #include "opto/c2_globals.hpp"
 #endif // COMPILER2
-#if INCLUDE_JVMCI
-#include "jvmci/jvmci_globals.hpp"
-#endif
 
 // TODO -- currently, even if all JIT compilers are disabled, the following flags
 // are still available in HotSpot. This should eventually be fixed ...
@@ -44,13 +41,12 @@
                        develop_pd,                                          \
                        product,                                             \
                        product_pd,                                          \
-                       notproduct,                                          \
                        range,                                               \
                        constraint)                                          \
                                                                             \
   /* compiler interface */                                                  \
                                                                             \
-  develop(bool, CIPrintCompilerName, false,                                 \
+  product(bool, CIPrintCompilerName, false, DIAGNOSTIC,                     \
           "when CIPrint is active, print the name of the active compiler")  \
                                                                             \
   product(bool, CIPrintCompileQueue, false, DIAGNOSTIC,                     \
@@ -95,11 +91,11 @@
   product(bool, CICompilerCountPerCPU, false,                               \
           "1 compiler thread for log(N CPUs)")                              \
                                                                             \
-  notproduct(intx, CICrashAt, -1,                                           \
+  develop(intx, CICrashAt, -1,                                              \
           "id of compilation to trigger assert in compiler thread for "     \
           "the purpose of testing, e.g. generation of replay data")         \
                                                                             \
-  notproduct(bool, CIObjectFactoryVerify, false,                            \
+  develop(bool, CIObjectFactoryVerify, false,                               \
           "enable potentially expensive verification in ciObjectFactory")   \
                                                                             \
   develop(intx, CIStart, 0,                                                 \
@@ -217,6 +213,12 @@
           "do not start profiling in the interpreter")                      \
           range(0, max_jint)                                                \
                                                                             \
+  product(intx, TieredOldPercentage, 1000, DIAGNOSTIC,                      \
+          "Percentage over tier 3 thresholds after which a method is "      \
+          "considered old (turns off parts of prioritization based on "     \
+          "compile queue length)")                                          \
+          range(0, max_jint)                                                \
+                                                                            \
   product(intx, Tier3DelayOn, 5,                                            \
           "If C2 queue size grows over this amount per compiler thread "    \
           "stop compiling at tier 3 and start compiling at tier 2")         \
@@ -229,12 +231,14 @@
                                                                             \
   product(intx, Tier3LoadFeedback, 5,                                       \
           "Tier 3 thresholds will increase twofold when C1 queue size "     \
-          "reaches this amount per compiler thread")                        \
+          "reaches this amount per compiler thread"                         \
+          "Passing 0 disables the threshold scaling")                       \
           range(0, max_jint)                                                \
                                                                             \
   product(intx, Tier4LoadFeedback, 3,                                       \
           "Tier 4 thresholds will increase twofold when C2 queue size "     \
-          "reaches this amount per compiler thread")                        \
+          "reaches this amount per compiler thread"                         \
+          "Passing 0 disables the threshold scaling")                       \
           range(0, max_jint)                                                \
                                                                             \
   product(intx, TieredCompileTaskTimeout, 50,                               \
@@ -248,8 +252,7 @@
                                                                             \
   product(intx, Tier0ProfilingStartPercentage, 200,                         \
           "Start profiling in interpreter if the counters exceed the "      \
-          "specified percentage of tier 3 thresholds (tier 4 thresholds "   \
-          "with CompilationMode=high-only|high-only-quick-internal)")       \
+          "specified percentage of tier 3 thresholds")                      \
           range(0, max_jint)                                                \
                                                                             \
   product(uintx, IncreaseFirstTierCompileThresholdAt, 50,                   \
@@ -259,19 +262,21 @@
                                                                             \
   product(intx, TieredRateUpdateMinTime, 1,                                 \
           "Minimum rate sampling interval (in milliseconds)")               \
-          range(0, max_intx)                                                \
+          range(1, max_intx)                                                \
                                                                             \
   product(intx, TieredRateUpdateMaxTime, 25,                                \
           "Maximum rate sampling interval (in milliseconds)")               \
-          range(0, max_intx)                                                \
+          range(1, max_intx)                                                \
+                                                                            \
+  product(bool, SkipTier2IfPossible, false, DIAGNOSTIC,                     \
+          "Compile at tier 4 instead of tier 2 in training replay "         \
+          "mode if posssible")                                              \
                                                                             \
   product(ccstr, CompilationMode, "default",                                \
-          "Compilation modes: "                                             \
+          "(Deprecated) Compilation modes: "                                \
           "default: normal tiered compilation; "                            \
           "quick-only: C1-only mode; "                                      \
-          "high-only: C2/JVMCI-only mode; "                                 \
-          "high-only-quick-internal: C2/JVMCI-only mode, "                  \
-          "with JVMCI compiler compiled with C1.")                          \
+          "high-only: C2-only mode.")                                       \
                                                                             \
   product(bool, PrintTieredEvents, false,                                   \
           "Print tiered events notifications")                              \
@@ -291,27 +296,30 @@
   product(ccstrlist, CompileOnly, "",                                       \
           "List of methods (pkg/class.name) to restrict compilation to")    \
                                                                             \
-  product(ccstr, CompileCommandFile, NULL,                                  \
+  product(ccstr, CompileCommandFile, nullptr,                               \
           "Read compiler commands from this file [.hotspot_compiler]")      \
                                                                             \
-  product(ccstr, CompilerDirectivesFile, NULL, DIAGNOSTIC,                  \
+  product(ccstr, CompilerDirectivesFile, nullptr, DIAGNOSTIC,               \
           "Read compiler directives from this file")                        \
                                                                             \
   product(ccstrlist, CompileCommand, "",                                    \
           "Prepend to .hotspot_compiler; e.g. log,java/lang/String.<init>") \
                                                                             \
-  develop(bool, ReplayCompiles, false,                                      \
+  product(bool, ReplayCompiles, false, DIAGNOSTIC,                          \
           "Enable replay of compilations from ReplayDataFile")              \
                                                                             \
-  product(ccstr, ReplayDataFile, NULL,                                      \
+  product(bool, ReplayReduce, false, EXPERIMENTAL,                          \
+          "Enable features to facilitate replay file reduction")            \
+                                                                            \
+  product(ccstr, ReplayDataFile, nullptr,                                   \
           "File containing compilation replay information"                  \
           "[default: ./replay_pid%p.log] (%p replaced with pid)")           \
                                                                             \
-  product(ccstr, InlineDataFile, NULL,                                      \
+  product(ccstr, InlineDataFile, nullptr,                                   \
           "File containing inlining replay information"                     \
           "[default: ./inline_pid%p.log] (%p replaced with pid)")           \
                                                                             \
-  develop(intx, ReplaySuppressInitializers, 2,                              \
+  product(intx, ReplaySuppressInitializers, 2, DIAGNOSTIC,                  \
           "Control handling of class initialization during replay: "        \
           "0 - don't do anything special; "                                 \
           "1 - treat all class initializers as empty; "                     \
@@ -320,7 +328,7 @@
           "    pretend they are empty after starting replay")               \
           range(0, 3)                                                       \
                                                                             \
-  develop(bool, ReplayIgnoreInitErrors, false,                              \
+  product(bool, ReplayIgnoreInitErrors, false, DIAGNOSTIC,                  \
           "Ignore exceptions thrown during initialization for replay")      \
                                                                             \
   product(bool, DumpReplayDataOnError, true,                                \
@@ -370,6 +378,50 @@
   develop(intx, HugeMethodLimit,  8000,                                     \
           "Don't compile methods larger than this if "                      \
           "+DontCompileHugeMethods")                                        \
+                                                                            \
+  product(bool, CaptureBailoutInformation, trueInDebug, DIAGNOSTIC,         \
+          "If compilation is stopped with an error, capture diagnostic "    \
+          "information at the bailout point")                               \
+                                                                            \
+  product(uint, StressSeed, 0, DIAGNOSTIC,                                  \
+          "Seed for randomized stress testing (if unset, a random one is "  \
+          "generated). The seed is recorded in the compilation log, if "    \
+          "available.")                                                     \
+          range(0, max_juint)                                               \
+                                                                            \
+  /* AOT Code Caching flags */                                              \
+                                                                            \
+  product(uint, DisableAOTCode, 0, DIAGNOSTIC,                              \
+          "Disable AOT code on some compilation levels "                    \
+          "(T1=1; T2=10; T4=1000; T5/preload=10000) "                       \
+          "(T3 is disabled regardless - AOT T3 code is not generated)")     \
+          constraint(DisableAOTCodeConstraintFunc, AtParse)                 \
+                                                                            \
+  product(uint, ClassInitBarrierMode, 0, DIAGNOSTIC,                        \
+          "Produce AOT preload code which could be called on first "        \
+          "method invocation, add class initialization barriers, "          \
+          "other checks and constraints if needed "                         \
+          "(0: no AOT preload code produced) "                              \
+          "(1: produce AOT preload code with uncommon trap for barriers)")  \
+          range(0, 1)                                                       \
+                                                                            \
+  product(uint, AOTCodePreloadStart, 0, DIAGNOSTIC,                         \
+          "The index of the first AOT code to preload")                     \
+                                                                            \
+  product(uint, AOTCodePreloadStop, max_jint, DIAGNOSTIC,                   \
+          "The index of the last AOT code to preload")                      \
+                                                                            \
+  product(bool, AOTPreloadBlocking, false, DIAGNOSTIC,                      \
+          "Preload code is processed with blocking. Startup would not "     \
+          "proceed until all preloaded code is done loading.")              \
+                                                                            \
+  product(bool, VerifyAOTCode, false, DIAGNOSTIC,                           \
+          "Load AOT code but not install into CodeCache")                   \
+                                                                            \
+  develop(bool, AOTAssertOnUnknownExternalAddress, false,                   \
+          "Assert when external address is missing from the AOT Code "      \
+          "external address table. By default (false) AOT compilation "     \
+          "will be skipped for method which references such address.")      \
                                                                             \
 
 // end of COMPILER_FLAGS

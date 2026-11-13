@@ -120,11 +120,8 @@ public class TreePosRoundsTest extends AbstractProcessor {
 
         try {
             JavaFileObject fo = filer.createSourceFile(name);
-            Writer out = fo.openWriter();
-            try {
+            try (Writer out = fo.openWriter()) {
                 out.write(text.toString());
-            } finally {
-                out.close();
             }
         } catch (IOException e) {
             throw new Error(e);
@@ -162,13 +159,13 @@ public class TreePosRoundsTest extends AbstractProcessor {
             }
             //System.err.println("expect: " + expect);
 
-            int start = (int)sourcePositions.getStartPosition(unit, tree);
+            int start = (int)sourcePositions.getStartPosition(tree);
             if (start == Diagnostic.NOPOS) {
                 messager.printError("start pos not set for " + trim(tree));
                 return;
             }
 
-            int end = (int)sourcePositions.getEndPosition(unit, tree);
+            int end = (int)sourcePositions.getEndPosition(tree);
             if (end == Diagnostic.NOPOS) {
                 messager.printError("end pos not set for " + trim(tree));
                 return;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -137,35 +137,30 @@ public class strace001 {
     // Fill expectedTrace array according to the invocation type that is set in
     // test options
     private static boolean fillTrace() {
+
         switch (controller.getInvocationType()) {
             case ThreadController.JAVA_TYPE:
-                expectedTrace = new String[] {
-                    "java.lang.Thread.sleep"
-                    , "java.lang.Thread.yield"
-                    , THREAD_NAME + ".waitForSign"
-                    , THREAD_NAME + ".recursionJava"
-                    , THREAD_NAME + ".run"
+                expectedTrace = new String[]{
+                        THREAD_NAME + ".waitForSign",
+                        THREAD_NAME + ".recursionJava",
+                        THREAD_NAME + ".run"
                 };
                 break;
 
             case ThreadController.NATIVE_TYPE:
-                expectedTrace = new String[] {
-                    "java.lang.Thread.sleep"
-                    , "java.lang.Thread.yield"
-                    , THREAD_NAME + ".waitForSign"
-                    , THREAD_NAME + ".recursionNative"
-                    , THREAD_NAME + ".run"
+                expectedTrace = new String[]{
+                        THREAD_NAME + ".waitForSign",
+                        THREAD_NAME + ".recursionNative",
+                        THREAD_NAME + ".run"
                 };
                 break;
 
             case ThreadController.MIXED_TYPE:
-                expectedTrace = new String[] {
-                    "java.lang.Thread.sleep"
-                    , "java.lang.Thread.yield"
-                    , THREAD_NAME + ".waitForSign"
-                    , THREAD_NAME + ".recursionNative"
-                    , THREAD_NAME + ".recursionJava"
-                    , THREAD_NAME + ".run"
+                expectedTrace = new String[]{
+                        THREAD_NAME + ".waitForSign",
+                        THREAD_NAME + ".recursionNative",
+                        THREAD_NAME + ".recursionJava",
+                        THREAD_NAME + ".run"
                 };
                 break;
 
@@ -193,14 +188,30 @@ public class strace001 {
 
     // The method performs checks of the stack trace
     private static boolean checkTrace(StackTraceElement[] elements) {
-        int length = elements.length;
-        int expectedLength = depth +3;
         boolean result = true;
 
-        // Check the length of the trace. It must not be greater than
-        // expectedLength. Number of recursionJava() or recursionNative()
-        // methods must not ne greater than depth, also one Object.wait() or
-        // Thread.yield() method, one run( ) and one waitForSign().
+        // Find the innermost frame that belongs to the test's own code.
+        // Any frames above it come from the implementation of Thread.sleep
+        // or Thread.yield, which changes between releases, so they are
+        // not checked.
+        int firstOwn = -1;
+        for (int i = 0; i < elements.length; i++) {
+            if (isTestFrame(elements[i])) {
+                firstOwn = i;
+                break;
+            }
+        }
+        if (firstOwn < 0) {
+            log.complain("No frames of " + THREAD_NAME + " in the stack trace");
+            return false;
+        }
+
+        // The number of recursionJava() or recursionNative() frames must not
+        // be greater than depth, plus one run() and one waitForSign().
+        int length = elements.length - firstOwn;
+        int expectedLength = depth + expectedTrace.length;
+
+        // Check the length of the trace
         if (length > expectedLength) {
             log.complain("Length of the stack trace is " + length + ", but "
                        + "expected to be not greater than " + expectedLength);
@@ -208,14 +219,12 @@ public class strace001 {
         }
 
         // Check each element of the snapshot
-        for (int i = 0; i < elements.length; i++) {
+        for (int i = firstOwn; i < elements.length; i++) {
             if (i == elements.length - 1) {
-
                 // The latest method of the snapshot must be RunningThread.run()
                 if ( !checkLastElement(elements[i]) )
                     result = false;
             } else {
-
                 // getClassName() and getMethodName() must return correct values
                 // for each element
                 if ( !checkElement(i, elements[i]) )
@@ -223,6 +232,16 @@ public class strace001 {
             }
         }
         return result;
+    }
+
+    // The method checks whether the element belongs to the test's own code.
+    private static boolean isTestFrame(StackTraceElement element) {
+        String name = element.getClassName() + "." + element.getMethodName();
+        for (int i = 0; i < expectedTrace.length; i++) {
+            if (expectedTrace[i].equals(name))
+                return true;
+        }
+        return false;
     }
 
     // The method checks that StackTraceElement.getClassName() and
@@ -235,6 +254,7 @@ public class strace001 {
             if (expectedTrace[i].equals(name))
                 return true;
         }
+
 
         log.complain("Unexpected " + n + " element of the stack trace:\n\t"
                    + name);

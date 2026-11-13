@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  */
 
 /* Copyright  (c) 2002 Graz University of Technology. All rights reserved.
@@ -50,7 +50,7 @@
  * 18.05.2001
  *
  * This module contains the native functions of the Java to PKCS#11 interface
- * which are platform dependent. This includes loading a dynamic link libary,
+ * which are platform dependent. This includes loading a dynamic link library,
  * retrieving the function list and unloading the dynamic link library.
  *
  * @author Karl Scheibelhofer <Karl.Scheibelhofer@iaik.at>
@@ -79,10 +79,6 @@ JNIEXPORT jobject JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_connect
     jstring jGetFunctionList)
 {
     HINSTANCE hModule;
-    int i = 0;
-    CK_ULONG ulCount = 0;
-    CK_C_GetInterfaceList C_GetInterfaceList = NULL;
-    CK_INTERFACE_PTR iList = NULL;
     CK_C_GetInterface C_GetInterface = NULL;
     CK_INTERFACE_PTR interface = NULL;
     CK_C_GetFunctionList C_GetFunctionList = NULL;
@@ -116,12 +112,12 @@ JNIEXPORT jobject JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_connect
         exceptionMessage = (char *) malloc(sizeof(char) *
                 (strlen((LPTSTR) lpMsgBuf) + strlen(libraryNameStr) + 1));
         if (exceptionMessage == NULL) {
-            throwOutOfMemoryError(env, 0);
+            p11ThrowOutOfMemoryError(env, 0);
             goto cleanup;
         }
         strcpy(exceptionMessage, (LPTSTR) lpMsgBuf);
         strcat(exceptionMessage, libraryNameStr);
-        throwIOException(env, (LPTSTR) exceptionMessage);
+        p11ThrowIOException(env, (LPTSTR) exceptionMessage);
         goto cleanup;
     }
 
@@ -129,22 +125,27 @@ JNIEXPORT jobject JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_connect
     /*
      * Get function pointer to C_GetInterfaceList
      */
-    C_GetInterfaceList = (CK_C_GetInterfaceList) GetProcAddress(hModule,
+    CK_C_GetInterfaceList C_GetInterfaceList = (CK_C_GetInterfaceList) GetProcAddress(hModule,
             "C_GetInterfaceList");
     if (C_GetInterfaceList != NULL) {
+        CK_ULONG ulCount = 0;
         TRACE0("Found C_GetInterfaceList func\n");
         rv = (C_GetInterfaceList)(NULL, &ulCount);
         if (rv == CKR_OK) {
             /* get copy of interfaces */
-            iList = (CK_INTERFACE_PTR)
-                    malloc(ulCount*sizeof(CK_INTERFACE));
-            rv = C_GetInterfaceList(iList, &ulCount);
-            for (i=0; i < (int)ulCount; i++) {
-                printf("interface %s version %d.%d funcs %p flags 0x%lu\n",
-                        iList[i].pInterfaceName,
-                        ((CK_VERSION *)iList[i].pFunctionList)->major,
-                        ((CK_VERSION *)iList[i].pFunctionList)->minor,
-                        iList[i].pFunctionList, iList[i].flags);
+            CK_INTERFACE_PTR iList = (CK_INTERFACE_PTR) malloc(ulCount*sizeof(CK_INTERFACE));
+            if (iList == NULL) {
+                TRACE0("Connect: error allocating interface list\n");
+            } else {
+                rv = C_GetInterfaceList(iList, &ulCount);
+                for (int i=0; i < (int)ulCount; i++) {
+                    printf("interface %s version %d.%d funcs %p flags 0x%lu\n",
+                            iList[i].pInterfaceName,
+                            ((CK_VERSION *)iList[i].pFunctionList)->major,
+                            ((CK_VERSION *)iList[i].pFunctionList)->minor,
+                            iList[i].pFunctionList, iList[i].flags);
+                }
+                free(iList);
             }
         } else {
             TRACE0("Connect: error polling interface list size\n");
@@ -175,7 +176,7 @@ JNIEXPORT jobject JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_connect
                 0,
                 NULL
             );
-            throwIOException(env, (LPTSTR) lpMsgBuf);
+            p11ThrowIOException(env, (LPTSTR) lpMsgBuf);
             goto cleanup;
         }
         TRACE1("Connect: Found %s func\n", getFunctionListStr);
@@ -186,7 +187,7 @@ JNIEXPORT jobject JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_connect
         if (C_GetInterface != NULL) {
             TRACE0("Connect: Found C_GetInterface func\n");
             rv = (C_GetInterface)(NULL, NULL, &interface, 0);
-            if (ckAssertReturnValueOK(env, rv) == CK_ASSERT_OK) {
+            if (rv == CKR_OK && interface != NULL) {
                 goto setModuleData;
             }
         }
@@ -205,7 +206,7 @@ JNIEXPORT jobject JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_connect
                 0,
                 NULL
             );
-            throwIOException(env, (LPTSTR) lpMsgBuf);
+            p11ThrowIOException(env, (LPTSTR) lpMsgBuf);
             goto cleanup;
         }
         TRACE0("Connect: Found C_GetFunctionList func\n");
@@ -217,7 +218,7 @@ setModuleData:
      */
     moduleData = (ModuleData *) malloc(sizeof(ModuleData));
     if (moduleData == NULL) {
-        throwOutOfMemoryError(env, 0);
+        p11ThrowOutOfMemoryError(env, 0);
         goto cleanup;
     }
     moduleData->hModule = hModule;
@@ -231,10 +232,11 @@ setModuleData:
         moduleData->ckFunctionListPtr = interface->pFunctionList;
     } else {
         // should never happen
-        throwIOException(env, "ERROR: No function list ptr found");
+        p11ThrowIOException(env, "ERROR: No function list ptr found");
         goto cleanup;
     }
-    if (((CK_VERSION *)moduleData->ckFunctionListPtr)->major == 3) {
+    if (((CK_VERSION *)moduleData->ckFunctionListPtr)->major == 3 &&
+            interface != NULL) {
         moduleData->ckFunctionList30Ptr = interface->pFunctionList;
     } else {
         moduleData->ckFunctionList30Ptr = NULL;
@@ -275,19 +277,21 @@ cleanup:
 /*
  * Class:     sun_security_pkcs11_wrapper_PKCS11
  * Method:    disconnect
- * Signature: ()V
+ * Signature: (J)V
  */
-JNIEXPORT void JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_disconnect
-    (JNIEnv *env, jobject obj)
-{
-    ModuleData *moduleData;
-    TRACE0("DEBUG: disconnecting module...");
-    moduleData = removeModuleEntry(env, obj);
+JNIEXPORT void JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_disconnect(
+        JNIEnv *env, jclass thisClass, jlong ckpNativeData) {
 
-    if (moduleData != NULL) {
-        FreeLibrary(moduleData->hModule);
+    TRACE0("DEBUG: disconnecting module...");
+    if (ckpNativeData != 0L) {
+        ModuleData *moduleData = jlong_to_ptr(ckpNativeData);
+
+        if (moduleData->hModule != NULL) {
+            FreeLibrary(moduleData->hModule);
+        }
+
+        free(moduleData);
     }
 
-    free(moduleData);
     TRACE0("FINISHED\n");
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 package sun.security.ssl;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -121,6 +122,7 @@ abstract class HelloCookieManager {
     private static final
             class D10HelloCookieManager extends HelloCookieManager {
 
+        private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
         final SecureRandom secureRandom;
         private int               cookieVersion;  // allow to wrap, version + sequence
         private final byte[]      cookieSecret;
@@ -141,7 +143,7 @@ abstract class HelloCookieManager {
 
         @Override
         byte[] createCookie(ServerHandshakeContext context,
-                ClientHelloMessage clientHello) throws IOException {
+                ClientHelloMessage clientHello) {
             int version;
             byte[] secret;
 
@@ -170,6 +172,7 @@ abstract class HelloCookieManager {
             }
             byte[] helloBytes = clientHello.getHelloCookieBytes();
             md.update(helloBytes);
+            md.update(getHostPortBytes(context));
             byte[] cookie = md.digest(secret);      // 32 bytes
             cookie[0] = (byte)((version >> 24) & 0xFF);
 
@@ -178,7 +181,7 @@ abstract class HelloCookieManager {
 
         @Override
         boolean isCookieValid(ServerHandshakeContext context,
-            ClientHelloMessage clientHello, byte[] cookie) throws IOException {
+            ClientHelloMessage clientHello, byte[] cookie) {
             // no cookie exchange or not a valid cookie length
             if ((cookie == null) || (cookie.length != 32)) {
                 return false;
@@ -187,7 +190,7 @@ abstract class HelloCookieManager {
             byte[] secret;
             d10ManagerLock.lock();
             try {
-                if (((cookieVersion >> 24) & 0xFF) == cookie[0]) {
+                if ((byte) ((cookieVersion >> 24) & 0xFF) == cookie[0]) {
                     secret = cookieSecret;
                 } else {
                     secret = legacySecret;  // including out of window cookies
@@ -205,10 +208,29 @@ abstract class HelloCookieManager {
             }
             byte[] helloBytes = clientHello.getHelloCookieBytes();
             md.update(helloBytes);
+            md.update(getHostPortBytes(context));
             byte[] target = md.digest(secret);      // 32 bytes
             target[0] = cookie[0];
 
             return MessageDigest.isEqual(target, cookie);
+        }
+
+        /**
+         * Returns host and port bytes if those are set.
+         * Using ASCII unit separator character to separate host and port so we
+         * can differentiate between otherwise identical host and port string
+         * concatenations, for example host 172.0.0.1 with port 25 and host
+         * 172.0.0.12 with port 5.
+         */
+        private static byte[] getHostPortBytes(ServerHandshakeContext context) {
+            final String host = context.conContext.transport.getPeerHost();
+            final int port = context.conContext.transport.getPeerPort();
+            final String hostStr = host != null ? host : "";
+            final String portStr = port > -1 ? Integer.toString(port) : "";
+            return hostStr.isEmpty() && portStr.isEmpty() ?
+                    EMPTY_BYTE_ARRAY :
+                    (hostStr + '\u001F' + portStr).getBytes(
+                            StandardCharsets.UTF_8);
         }
     }
 
@@ -219,13 +241,13 @@ abstract class HelloCookieManager {
 
         @Override
         byte[] createCookie(ServerHandshakeContext context,
-                ClientHelloMessage clientHello) throws IOException {
+                ClientHelloMessage clientHello) {
             throw new UnsupportedOperationException("Not supported yet.");
         }
 
         @Override
         boolean isCookieValid(ServerHandshakeContext context,
-            ClientHelloMessage clientHello, byte[] cookie) throws IOException {
+            ClientHelloMessage clientHello, byte[] cookie) {
             throw new UnsupportedOperationException("Not supported yet.");
         }
     }
@@ -252,7 +274,7 @@ abstract class HelloCookieManager {
 
         @Override
         byte[] createCookie(ServerHandshakeContext context,
-                ClientHelloMessage clientHello) throws IOException {
+                ClientHelloMessage clientHello) {
             int version;
             byte[] secret;
 
@@ -365,7 +387,7 @@ abstract class HelloCookieManager {
                 return false;
             }
 
-            // Use the ClientHello hash in the cookie for transtript
+            // Use the ClientHello hash in the cookie for transcript
             // hash calculation for stateless HelloRetryRequest.
             //
             // Transcript-Hash(ClientHello1, HelloRetryRequest, ... Mn) =

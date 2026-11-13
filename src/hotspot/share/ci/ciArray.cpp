@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,12 +22,13 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "ci/ciArray.hpp"
 #include "ci/ciArrayKlass.hpp"
 #include "ci/ciConstant.hpp"
 #include "ci/ciKlass.hpp"
 #include "ci/ciUtilities.inline.hpp"
+#include "oops/flatArrayKlass.hpp"
+#include "oops/layoutKind.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/typeArrayOop.inline.hpp"
@@ -37,7 +38,13 @@
 //
 // This class represents an arrayOop in the HotSpot virtual
 // machine.
+
+arrayOop ciArray::get_arrayOop() const {
+  return oop_cast<arrayOop>(get_oop());
+}
+
 static BasicType fixup_element_type(BasicType bt) {
+  if (bt == T_FLAT_ELEMENT) return T_OBJECT;
   if (is_reference_type(bt))  return T_OBJECT;
   if (bt == T_BOOLEAN)  return T_BYTE;
   return bt;
@@ -46,7 +53,7 @@ static BasicType fixup_element_type(BasicType bt) {
 ciConstant ciArray::element_value_impl(BasicType elembt,
                                        arrayOop ary,
                                        int index) {
-  if (ary == NULL)
+  if (ary == nullptr)
     return ciConstant();
   assert(ary->is_array(), "");
   if (index < 0 || index >= ary->length())
@@ -60,12 +67,22 @@ ciConstant ciArray::element_value_impl(BasicType elembt,
   case T_ARRAY:
   case T_OBJECT:
     {
-      assert(ary->is_objArray(), "");
-      objArrayOop objary = (objArrayOop) ary;
-      oop elem = objary->obj_at(index);
-      ciEnv* env = CURRENT_ENV;
-      ciObject* box = env->get_object(elem);
-      return ciConstant(T_OBJECT, box);
+      if (ary->is_refArray()) {
+        refArrayOop refary = oop_cast<refArrayOop>(ary);
+        oop elem = refary->obj_at(index);
+        return ciConstant(elembt, CURRENT_ENV->get_object(elem));
+      } else {
+        assert(ary->is_flatArray(), "");
+        flatArrayOop flatary = oop_cast<flatArrayOop>(ary);
+        assert(CompilerThread::current()->thread_state() == _thread_in_vm, "");
+        JavaThread* THREAD = CompilerThread::current();
+        oop elem = flatary->obj_at(index, THREAD);
+        if (HAS_PENDING_EXCEPTION) {
+          CLEAR_PENDING_EXCEPTION;
+          return ciConstant();
+        }
+        return ciConstant(elembt, CURRENT_ENV->get_object(elem));
+      }
     }
   default:
     break;
@@ -94,9 +111,15 @@ ciConstant ciArray::element_value_impl(BasicType elembt,
 // Returns T_ILLEGAL if there is no element at the given index.
 ciConstant ciArray::element_value(int index) {
   BasicType elembt = element_basic_type();
+  ciConstant value = check_constant_value_cache(index, elembt);
+  if (value.is_valid()) {
+    return value;
+  }
   GUARDED_VM_ENTRY(
-    return element_value_impl(elembt, get_arrayOop(), index);
+    value = element_value_impl(elembt, get_arrayOop(), index);
   )
+  add_to_constant_value_cache(index, value);
+  return value;
 }
 
 // ------------------------------------------------------------------
@@ -114,6 +137,17 @@ ciConstant ciArray::element_value_by_offset(intptr_t element_offset) {
     return ciConstant();
   }
   return element_value((jint) index);
+}
+
+bool ciArray::is_null_free() const {
+  VM_ENTRY_MARK;
+  return get_arrayOop()->is_null_free_array();
+}
+
+bool ciArray::is_atomic() const {
+  VM_ENTRY_MARK;
+  arrayOop oop = get_arrayOop();
+  return !oop->is_flatArray() || FlatArrayKlass::cast(oop->klass())->flat_layout().is_atomic();
 }
 
 // ------------------------------------------------------------------

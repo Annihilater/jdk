@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2013, 2021, Red Hat, Inc. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,116 +24,271 @@
  *
  */
 
-#include "precompiled.hpp"
 
+#include "gc/shared/gc_globals.hpp"
+#include "gc/shared/plab.hpp"
+#include "gc/shenandoah/mode/shenandoahMode.hpp"
 #include "gc/shenandoah/shenandoahCollectorPolicy.hpp"
-#include "gc/shenandoah/shenandoahGC.hpp"
-#include "gc/shenandoah/shenandoahHeap.inline.hpp"
-#include "runtime/os.hpp"
+#include "gc/shenandoah/shenandoahController.hpp"
+#include "gc/shenandoah/shenandoahHeapRegion.inline.hpp"
+#include "gc/shenandoah/shenandoahThreadLocalData.hpp"
+#include "logging/log.hpp"
+#include "utilities/copy.hpp"
+#include "utilities/ostream.hpp"
 
-ShenandoahCollectorPolicy::ShenandoahCollectorPolicy() :
+ShenandoahCollectorPolicy::ShenandoahCollectorPolicy(ShenandoahMode* mode) :
   _success_concurrent_gcs(0),
-  _success_degenerated_gcs(0),
+  _abbreviated_concurrent_gcs(0),
+  _last_whole_heap_gc_id(0),
   _success_full_gcs(0),
-  _alloc_failure_degenerated(0),
-  _alloc_failure_degenerated_upgrade_to_full(0),
+  _consecutive_young_gcs(0),
+  _mixed_gcs(0),
+  _success_old_gcs(0),
+  _interrupted_old_gcs(0),
   _alloc_failure_full(0),
-  _explicit_concurrent(0),
-  _explicit_full(0),
-  _implicit_concurrent(0),
-  _implicit_full(0),
-  _cycle_counter(0) {
+  _mode(mode) {
+  Copy::zero_to_bytes(_stall_counts, sizeof(size_t) * ShenandoahController::PHASE_LIMIT);
+  Copy::zero_to_bytes(_collection_cause_counts, sizeof(size_t) * GCCause::_last_gc_cause);
 
-  Copy::zero_to_bytes(_degen_points, sizeof(size_t) * ShenandoahGC::_DEGENERATED_LIMIT);
-
-  _tracer = new (ResourceObj::C_HEAP, mtGC) ShenandoahTracer();
-
+  _tracer = new ShenandoahTracer();
 }
 
-void ShenandoahCollectorPolicy::record_explicit_to_concurrent() {
-  _explicit_concurrent++;
-}
-
-void ShenandoahCollectorPolicy::record_explicit_to_full() {
-  _explicit_full++;
-}
-
-void ShenandoahCollectorPolicy::record_implicit_to_concurrent() {
-  _implicit_concurrent++;
-}
-
-void ShenandoahCollectorPolicy::record_implicit_to_full() {
-  _implicit_full++;
+void ShenandoahCollectorPolicy::record_collection_cause(GCCause::Cause cause) {
+  assert(cause < GCCause::_last_gc_cause, "Invalid GCCause");
+  _collection_cause_counts[cause]++;
 }
 
 void ShenandoahCollectorPolicy::record_alloc_failure_to_full() {
   _alloc_failure_full++;
 }
 
-void ShenandoahCollectorPolicy::record_alloc_failure_to_degenerated(ShenandoahGC::ShenandoahDegenPoint point) {
-  assert(point < ShenandoahGC::_DEGENERATED_LIMIT, "sanity");
-  _alloc_failure_degenerated++;
-  _degen_points[point]++;
+void ShenandoahCollectorPolicy::record_allocation_stall(ShenandoahController::ShenandoahCollectorPhase phase) {
+  assert(phase < ShenandoahController::PHASE_LIMIT, "Invalid phase: %d", phase);
+  assert(ShenandoahController::UNSET <= phase, "Invalid phase: %d", phase);
+  _stall_counts[phase].add_then_fetch(1UL, memory_order_relaxed);
 }
 
-void ShenandoahCollectorPolicy::record_degenerated_upgrade_to_full() {
-  _alloc_failure_degenerated_upgrade_to_full++;
-}
+void ShenandoahCollectorPolicy::record_success_concurrent(size_t gc_id, bool is_young, bool is_abbreviated) {
+  update_young(is_young);
 
-void ShenandoahCollectorPolicy::record_success_concurrent() {
+  if (!is_young) {
+    _last_whole_heap_gc_id.store_relaxed(gc_id);
+  }
+
   _success_concurrent_gcs++;
+  if (is_abbreviated) {
+    _abbreviated_concurrent_gcs++;
+  }
 }
 
-void ShenandoahCollectorPolicy::record_success_degenerated() {
-  _success_degenerated_gcs++;
+void ShenandoahCollectorPolicy::record_mixed_cycle() {
+  _mixed_gcs++;
 }
 
-void ShenandoahCollectorPolicy::record_success_full() {
+void ShenandoahCollectorPolicy::record_success_old() {
+  _consecutive_young_gcs = 0;
+  _success_old_gcs++;
+}
+
+void ShenandoahCollectorPolicy::record_interrupted_old() {
+  _consecutive_young_gcs = 0;
+  _interrupted_old_gcs++;
+}
+
+void ShenandoahCollectorPolicy::update_young(bool is_young) {
+  if (is_young) {
+    _consecutive_young_gcs++;
+  } else {
+    _consecutive_young_gcs = 0;
+  }
+}
+
+void ShenandoahCollectorPolicy::record_success_full(size_t gc_id) {
+  _consecutive_young_gcs = 0;
   _success_full_gcs++;
-}
-
-size_t ShenandoahCollectorPolicy::cycle_counter() const {
-  return _cycle_counter;
-}
-
-void ShenandoahCollectorPolicy::record_cycle_start() {
-  _cycle_counter++;
+  _last_whole_heap_gc_id.store_relaxed(gc_id);
 }
 
 void ShenandoahCollectorPolicy::record_shutdown() {
   _in_shutdown.set();
 }
 
-bool ShenandoahCollectorPolicy::is_at_shutdown() {
+bool ShenandoahCollectorPolicy::is_at_shutdown() const {
   return _in_shutdown.is_set();
 }
 
+bool ShenandoahCollectorPolicy::is_explicit_gc(GCCause::Cause cause) {
+  return GCCause::is_user_requested_gc(cause)
+      || GCCause::is_serviceability_requested_gc(cause)
+      || cause == GCCause::_wb_full_gc
+      || cause == GCCause::_wb_young_gc;
+}
+
+#ifdef ASSERT
+bool is_valid_request(GCCause::Cause cause) {
+  return ShenandoahCollectorPolicy::is_explicit_gc(cause)
+      || ShenandoahCollectorPolicy::is_shenandoah_gc(cause)
+      || cause == GCCause::_metadata_GC_clear_soft_refs
+      || cause == GCCause::_codecache_GC_aggressive
+      || cause == GCCause::_codecache_GC_threshold
+      || cause == GCCause::_full_gc_alot
+      || cause == GCCause::_wb_young_gc
+      || cause == GCCause::_wb_full_gc
+      || cause == GCCause::_wb_breakpoint
+      || cause == GCCause::_scavenge_alot;
+}
+#endif
+
+bool ShenandoahCollectorPolicy::is_shenandoah_gc(GCCause::Cause cause) {
+  return cause == GCCause::_allocation_failure
+      || cause == GCCause::_shenandoah_stop_vm
+      || cause == GCCause::_shenandoah_allocation_failure_evac
+      || cause == GCCause::_shenandoah_humongous_allocation_failure
+      || cause == GCCause::_shenandoah_concurrent_gc
+      || cause == GCCause::_shenandoah_upgrade_to_full_gc;
+}
+
+
+bool ShenandoahCollectorPolicy::is_allocation_failure(GCCause::Cause cause) {
+  return cause == GCCause::_allocation_failure
+      || cause == GCCause::_shenandoah_allocation_failure_evac
+      || cause == GCCause::_shenandoah_humongous_allocation_failure;
+}
+
+bool ShenandoahCollectorPolicy::should_run_full_gc(GCCause::Cause cause) {
+  if (!ShenandoahHeap::heap()->mode()->is_concurrent()) {
+    return true;
+  }
+
+  if (cause == GCCause::_shenandoah_upgrade_to_full_gc) {
+    return true;
+  }
+
+  return is_explicit_gc(cause) && !ExplicitGCInvokesConcurrent;
+}
+
+bool ShenandoahCollectorPolicy::should_handle_requested_gc(GCCause::Cause cause) {
+  assert(is_valid_request(cause), "only requested GCs here: %s", GCCause::to_string(cause));
+
+  if (DisableExplicitGC) {
+    return !is_explicit_gc(cause);
+  }
+  return true;
+}
+
+static PLAB* shenandoah_get_lab(ShenandoahHeapRegion* region) {
+  if (region->is_young()) {
+    return ShenandoahThreadLocalData::gclab(Thread::current());
+  }
+
+  assert(region->is_old(), "Region in cset(%zu) must be young or old", region->index());
+  ShenandoahPLAB* shenandoah_plab = ShenandoahThreadLocalData::shenandoah_plab(Thread::current());
+  assert(shenandoah_plab != nullptr, "Must have plab in generational mode");
+  return shenandoah_plab->plab();
+}
+
+bool ShenandoahCollectorPolicy::should_abandon_evacuations(ShenandoahHeapRegion* region) {
+  if (region->has_self_forwards() && ShenandoahThreadLocalData::has_evac_failures()) {
+    // This region and this thread are lost. This thread has evacuated all it can. If
+    // we let it continue on to other regions, it will only fail those as well. We want
+    // to let other threads try the regions that this thread could not. This isn't as
+    // precise as it could be. In a mixed collection, we would ideally have a way to
+    // stop this thread from claiming old or young regions, depending on which lab is
+    // exhausted.
+    log_debug(gc, thread)("Region (%zu) has self-forwards and this thread has evacuation failures (LAB words remaining: %zu)",
+                          region->index(), shenandoah_get_lab(region)->words_remaining());
+    return true;
+  }
+  return false;
+}
+
+// Some causes should not be allowed to preempt others. We must make sure that
+// regulator requests and allocation failures do not preempt a shutdown request.
+int ShenandoahCollectorPolicy::cause_priority(GCCause::Cause cause) {
+  if (is_explicit_gc(cause)) {
+    return 5;
+  }
+
+  switch (cause) {
+    case GCCause::_shenandoah_stop_vm:
+      return 7;
+    case GCCause::_shenandoah_upgrade_to_full_gc:
+      return 6;
+    case GCCause::_shenandoah_humongous_allocation_failure:
+      return 4;
+    case GCCause::_shenandoah_allocation_failure_evac:
+      return 3;
+    case GCCause::_allocation_failure:
+      return 2;
+    case GCCause::_shenandoah_concurrent_gc:
+      return 1;
+    case GCCause::_no_gc:
+      return 0;
+    default:
+      // Unanticipated gc causes are treated as an allocation failure and cannot be
+      // preempted by regulator requests
+      return 2;
+  }
+}
+
+template<typename T>
+size_t shenandoah_sum_array(T* a, size_t length) {
+  size_t sum = 0;
+  for (size_t i = 0; i < length; i++) {
+    sum += a[i].load_relaxed();
+  }
+  return sum;
+}
+
 void ShenandoahCollectorPolicy::print_gc_stats(outputStream* out) const {
-  out->print_cr("Under allocation pressure, concurrent cycles may cancel, and either continue cycle");
-  out->print_cr("under stop-the-world pause or result in stop-the-world Full GC. Increase heap size,");
-  out->print_cr("tune GC heuristics, set more aggressive pacing delay, or lower allocation rate");
-  out->print_cr("to avoid Degenerated and Full GC cycles.");
+  out->print_cr("Under allocation pressure, concurrent cycles may stall allocating threads or escalate ");
+  out->print_cr("to stop-the-world Full GC. Increase heap size, tune GC heuristics, or lower allocation rate");
+  out->print_cr("to avoid stalls and Full GC cycles. Abbreviated cycles are those which found enough");
+  out->print_cr("regions with no live objects to skip evacuation.");
   out->cr();
 
-  out->print_cr(SIZE_FORMAT_W(5) " successful concurrent GCs",         _success_concurrent_gcs);
-  out->print_cr("  " SIZE_FORMAT_W(5) " invoked explicitly",           _explicit_concurrent);
-  out->print_cr("  " SIZE_FORMAT_W(5) " invoked implicitly",           _implicit_concurrent);
-  out->cr();
+  size_t gc_attempts = 0;
+  for (int c = 0; c < GCCause::_last_gc_cause; c++) {
+    gc_attempts += _collection_cause_counts[c];
+  }
 
-  out->print_cr(SIZE_FORMAT_W(5) " Degenerated GCs",                   _success_degenerated_gcs);
-  out->print_cr("  " SIZE_FORMAT_W(5) " caused by allocation failure", _alloc_failure_degenerated);
-  for (int c = 0; c < ShenandoahGC::_DEGENERATED_LIMIT; c++) {
-    if (_degen_points[c] > 0) {
-      const char* desc = ShenandoahGC::degen_point_to_string((ShenandoahGC::ShenandoahDegenPoint)c);
-      out->print_cr("    " SIZE_FORMAT_W(5) " happened at %s",         _degen_points[c], desc);
+  size_t completed_gcs = _success_full_gcs + _success_concurrent_gcs + _success_old_gcs;
+  out->print_cr("%5zu GC attempts. %zu Completed GCs (%.2f%%).",
+    gc_attempts, completed_gcs, percent_of(completed_gcs, gc_attempts));
+
+  for (int c = 0; c < GCCause::_last_gc_cause; c++) {
+    size_t cause_count = _collection_cause_counts[c];
+    if (cause_count > 0) {
+      auto cause = (GCCause::Cause) c;
+      const char* desc = GCCause::to_string(cause);
+      out->print_cr("  %5zu caused by %s (%.2f%%)", cause_count, desc, percent_of(cause_count, gc_attempts));
     }
   }
-  out->print_cr("  " SIZE_FORMAT_W(5) " upgraded to Full GC",          _alloc_failure_degenerated_upgrade_to_full);
+
+  out->cr();
+  out->print_cr("%5zu Successful Concurrent GCs (%.2f%%)", _success_concurrent_gcs, percent_of(_success_concurrent_gcs, completed_gcs));
+  out->print_cr("  %5zu abbreviated (%.2f%%)",  _abbreviated_concurrent_gcs, percent_of(_abbreviated_concurrent_gcs, _success_concurrent_gcs));
   out->cr();
 
-  out->print_cr(SIZE_FORMAT_W(5) " Full GCs",                          _success_full_gcs + _alloc_failure_degenerated_upgrade_to_full);
-  out->print_cr("  " SIZE_FORMAT_W(5) " invoked explicitly",           _explicit_full);
-  out->print_cr("  " SIZE_FORMAT_W(5) " invoked implicitly",           _implicit_full);
-  out->print_cr("  " SIZE_FORMAT_W(5) " caused by allocation failure", _alloc_failure_full);
-  out->print_cr("  " SIZE_FORMAT_W(5) " upgraded from Degenerated GC", _alloc_failure_degenerated_upgrade_to_full);
+  if (_mode->is_generational()) {
+    out->print_cr("%5zu Completed Old GCs (%.2f%%)",     _success_old_gcs, percent_of(_success_old_gcs, completed_gcs));
+    out->print_cr("  %5zu mixed",                        _mixed_gcs);
+    out->print_cr("  %5zu interruptions",                _interrupted_old_gcs);
+    out->cr();
+  }
+
+  const size_t total_stalls = shenandoah_sum_array(_stall_counts, ShenandoahController::PHASE_LIMIT);
+  out->print_cr("%5zu Stalls", total_stalls);
+  for (int c = 0; c < ShenandoahController::PHASE_LIMIT; c++) {
+    const size_t stall_count = _stall_counts[c].load_relaxed();
+    if (stall_count > 0) {
+      const auto phase = static_cast<ShenandoahController::ShenandoahCollectorPhase>(c);
+      const char* desc = ShenandoahController::collector_phase_to_string(phase);
+      out->print_cr("  %5zu happened at %s", stall_count, desc);
+    }
+  }
+  out->cr();
+
+  out->print_cr("%5zu Full GCs (%.2f%%)", _success_full_gcs, percent_of(_success_full_gcs, completed_gcs));
+  out->print_cr("  %5zu caused by allocation failure (%.2f%%)", _alloc_failure_full, percent_of(_alloc_failure_full, _success_full_gcs));
 }

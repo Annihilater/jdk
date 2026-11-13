@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -76,7 +76,7 @@ class DispatchTable {
   void       set_entry(int i, EntryPoint& entry);     // set    entry point for a given bytecode i
   address*   table_for(TosState state)          { return _table[state]; }
   address*   table_for()                        { return table_for((TosState)0); }
-  int        distance_from(address *table)      { return table - table_for(); }
+  int        distance_from(address *table)      { return (int)(table - table_for()); }
   int        distance_from(TosState state)      { return distance_from(table_for(state)); }
 
   // Comparison
@@ -84,11 +84,9 @@ class DispatchTable {
 };
 
 class TemplateInterpreter: public AbstractInterpreter {
-  friend class VMStructs;
   friend class InterpreterMacroAssembler;
   friend class TemplateInterpreterGenerator;
   friend class TemplateTable;
-  friend class CodeCacheExtensions;
   // friend class Interpreter;
  public:
 
@@ -111,6 +109,8 @@ class TemplateInterpreter: public AbstractInterpreter {
 
   static address    _throw_StackOverflowError_entry;
 
+  static address    _cont_resume_interpreter_adapter;
+
   static address    _remove_activation_entry;                   // continuation address if an exception is not handled by current frame
   static address    _remove_activation_preserving_args_entry;   // continuation address when current frame is being popped
 
@@ -121,6 +121,7 @@ class TemplateInterpreter: public AbstractInterpreter {
   static EntryPoint _earlyret_entry;                            // entry point to return early from a call
   static EntryPoint _deopt_entry[number_of_deopt_entries];      // entry points to return to from a deoptimization
   static address    _deopt_reexecute_return_entry;
+  static address    _cont_popframe_reexecute_entry;             // reexecutes the invoke in a caller thawed after JVMTI PopFrame
   static EntryPoint _safept_entry;
 
   static address _invoke_return_entry[number_of_return_addrs];           // for invokestatic, invokespecial, invokevirtual return entries
@@ -138,7 +139,7 @@ class TemplateInterpreter: public AbstractInterpreter {
   static void       initialize_stub();
   static void       initialize_code();
   // this only returns whether a pc is within generated code for the interpreter.
-  static bool       contains(address pc)                        { return _code != NULL && _code->contains(pc); }
+  static bool       contains(address pc)                        { return _code != nullptr && _code->contains(pc); }
   // Debugging/printing
   static InterpreterCodelet* codelet_containing(address pc);
 
@@ -153,6 +154,8 @@ class TemplateInterpreter: public AbstractInterpreter {
   static address    throw_ArithmeticException_entry()           { return _throw_ArithmeticException_entry; }
   static address    throw_NullPointerException_entry()          { return _throw_NullPointerException_entry; }
   static address    throw_StackOverflowError_entry()            { return _throw_StackOverflowError_entry; }
+
+  static address    cont_resume_interpreter_adapter()           { return _cont_resume_interpreter_adapter; }
 
   // Code generation
 #ifndef PRODUCT
@@ -175,6 +178,7 @@ class TemplateInterpreter: public AbstractInterpreter {
 
   static address deopt_entry(TosState state, int length);
   static address deopt_reexecute_return_entry()                 { return _deopt_reexecute_return_entry; }
+  static address cont_popframe_reexecute_entry()                { return _cont_popframe_reexecute_entry; }
   static address return_entry(TosState state, int length, Bytecodes::Code code);
 
   // Safepoint support

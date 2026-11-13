@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 /*
  * @test MultiReleaseJars
  * @summary Test multi-release jar with AppCDS.
+ * @bug 8380847
  * @requires vm.cds
  * @library /test/lib
  * @run main/othervm/timeout=2400 MultiReleaseJars
@@ -34,11 +35,19 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.io.IOException;
+import java.util.jar.JarFile;
+import java.util.jar.Manifest;
+import java.util.jar.Attributes.Name;
+
 import jdk.test.lib.cds.CDSTestUtils;
+import jdk.test.lib.cds.SimpleCDSAppTester;
 import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.util.JarUtils;
 
 public class MultiReleaseJars {
 
+    static final int BASE_VERSION = 8;
+    static final String BASE_VERSION_STRING = Integer.toString(BASE_VERSION);
     static final int MAJOR_VERSION = Runtime.version().major();
     static final String MAJOR_VERSION_STRING = String.valueOf(MAJOR_VERSION);
 
@@ -58,7 +67,7 @@ public class MultiReleaseJars {
     static String[] getVersion(int version) {
         String[] sts = {
             "package version;",
-            "public class Version {",
+            "class Version {",
             "    public int getVersion(){ return " + version + "; }",
             "}"
         };
@@ -102,8 +111,10 @@ public class MultiReleaseJars {
         writeFile(fileMain, getMain());
 
         File fileVersion = TestCommon.getOutputSourceFile("Version.java");
-        writeFile(fileVersion, getVersion(7));
-        JarBuilder.compile(baseDir.getAbsolutePath(), fileVersion.getAbsolutePath(), "--release", "7");
+        writeFile(fileVersion, getVersion(BASE_VERSION));
+        JarBuilder.compile(baseDir.getAbsolutePath(),
+                           fileVersion.getAbsolutePath(),
+                           "--release", BASE_VERSION_STRING);
         JarBuilder.compile(baseDir.getAbsolutePath(), fileMain.getAbsolutePath(),
             "-cp", baseDir.getAbsolutePath(), "--release", MAJOR_VERSION_STRING);
 
@@ -121,8 +132,9 @@ public class MultiReleaseJars {
         JarBuilder.build("version", baseDir, metainf.getAbsolutePath(),
             "--release", MAJOR_VERSION_STRING, "-C", vDir.getAbsolutePath(), ".");
 
-        // the following jar file is for testing case-insensitive "Multi-Release"
-        // attibute name
+        // version2.jar is exactly the same as version.jar, except that the manifest file contains
+        // "multi-Release" instead of "Multi-Release". This is for testing the case-insensitivity of
+        // the handling of attribute names.
         String[] meta2 = {
             "multi-Release: true",
             "Main-Class: version.Main"
@@ -131,6 +143,23 @@ public class MultiReleaseJars {
         writeFile(metainf, meta2);
         JarBuilder.build("version2", baseDir, metainf.getAbsolutePath(),
             "--release", MAJOR_VERSION_STRING, "-C", vDir.getAbsolutePath(), ".");
+
+        // version3.jar does not include version in the root directory and instead only has it
+        // in the version specific directory. A private version is used so as to avoid the JAR
+        // being rejected since there is no matching class in the root directory.
+        (new File(baseDir, "version/Version.class")).delete();
+        writeFile(metainf, meta);
+        JarBuilder.build("version3", baseDir, metainf.getAbsolutePath(),
+            "--release", MAJOR_VERSION_STRING, "-C", vDir.getAbsolutePath(), ".");
+
+        // version4.jar is exactly the same as version3.jar, except that the manifest file contains
+        // "Multi-Release: truex" instead of "true".
+        Manifest manifest = new Manifest();
+        try (JarFile jar = new JarFile("version3.jar")) {
+            manifest = jar.getManifest();
+        }
+        manifest.getMainAttributes().put(Name.MULTI_RELEASE, "truex");
+        JarUtils.updateManifest("version3.jar", "version4.jar", manifest);
     }
 
     static void checkExecOutput(OutputAnalyzer output, String expectedOutput) throws Exception {
@@ -146,7 +175,7 @@ public class MultiReleaseJars {
 
     public static void main(String... args) throws Exception {
         // create version.jar which contains Main.class and Version.class.
-        // Version.class has two versions: 8 and the current version.
+        // Version.class has two versions: base version and the current version.
         createClassFilesAndJar();
 
         String mainClass          = "version.Main";
@@ -154,6 +183,8 @@ public class MultiReleaseJars {
         String appClasses[]       = {"version/Main", "version/Version"};
         String appJar             = TestCommon.getTestJar("version.jar");
         String appJar2            = TestCommon.getTestJar("version2.jar");
+        String appJar3            = TestCommon.getTestJar("version3.jar");
+        String appJar4            = TestCommon.getTestJar("version4.jar");
         String enableMultiRelease = "-Djdk.util.jar.enableMultiRelease=true";
         String jarVersion         = null;
         String expectedOutput     = null;
@@ -168,12 +199,12 @@ public class MultiReleaseJars {
         output = TestCommon.exec(appJar, mainClass);
         checkExecOutput(output, "I am running on version " + MAJOR_VERSION_STRING);
 
-        // 2. Test versions 7 and the current major version.
+        // 2. Test versions base and the current major version.
         //    -Djdk.util.jar.enableMultiRelease=true (or force), default is true.
-        //    a) -Djdk.util.jar.version=7 does not exist in jar.
-        //        It will fallback to the root version which is also 7 in this test.
+        //    a) -Djdk.util.jar.version=BASE_VERSION does not exist in jar.
+        //        It will fallback to the root version which is also BASE_VERSION in this test.
         //    b) -Djdk.util.jar.version=MAJOR_VERSION exists in the jar.
-        for (int i : new int[] {7, MAJOR_VERSION}) {
+        for (int i : new int[] {BASE_VERSION, MAJOR_VERSION}) {
             jarVersion = "-Djdk.util.jar.version=" + i;
             expectedOutput = "I am running on version " + i;
             output = TestCommon.dump(appJar, appClasses, enableMultiRelease, jarVersion);
@@ -196,7 +227,7 @@ public class MultiReleaseJars {
 
             output = TestCommon.exec(appJar, mainClass);
             if (i == 5)
-                checkExecOutput(output, "I am running on version 7");
+                checkExecOutput(output, "I am running on version " + BASE_VERSION_STRING);
             else
                 checkExecOutput(output, "I am running on version " + MAJOR_VERSION_STRING);
         }
@@ -210,7 +241,7 @@ public class MultiReleaseJars {
             output.shouldHaveExitValue(0);
 
             output = TestCommon.exec(appJar, mainClass);
-            expectedOutput = "I am running on version 7";
+            expectedOutput = "I am running on version " + BASE_VERSION_STRING;
             checkExecOutput(output, expectedOutput);
         }
 
@@ -222,7 +253,7 @@ public class MultiReleaseJars {
         output.shouldHaveExitValue(0);
 
         output = TestCommon.exec(appJar, "-Xbootclasspath/a:" + appJar, mainClass);
-        checkExecOutput(output, "I am running on version 7");
+        checkExecOutput(output, "I am running on version " + BASE_VERSION_STRING);
 
         // 6. Sanity test case-insensitive "Multi-Release" attribute name
         output = TestCommon.dump(appJar2, appClasses);
@@ -231,5 +262,66 @@ public class MultiReleaseJars {
 
         output = TestCommon.exec(appJar2, mainClass);
         checkExecOutput(output, "I am running on version " + MAJOR_VERSION_STRING);
+
+        // 7. AOT Test
+        SimpleCDSAppTester.of("Multi-Release-AOT")
+            .addVmArgs("-Xlog:aot",
+                       enableMultiRelease)
+            .classpath(appJar3)
+            .appCommandLine(mainClass)
+            .setTrainingChecker((OutputAnalyzer out) -> {
+                out.shouldNotMatch("class version/Version cannot be archived because it was not defined");
+            })
+            .setProductionChecker((OutputAnalyzer out) -> {
+                out.shouldContain("I am running on version " + MAJOR_VERSION_STRING);
+            })
+            .runAOTWorkflow();
+
+        // 8. AOT Test with space after enableMultiRelease=true
+        SimpleCDSAppTester.of("Multi-Release-AOT")
+            .addVmArgs("-Xlog:aot",
+                       enableMultiRelease + " ")
+            .classpath(appJar3)
+            .appCommandLine(mainClass)
+            .setTrainingChecker((OutputAnalyzer out) -> {
+                out.shouldNotMatch("class version/Version cannot be archived because it was not defined");
+            })
+            .setProductionChecker((OutputAnalyzer out) -> {
+                out.shouldContain("I am running on version " + MAJOR_VERSION_STRING);
+            })
+            .runAOTWorkflow();
+
+        // 9. AOT Test with multi-release disabled
+        SimpleCDSAppTester.of("No-Multi-Release-AOT")
+            .setCheckExitValue(false)
+            .addVmArgs("-Xlog:aot",
+                       "-Djdk.util.jar.enableMultiRelease=false")
+            .classpath(appJar3)
+            .appCommandLine(mainClass)
+            .setTrainingChecker((OutputAnalyzer out) -> {
+                out.shouldNotMatch("class version/Version cannot be archived because it was not defined");
+            })
+            .setProductionChecker((OutputAnalyzer out) -> {
+                out.shouldHaveExitValue(1);
+                out.shouldContain("java.lang.ClassNotFoundException: version.Version");
+            })
+            .runAOTWorkflow();
+
+        // 10. AOT Test with "Multi-Release: truex" instead of "true". The unexpected value
+        // is ignored and "true" is used by default
+        SimpleCDSAppTester.of("Multi-Release-AOT-Misspelled")
+            .setCheckExitValue(false)
+            .addVmArgs("-Xlog:aot",
+                       enableMultiRelease)
+            .classpath(appJar4)
+            .appCommandLine(mainClass)
+            .setTrainingChecker((OutputAnalyzer out) -> {
+                out.shouldNotMatch("class version/Version cannot be archived because it was not defined");
+            })
+            .setProductionChecker((OutputAnalyzer out) -> {
+                out.shouldHaveExitValue(1);
+                out.shouldContain("java.lang.ClassNotFoundException: version.Version");
+            })
+            .runAOTWorkflow();
     }
 }

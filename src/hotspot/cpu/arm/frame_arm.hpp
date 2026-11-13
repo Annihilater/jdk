@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,11 +25,8 @@
 #ifndef CPU_ARM_FRAME_ARM_HPP
 #define CPU_ARM_FRAME_ARM_HPP
 
-#include "runtime/synchronizer.hpp"
-
  public:
   enum {
-    pc_return_offset                                 =  0,
     // All frames
     link_offset                                      =  0,
     return_addr_offset                               =  1,
@@ -54,7 +51,19 @@
     interpreter_frame_monitor_block_bottom_offset    = interpreter_frame_initial_sp_offset,
 
     // Entry frames
-    entry_frame_call_wrapper_offset                  =  0
+    entry_frame_call_wrapper_offset                  =  0,
+    metadata_words                                   = sender_sp_offset,
+    // size, in words, of metadata at frame bottom, i.e. it is not part of the
+    // caller/callee overlap
+    metadata_words_at_bottom                         = metadata_words,
+    // size, in words, of frame metadata at the frame top, i.e. it is located
+    // between a callee frame and its stack arguments, where it is part
+    // of the caller/callee overlap
+    metadata_words_at_top                            = 0,
+    // in bytes
+    frame_alignment                                  = 16,
+    // size, in words, of maximum shift in frame position due to alignment
+    align_wiggle                                     =  1
   };
 
   intptr_t ptr_at(int offset) const {
@@ -76,19 +85,10 @@
   // original sp.
 
   intptr_t* _unextended_sp;
-  void adjust_unextended_sp();
 
   intptr_t* ptr_at_addr(int offset) const {
     return (intptr_t*) addr_at(offset);
   }
-
-#ifdef ASSERT
-  // Used in frame::sender_for_{interpreter,compiled}_frame
-  static void verify_deopt_original_pc(   CompiledMethod* nm, intptr_t* unextended_sp, bool is_method_handle_return = false);
-  static void verify_deopt_mh_original_pc(CompiledMethod* nm, intptr_t* unextended_sp) {
-    verify_deopt_original_pc(nm, unextended_sp, true);
-  }
-#endif
 
  public:
   // Constructors
@@ -99,7 +99,10 @@
 
   frame(intptr_t* sp, intptr_t* fp);
 
-  void init(intptr_t* sp, intptr_t* fp, address pc);
+  frame(intptr_t* sp, intptr_t* unextended_sp, intptr_t* fp, address pc, CodeBlob* cb, bool allow_cb_null = false);
+
+  void setup(address pc);
+  void init(intptr_t* sp, intptr_t* unextended_sp, intptr_t* fp, address pc);
 
   // accessors for the instance variables
   // Note: not necessarily the real 'frame pointer' (see real_fp)
@@ -110,12 +113,18 @@
   // expression stack tos if we are nested in a java call
   intptr_t* interpreter_frame_last_sp() const;
 
+  template <typename RegisterMapT>
+  static void update_map_with_saved_link(RegisterMapT* map, intptr_t** link_addr);
+
   // deoptimization support
   void interpreter_frame_set_last_sp(intptr_t* sp);
 
   // helper to update a map with callee-saved FP
   static void update_map_with_saved_link(RegisterMap* map, intptr_t** link_addr);
 
-  static jint interpreter_frame_expression_stack_direction() { return -1; }
+
+  intptr_t* repair_sender_sp(intptr_t* sender_sp, intptr_t** saved_fp_addr) const;
+  static intptr_t* repair_sender_sp(nmethod* nm, intptr_t* sp, intptr_t** saved_fp_addr);
+  bool was_augmented_on_entry(int& real_size) const;
 
 #endif // CPU_ARM_FRAME_ARM_HPP

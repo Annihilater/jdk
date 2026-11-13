@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016 SAP SE. All rights reserved.
+ * Copyright 2026 Arm Limited and/or its affiliates.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,8 +30,8 @@
  * @modules java.base/jdk.internal.misc
  * @library /test/lib
  *
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  *
  * @run main/othervm
  *        -Xbootclasspath/a:.
@@ -45,7 +46,7 @@
 
 package compiler.intrinsics.string;
 
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -686,7 +687,7 @@ public class TestStringIntrinsics2 {
                        "TestOther.asmStringEqualsConst(\"\", \"\")");
 
             // check length 0 optimization
-            assertTrue(asmStringEquals("", ""),
+            assertTrue(asmStringEquals(new String(""), new String("")),
                        "TestOther.asmStringEquals(\"\", \"\")");
 
             // check first character optimization
@@ -704,6 +705,80 @@ public class TestStringIntrinsics2 {
                        "TestOther.asmStringEquals(\"abcdefgh0123456abcdefgh0123456abcdefgh0123456\", " +
                        "\"abcdefgh0123456abcdefgh0123456abcdefgh0123456\")");
         }
+
+        // Length-sensitive comparisons
+        {
+            String[] latin1 = {
+                "1234567",                         // 7
+                "12345678",                        // 8
+                "123456789",                       // 9
+                "12345678901234567890123",         // 23
+                "123456789012345678901234",        // 24
+                "1234567890123456789012345"        // 25
+            };
+
+            String[] utf16 = {
+                "\u0101\u0102\u0103",                               // 6 bytes
+                "\u0101\u0102\u0103\u0104",                         // 8 bytes
+                "\u0101\u0102\u0103\u0104\u0105",                   // 10 bytes
+                "\u0101\u0102\u0103\u0104\u0105\u0106\u0107"
+                    + "\u0108\u0109\u010a\u010b",                   // 22 bytes
+                "\u0101\u0102\u0103\u0104\u0105\u0106\u0107"
+                    + "\u0108\u0109\u010a\u010b\u010c",             // 24 bytes
+                "\u0101\u0102\u0103\u0104\u0105\u0106\u0107"
+                    + "\u0108\u0109\u010a\u010b\u010c\u010d"        // 26 bytes
+            };
+
+            for (String value : latin1) {
+                String copy = new String(value.toCharArray());
+
+                assertTrue(asmStringEquals(value, copy), "Latin1 equal, length = " + value.length());
+                for (int i = 0; i < value.length(); i++) {
+                    char[] different = value.toCharArray();
+                    different[i]++;
+                    String differentString = new String(different);
+
+                    assertFalse(asmStringEquals(value, differentString),
+                                "Latin1 mismatch, length = " + value.length() + ", index = " + i);
+
+                    assertFalse(asmStringEquals(differentString, value),
+                                "TestOther.asmStringEquals(Latin1 reverse mismatch, length=" +
+                                value.length() + ", index=" + i + ")");
+                }
+            }
+
+            for (String value : utf16) {
+                String copy = new String(value.toCharArray());
+
+                assertTrue(asmStringEquals(value, copy), "UTF16 equal, length = " + value.length());
+                for (int i = 0; i < value.length(); i++) {
+                    char[] different = value.toCharArray();
+                    different[i]++;
+                    String differentString = new String(different);
+
+                    assertFalse(asmStringEquals(value, differentString),
+                                "UTF16 mismatch, length = " + value.length() + ", index = " + i);
+
+                    assertFalse(asmStringEquals(differentString, value),
+                                "TestOther.asmStringEquals(UTF16 reverse mismatch, length=" +
+                                value.length() + ", index=" + i + ")");
+                }
+            }
+        }
     }
 
+    static String longLatin1 = "0123456789A".repeat(100);
+    static String longUTF = "0123456789\ubeef".repeat(100);
+
+    @Test(role = Role.TEST_HELPER, compileAt = 4, warmup = 1, warmupArgs = { "0123456789", "1" })
+    public static boolean indexOf_use_result_immediately(String a, String b) {
+        char ch = b.charAt(0);
+        return ch == a.charAt(a.indexOf(ch));
+    }
+
+    @Test(role = Role.TEST_ENTRY)
+    public static void test_indexOf_use_result_immediately() {
+        assertTrue(indexOf_use_result_immediately(longLatin1, "A"));
+        assertTrue(indexOf_use_result_immediately(longUTF, "\ubeef"));
+    }
 }

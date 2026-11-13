@@ -32,13 +32,13 @@
 
 class ciBlock;
 
-class ciMethodBlocks : public ResourceObj {
+class ciMethodBlocks : public ArenaObj {
 private:
   ciMethod *_method;
   Arena *_arena;
   GrowableArray<ciBlock *>  *_blocks;
   ciBlock  **_bci_to_block;
-  int _num_blocks;
+  u2 _num_blocks;
   int _code_size;
 
   void do_analysis();
@@ -60,7 +60,7 @@ public:
 #endif
 };
 
-class ciBlock : public ResourceObj {
+class ciBlock : public ArenaObj {
 private:
   int _idx;
   int _start_bci;

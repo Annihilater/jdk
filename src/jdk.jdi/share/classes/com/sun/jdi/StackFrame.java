@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -96,6 +96,18 @@ public interface StackFrame extends Mirror, Locatable {
      * Returns the value of 'this' for the current frame.
      * The {@link ObjectReference} for 'this' is only available for
      * non-native instance methods.
+     *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     * If 'this' is a
+     * {@linkplain ObjectReference##valueObjects value object<sup class="preview-mark">PREVIEW</sup>}
+     * under construction, the returned {@code ObjectReference} will refer to a
+     * <em>snapshot</em> of the value object, not a reference
+     * to the actual value object under construction. Consequently, the returned
+     * {@code ObjectReference} will not reflect changes to the value object that
+     * happen later during construction.
+     *      </div>
+     * </div>
      *
      * @return an {@link ObjectReference}, or null if the frame represents
      * a native or static method.
@@ -199,6 +211,11 @@ public interface StackFrame extends Mirror, Locatable {
      * The variable must be valid for this frame's method and visible
      * according to the rules described in {@link #visibleVariables}.
      * <p>
+     * In the case of virtual threads, the target VM supports setting values
+     * of local variables when this frame is the topmost frame and the thread
+     * is suspended at an event. The target VM may
+     * support setting local variables in other cases.
+     * <p>
      * Object values must be assignment compatible with the variable type
      * (This implies that the variable type must be loaded through the
      * enclosing class's class loader). Primitive values must be
@@ -218,7 +235,11 @@ public interface StackFrame extends Mirror, Locatable {
      * @throws InvalidStackFrameException if this stack frame has become
      * invalid. Once the frame's thread is resumed, the stack frame is
      * no longer valid.
-     * @throws VMCannotBeModifiedException if the VirtualMachine is read-only - see {@link VirtualMachine#canBeModified()}.
+     * @throws OpaqueFrameException if this frame is on the call stack of a
+     * suspended virtual thread, and the target VM does not support setting the value of
+     * local variables in this frame.
+     * @throws VMCannotBeModifiedException if the VirtualMachine is read-only.
+     * @see VirtualMachine#canBeModified()
      */
     void setValue(LocalVariable variable, Value value)
         throws InvalidTypeException, ClassNotLoadedException;

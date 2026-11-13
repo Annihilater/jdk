@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,7 @@ package jdk.internal.net.http;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -259,8 +256,10 @@ class Http1AsyncReceiver {
             checkRequestMore();
 
         } catch (Throwable t) {
-            Throwable x = error;
-            if (x == null) error = t; // will be handled in the finally block
+            synchronized (this) {
+                Throwable x = error;
+                if (x == null) error = t; // will be handled in the finally block
+            }
             if (debug.on()) debug.log("Unexpected error caught in flush()", t);
         } finally {
             // Handles any pending error.
@@ -312,7 +311,7 @@ class Http1AsyncReceiver {
                 // close the upstream connection.
                 Http1Exchange<?> exchg = owner;
                 stop();
-                if (exchg != null) exchg.connection().close();
+                if (exchg != null) exchg.connection().close(x);
             }
         }
     }
@@ -346,7 +345,7 @@ class Http1AsyncReceiver {
         AbstractSubscription subscription = delegate.subscription();
         long demand = subscription.demand().get();
         if (debug.on())
-            debug.log("downstream subscription demand is %s", demand);
+            debug.log("downstream subscription demand is %s for %s", demand, delegate);
         return demand > 0;
     }
 
@@ -419,7 +418,7 @@ class Http1AsyncReceiver {
     }
 
     void subscribe(Http1AsyncDelegate delegate) {
-        synchronized(this) {
+        synchronized (this) {
             pendingDelegateRef.set(delegate);
         }
         if (queue.isEmpty()) {
@@ -443,11 +442,15 @@ class Http1AsyncReceiver {
     }
 
     void unsubscribe(Http1AsyncDelegate delegate) {
-        synchronized(this) {
+        boolean unsubscribed = false;
+        synchronized (this) {
             if (this.delegate == delegate) {
-                if (debug.on()) debug.log("Unsubscribed %s", delegate);
                 this.delegate = null;
+                unsubscribed = true;
             }
+        }
+        if (unsubscribed) {
+            if (debug.on()) debug.log("Unsubscribed %s", delegate);
         }
     }
 
@@ -497,7 +500,8 @@ class Http1AsyncReceiver {
         final Throwable t = (recorded == null ? ex : recorded);
         if (debug.on())
             debug.log("recorded " + t + "\n\t delegate: " + delegate
-                      + "\t\t queue.isEmpty: " + queue.isEmpty(), ex);
+                      + "\n\t queue.isEmpty: " + queue.isEmpty()
+                      + "\n\tstopRequested: " + stopRequested, ex);
         if (Log.errors()) {
             Log.logError("HTTP/1 read subscriber recorded error: {0} - {1}", describe(), t);
         }
@@ -568,7 +572,7 @@ class Http1AsyncReceiver {
             if (canRequestMore.compareAndSet(true, false)) {
                 if (!completed && !dropped) {
                     if (debug.on())
-                        debug.log("Http1TubeSubscriber: requesting one more from upstream");
+                        debug.log("Http1TubeSubscriber: requesting one more from upstream: " + s);
                     s.request(1);
                     return;
                 }
@@ -616,15 +620,7 @@ class Http1AsyncReceiver {
 
         if (queue.isEmpty()) return b;
 
-        // sanity check: we shouldn't have queued the same
-        // buffer twice.
         ByteBuffer[] qbb = queue.toArray(new ByteBuffer[queue.size()]);
-
-// the assertion looks suspicious, more investigation needed
-//
-//        assert java.util.stream.Stream.of(qbb)
-//                .collect(Collectors.toSet())
-//                .size() == qbb.length : debugQBB(qbb);
 
         // compute the number of bytes in the queue, the number of bytes
         // in the initial buffer
@@ -694,33 +690,6 @@ class Http1AsyncReceiver {
                        + " pos=" + bb.position() + " limit=" + bb.limit());
 
         return b;
-    }
-
-    private String debugQBB(ByteBuffer[] qbb) {
-        StringBuilder msg = new StringBuilder();
-        List<ByteBuffer> lbb = Arrays.asList(qbb);
-        Set<ByteBuffer> sbb = new HashSet<>(Arrays.asList(qbb));
-
-        int uniquebb = sbb.size();
-        msg.append("qbb: ").append(lbb.size())
-           .append(" (unique: ").append(uniquebb).append("), ")
-           .append("duplicates: ");
-        String sep = "";
-        for (ByteBuffer b : lbb) {
-            if (!sbb.remove(b)) {
-                msg.append(sep)
-                   .append(b)
-                   .append("[remaining=")
-                   .append(b.remaining())
-                   .append(", position=")
-                   .append(b.position())
-                   .append(", capacity=")
-                   .append(b.capacity())
-                   .append("]");
-                sep = ", ";
-            }
-        }
-        return msg.toString();
     }
 
     volatile String dbgTag;

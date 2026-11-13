@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,7 +111,7 @@ public class InverseDepsAnalyzer extends DepsAnalyzer {
      * Returns the target archives determined from the dependency analysis.
      *
      * Inverse transitive dependency will find all nodes that depend
-     * upon the returned set of archives directly and indirectly.
+     * upon the returned set of archives directly or indirectly.
      */
     public Set<Archive> targets() {
         return Collections.unmodifiableSet(targets);
@@ -145,9 +145,12 @@ public class InverseDepsAnalyzer extends DepsAnalyzer {
                 .forEach(m -> {
                     builder.addNode(m);
                     m.descriptor().requires().stream()
-                        .map(Requires::name)
-                        .map(configuration::findModule)  // must be present
-                        .forEach(v -> builder.addEdge(v.get(), m));
+                        // filter "requires static" if the module is not resolved in the configuration
+                        .filter(req -> !req.modifiers().contains(Requires.Modifier.STATIC)
+                            || configuration.findModule(req.name()).isPresent())
+                            .map(Requires::name)
+                            .map(configuration::findModule)  // must be present
+                            .forEach(v -> builder.addEdge(v.get(), m));
                 });
 
             // add the dependences from the analysis
@@ -164,8 +167,8 @@ public class InverseDepsAnalyzer extends DepsAnalyzer {
             trace("targets: %s%n", targets());
 
             // Traverse from the targets and find all paths
-            // rebuild a graph with all nodes that depends on targets
-            // targets directly and indirectly
+            // rebuild a graph with all nodes that depend on targets
+            // directly or indirectly
             return targets().stream()
                 .map(t -> findPaths(graph, t))
                 .flatMap(Set::stream)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include "gc/shared/workerDataArray.hpp"
 #include "memory/allocation.hpp"
 #include "memory/referenceType.hpp"
+#include "runtime/atomic.hpp"
 #include "utilities/ticks.hpp"
 
 class DiscoveredList;
@@ -37,7 +38,7 @@ class GCTimer;
 class LogStream;
 
 class ReferenceProcessorPhaseTimes : public CHeapObj<mtGC> {
-  static const int number_of_subclasses_of_ref = REF_PHANTOM - REF_OTHER; // 5 - 1 = 4
+  static const int number_of_subclasses_of_ref = REF_PHANTOM - REF_NONE; // 4 - 0 = 4
 
   // Records per thread time information of each sub phase.
   WorkerDataArray<double>* _sub_phases_worker_time_sec[ReferenceProcessor::RefSubPhaseMax];
@@ -52,7 +53,7 @@ class ReferenceProcessorPhaseTimes : public CHeapObj<mtGC> {
   // Total spent time for reference processing.
   double                   _total_time_ms;
 
-  size_t                   _ref_cleared[number_of_subclasses_of_ref];
+  Atomic<size_t>           _ref_dropped[number_of_subclasses_of_ref];
   size_t                   _ref_discovered[number_of_subclasses_of_ref];
 
   bool                     _processing_is_mt;
@@ -83,7 +84,7 @@ public:
 
   void set_total_time_ms(double total_time_ms) { _total_time_ms = total_time_ms; }
 
-  void add_ref_cleared(ReferenceType ref_type, size_t count);
+  void add_ref_dropped(ReferenceType ref_type, size_t count);
   void set_ref_discovered(ReferenceType ref_type, size_t count);
   size_t ref_discovered(ReferenceType ref_type);
 
@@ -144,14 +145,6 @@ public:
   RefProcBalanceQueuesTimeTracker(ReferenceProcessor::RefProcPhases phase_number,
                                   ReferenceProcessorPhaseTimes* phase_times);
   ~RefProcBalanceQueuesTimeTracker();
-};
-
-// Updates phase time at ReferenceProcessorPhaseTimes and save it into GCTimer.
-class RefProcPhaseTimeTracker : public RefProcPhaseTimeBaseTracker {
-public:
-  RefProcPhaseTimeTracker(ReferenceProcessor::RefProcPhases phase_number,
-                          ReferenceProcessorPhaseTimes* phase_times);
-  ~RefProcPhaseTimeTracker();
 };
 
 // Highest level time tracker.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,13 +28,16 @@ package jdk.xml.internal;
 import javax.xml.XMLConstants;
 import jdk.xml.internal.JdkProperty.ImplPropMap;
 import jdk.xml.internal.JdkProperty.State;
+
+import static jdk.xml.internal.JdkConstants.XPATH_ALLOW_NON_XSLT_SYS_PROPS;
 import static jdk.xml.internal.JdkXmlUtils.SP_USE_CATALOG;
+import static jdk.xml.internal.JdkConstants.SP_ENABLE_TEMPLATESIMPL_DESERIALIZATION;
 
 /**
  * This class manages JDK's XML Features. Previously added features and properties
  * may be gradually moved to this class.
  */
-public class JdkXmlFeatures {
+public class JdkXmlFeatures implements Cloneable {
     public static final String ORACLE_JAXP_PROPERTY_PREFIX =
         "http://www.oracle.com/xml/jaxp/properties/";
 
@@ -52,7 +55,7 @@ public class JdkXmlFeatures {
          * function is disabled.
          */
         ENABLE_EXTENSION_FUNCTION(ImplPropMap.ENABLEEXTFUNC, null, null, true,
-                null, null, true, false, true, true),
+                null, null, false, false, true, true),
         /**
          * The {@link javax.xml.XMLConstants.USE_CATALOG} feature.
          * FSP: USE_CATALOG is not enforced by FSP.
@@ -72,7 +75,25 @@ public class JdkXmlFeatures {
          * FSP: not enforced by FSP.
          */
         JDK_OVERRIDE_PARSER(ImplPropMap.OVERRIDEPARSER, null, null, false,
-                null, null, false, false, true, false);
+                null, null, false, false, true, false),
+
+        /**
+         * Feature allowNonXSLTSysProps: controls whether XPath's system-property()
+         * function is permitted to access non-XSLT-defined JVM system properties.
+         * FSP: when FSP is on, accessing non-XSLT-defined JVM system properties is disabled
+         */
+        JDK_XPATH_SYSTEM_PROPERTY(null, XPATH_ALLOW_NON_XSLT_SYS_PROPS,
+                XPATH_ALLOW_NON_XSLT_SYS_PROPS, false,
+                null, null, false, false, true, true),
+
+        /*
+         * Feature TemplatesImplDeserialization
+         * FSP: TemplatesImpl deserialization is enforced by FSP. When FSP is on,
+         * TemplatesImpl deserialization is disabled.
+         */
+        ENABLE_TEMPLATESIMPL_DESERIALIZATION(null,
+                SP_ENABLE_TEMPLATESIMPL_DESERIALIZATION, SP_ENABLE_TEMPLATESIMPL_DESERIALIZATION,
+                false, null, null, false, false, true, true);
 
         private final ImplPropMap implMap;
         private final String name;
@@ -92,16 +113,18 @@ public class JdkXmlFeatures {
          * parameters.
          * @param name the name of the feature
          * @param nameSP the name of the System Property
+         * @param differ
          * @param nameOld the name of the corresponding legacy property
          * @param nameOldSP the system property of the legacy property
-         * @param value the value of the feature
-         * @param hasSystem a flag to indicate whether the feature is supported
+         * @param valueDefault the default value of the feature
+         * @param valueEnforced the FSP-enforced value of the feature
+         * @param hasSystem a flag indicating whether a system property is supported for the feature
          * @param enforced a flag indicating whether the feature is
          * FSP (Feature_Secure_Processing) enforced
          * with a System property
          */
         XmlFeature(ImplPropMap implMap, String name, String nameSP, boolean differ,
-                String nameOld, String nameOldSP, boolean value, boolean valueEnforced,
+                String nameOld, String nameOldSP, boolean valueDefault, boolean valueEnforced,
                 boolean hasSystem, boolean enforced) {
             this.implMap = implMap;
             if (implMap != null) {
@@ -116,7 +139,7 @@ public class JdkXmlFeatures {
                 this.nameOldSP = nameOldSP;
             }
             this.differ = differ;
-            this.valueDefault = value;
+            this.valueDefault = valueDefault;
             this.valueEnforced = valueEnforced;
             this.hasSystem = hasSystem;
             this.enforced = enforced;
@@ -217,12 +240,12 @@ public class JdkXmlFeatures {
     /**
      * Values of the features
      */
-    private final boolean[] featureValues;
+    private boolean[] featureValues;
 
     /**
      * States of the settings for each property
      */
-    private final State[] states;
+    private State[] states;
 
     /**
      * Flag indicating if secure processing is set
@@ -246,8 +269,33 @@ public class JdkXmlFeatures {
                 states[f.ordinal()] = State.DEFAULT;
             }
         }
-        //read system properties or jaxp.properties
-        readSystemProperties();
+    }
+
+    /**
+     * Returns a copy of the JdkXmlFeatures.
+     * @return a copy of the JdkXmlFeatures
+     */
+    public JdkXmlFeatures clone() {
+        try {
+            JdkXmlFeatures copy = (JdkXmlFeatures) super.clone();
+            copy.featureValues = this.featureValues.clone();
+            copy.states = this.states.clone();
+            return copy;
+        } catch (CloneNotSupportedException e) {
+            // shouldn't happen as this class is Cloneable
+            throw new InternalError(e);
+        }
+    }
+
+    /**
+     * Returns a copy of the JdkXmlFeatures that is updated with the
+     * current System Properties.
+     * @return a copy of the JdkXmlFeatures
+     */
+    public JdkXmlFeatures cloneAndUpdate() {
+        JdkXmlFeatures copy = clone();
+        copy.readSystemProperties();
+        return copy;
     }
 
     /**
@@ -323,7 +371,7 @@ public class JdkXmlFeatures {
      */
     public void setFeature(int index, State state, Object value) {
         boolean temp;
-        if (Boolean.class.isAssignableFrom(value.getClass())) {
+        if (value instanceof Boolean) {
             temp = (Boolean)value;
         } else {
             temp = Boolean.parseBoolean((String) value);
@@ -382,39 +430,34 @@ public class JdkXmlFeatures {
      */
     private void readSystemProperties() {
         for (XmlFeature feature : XmlFeature.values()) {
-            if (!getSystemProperty(feature, feature.systemProperty())) {
-                //if system property is not found, try the older form if any
-                String oldName = feature.systemPropertyOld();
-                if (oldName != null) {
-                    getSystemProperty(feature, oldName);
-                }
-            }
+            getSystemProperty(feature, feature.systemProperty());
         }
     }
 
     /**
-     * Read from system properties, or those in jaxp.properties
+     * Read the system property, or the setting in the Jaxp Configuration File
+     * corresponding to the XmlFeature.
      *
-     * @param property the type of the property
-     * @param sysPropertyName the name of system property
+     * @param feature the XmlFeature
+     * @param sysPropertyName the corresponding system property
      * @return true if the system property is found, false otherwise
      */
     private boolean getSystemProperty(XmlFeature feature, String sysPropertyName) {
-        try {
-            String value = SecuritySupport.getSystemProperty(sysPropertyName);
-            if (value != null && !value.isEmpty()) {
-                setFeature(feature, State.SYSTEMPROPERTY, Boolean.parseBoolean(value));
-                return true;
-            }
+        String value = System.getProperty(sysPropertyName);
+        if (value == null && feature.systemPropertyOld() != null) {
+            // legacy system property
+            value = System.getProperty(feature.systemPropertyOld());
+        }
 
-            value = SecuritySupport.readJAXPProperty(sysPropertyName);
-            if (value != null && !value.isEmpty()) {
-                setFeature(feature, State.JAXPDOTPROPERTIES, Boolean.parseBoolean(value));
-                return true;
-            }
-        } catch (NumberFormatException e) {
-            //invalid setting
-            throw new NumberFormatException("Invalid setting for system property: " + feature.systemProperty());
+        if (value != null && !value.isEmpty()) {
+            setFeature(feature, State.SYSTEMPROPERTY, Boolean.parseBoolean(value));
+            return true;
+        }
+
+        value = SecuritySupport.readConfig(sysPropertyName);
+        if (value != null && !value.isEmpty()) {
+            setFeature(feature, State.JAXPDOTPROPERTIES, Boolean.parseBoolean(value));
+            return true;
         }
         return false;
     }

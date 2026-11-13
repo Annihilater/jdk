@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,11 +25,9 @@
 package jdk.jfr.internal.jfc.model;
 
 import java.util.StringJoiner;
+import jdk.jfr.internal.util.TimespanUnit;
 
 public final class Utilities {
-    private static final String[] UNITS = new String[] {
-        "ns", "us", "ns", "ms", "s", "m", "h", "d" // order matters
-    };
 
     static XmlElement instantiate(Class<? extends XmlElement> type) {
         try {
@@ -102,11 +100,12 @@ public final class Utilities {
     }
 
     static String parseTimespan(String s) {
+        s = s.strip();
         StringBuilder sb = new StringBuilder();
         try {
-            for (String unit : UNITS) {
-                if (s.endsWith(unit)) {
-                    return parseForUnit(s, unit);
+            for (TimespanUnit timespan : TimespanUnit.values()) {
+                if (s.endsWith(timespan.text)) {
+                    return parseForUnit(s, timespan.text);
                 }
             }
             Long.parseLong(s);
@@ -120,7 +119,7 @@ public final class Utilities {
     }
 
     private static String parseForUnit(String s, String unit) {
-        String number = s.trim().substring(0, s.length() - unit.length());
-        return Long.parseLong(number.trim()) + " " + unit;
+        String number = s.substring(0, s.length() - unit.length());
+        return Long.parseLong(number.strip()) + " " + unit;
     }
 }

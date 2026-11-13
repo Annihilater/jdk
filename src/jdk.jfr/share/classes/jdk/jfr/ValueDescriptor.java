@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,24 +32,30 @@ import java.util.Objects;
 
 import jdk.jfr.internal.AnnotationConstruct;
 import jdk.jfr.internal.Type;
-import jdk.jfr.internal.Utils;
+import jdk.jfr.internal.util.Utils;
 
 /**
  * Describes the event fields and annotation elements.
+ * <p>
+ * The following example shows how the {@code ValueDescriptor} class can
+ * be used to list field information of all types.
+ *
+ * {@snippet class="Snippets" region="ValueDescriptorOverview"}
  *
  * @since 9
  */
 public final class ValueDescriptor {
-
+    private static final String UNKNOWN = new String();
     private final AnnotationConstruct annotationConstruct;
     private final Type type;
     private final String name;
     private final boolean isArray;
     private final boolean constantPool;
-    private final String javaFieldName;
+    private String label = UNKNOWN;
+    private String contentType = UNKNOWN;
 
     // package private, invoked by jdk.internal.
-    ValueDescriptor(Type type, String name, List<AnnotationElement> annotations, int dimension, boolean constantPool, String fieldName) {
+    ValueDescriptor(Type type, String name, List<AnnotationElement> annotations, int dimension, boolean constantPool) {
         Objects.requireNonNull(annotations);
         if (dimension < 0) {
             throw new IllegalArgumentException("Dimension must be positive");
@@ -59,7 +65,6 @@ public final class ValueDescriptor {
         this.isArray = dimension > 0;
         this.constantPool = constantPool;
         this.annotationConstruct = new AnnotationConstruct(annotations);
-        this.javaFieldName = fieldName;
     }
 
     /**
@@ -90,10 +95,6 @@ public final class ValueDescriptor {
      * @param name the name, not {@code null}
      *
      * @throws IllegalArgumentException if the name is not a valid Java identifier
-     *
-     * @throws SecurityException if a security manager is present and the caller
-     *         doesn't have {@code FlightRecorderPermission("registerEvent")}
-     *
      */
     public ValueDescriptor(Class<?> type, String name) {
         this(type, name, Collections.<AnnotationElement> emptyList());
@@ -129,18 +130,15 @@ public final class ValueDescriptor {
      *        {@code null}
      *
      * @throws IllegalArgumentException if the name is not a valid Java identifier
-     *
-     * @throws SecurityException if a security manager is present and the caller
-     *         doesn't have {@code FlightRecorderPermission("registerEvent")}
      */
     public ValueDescriptor(Class<?> type, String name, List<AnnotationElement> annotations) {
         this(type, name, List.copyOf(annotations), false);
     }
 
-
     ValueDescriptor(Class<?> type, String name, List<AnnotationElement> annotations, boolean allowArray) {
-        Objects.requireNonNull(annotations);
-        Utils.checkRegisterPermission();
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(annotations, "annotations");
         if (!allowArray) {
             if (type.isArray()) {
                 throw new IllegalArgumentException("Array types are not allowed");
@@ -150,7 +148,6 @@ public final class ValueDescriptor {
         Utils.ensureJavaIdentifier(name);
         this.type = Objects.requireNonNull(Utils.getValidType(Objects.requireNonNull(type), Objects.requireNonNull(name)));
         this.annotationConstruct = new AnnotationConstruct(annotations);
-        this.javaFieldName = name; // Needed for dynamic events
         this.isArray = type.isArray();
         // Assume we always want to store String and Thread in constant pool
         this.constantPool = type == Class.class || type == Thread.class;
@@ -163,7 +160,10 @@ public final class ValueDescriptor {
      * @return a human-readable name, or {@code null} if doesn't exist
      */
     public String getLabel() {
-        return annotationConstruct.getLabel();
+        if (label == UNKNOWN) {
+            label = annotationConstruct.getLabel();;
+        }
+        return label;
     }
 
     /**
@@ -214,14 +214,18 @@ public final class ValueDescriptor {
      * @see ContentType
      */
     public String getContentType() {
-        for (AnnotationElement anno : getAnnotationElements()) {
-            for (AnnotationElement meta : anno.getAnnotationElements()) {
-                if (meta.getTypeName().equals(ContentType.class.getName())) {
-                    return anno.getTypeName();
+        if (contentType == UNKNOWN) {
+            for (AnnotationElement anno : getAnnotationElements()) {
+                for (AnnotationElement meta : anno.getAnnotationElements()) {
+                    if (meta.getTypeName().equals(ContentType.class.getName())) {
+                        contentType = anno.getTypeName();
+                        return contentType;
+                    }
                 }
             }
+            contentType = null;
         }
-        return null;
+        return contentType;
     }
 
     /**
@@ -234,7 +238,7 @@ public final class ValueDescriptor {
      */
     public String getTypeName() {
         if (type.isSimpleType()) {
-            return type.getFields().get(0).getTypeName();
+            return type.getFields().getFirst().getTypeName();
         }
         return type.getName();
     }
@@ -271,7 +275,7 @@ public final class ValueDescriptor {
      *         directly present, else {@code null}
      */
     public <A extends Annotation> A getAnnotation(Class<A> annotationType) {
-        Objects.requireNonNull(annotationType);
+        Objects.requireNonNull(annotationType, "annotationType");
         return annotationConstruct.getAnnotation(annotationType);
     }
 
@@ -311,11 +315,6 @@ public final class ValueDescriptor {
     // package private
     boolean isConstantPool() {
         return constantPool;
-    }
-
-    // package private
-    String getJavaFieldName() {
-        return javaFieldName;
     }
 
     // package private

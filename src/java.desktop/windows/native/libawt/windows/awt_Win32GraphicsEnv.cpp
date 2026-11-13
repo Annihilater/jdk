@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,29 +31,28 @@
 #include "Devices.h"
 #include "WindowsFlags.h"
 #include "DllUtil.h"
+#include <windef.h>
 
 BOOL DWMIsCompositionEnabled();
 
-void initScreens(JNIEnv *env) {
-
+BOOL initScreens(JNIEnv *env) {
     if (!Devices::UpdateInstance(env)) {
-        JNU_ThrowInternalError(env, "Could not update the devices array.");
-        return;
+        J2dRlsTraceLn(J2D_TRACE_ERROR, "initScreens: Could not update the devices array.");
+        return FALSE;
     }
+    return TRUE;
 }
 
 /**
  * This function attempts to make a Win32 API call to
- *   BOOL SetProcessDPIAware(VOID);
- * which is only present on Windows Vista, and which instructs the
- * Vista Windows Display Manager that this application is High DPI Aware
- * and does not need to be scaled by the WDM and lied about the
- * actual system dpi.
+ *   BOOL SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT);
+ * to set Process DPI Awareness to DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+ * to match what we have in the manifest file.
  */
 static void
 SetProcessDPIAwareProperty()
 {
-    typedef BOOL (WINAPI SetProcessDPIAwareFunc)(void);
+    typedef BOOL (WINAPI SetProcessDpiAwarenessContextFunc)(DPI_AWARENESS_CONTEXT);
     static BOOL bAlreadySet = FALSE;
 
     // setHighDPIAware is set in WindowsFlags.cpp
@@ -66,12 +65,14 @@ SetProcessDPIAwareProperty()
     HMODULE hLibUser32Dll = JDK_LoadSystemLibrary("user32.dll");
 
     if (hLibUser32Dll != NULL) {
-        SetProcessDPIAwareFunc *lpSetProcessDPIAware =
-            (SetProcessDPIAwareFunc*)GetProcAddress(hLibUser32Dll,
-                                                    "SetProcessDPIAware");
-        if (lpSetProcessDPIAware != NULL) {
-            lpSetProcessDPIAware();
+        SetProcessDpiAwarenessContextFunc *lpSetProcessDpiAwarenessContext =
+                    (SetProcessDpiAwarenessContextFunc*)GetProcAddress(hLibUser32Dll,
+                                                            "SetProcessDpiAwarenessContext");
+
+        if (lpSetProcessDpiAwarenessContext != NULL) {
+            lpSetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
+
         ::FreeLibrary(hLibUser32Dll);
     }
 }
@@ -89,18 +90,11 @@ void DWMResetCompositionEnabled() {
 }
 
 /**
- * Returns true if dwm composition is enabled, false if it is not applicable
- * (if the OS is not Vista) or dwm composition is disabled.
+ * Returns true if DWM composition is enabled, false if DWM composition is disabled.
  */
 BOOL DWMIsCompositionEnabled() {
-    // cheaper to check than whether it's vista or not
     if (dwmIsCompositionEnabled != DWM_COMP_UNDEFINED) {
         return (BOOL)dwmIsCompositionEnabled;
-    }
-
-    if (!IS_WINVISTA) {
-        dwmIsCompositionEnabled = FALSE;
-        return FALSE;
     }
 
     BOOL bRes = FALSE;
@@ -110,11 +104,11 @@ BOOL DWMIsCompositionEnabled() {
         HRESULT res = DwmAPI::DwmIsCompositionEnabled(&bEnabled);
         if (SUCCEEDED(res)) {
             bRes = bEnabled;
-            J2dTraceLn1(J2D_TRACE_VERBOSE, " composition enabled: %d",bRes);
+            J2dTraceLn(J2D_TRACE_VERBOSE, " composition enabled: %d",bRes);
         } else {
-            J2dTraceLn1(J2D_TRACE_ERROR,
-                    "IsDWMCompositionEnabled: error %x when detecting"\
-                    "if composition is enabled", res);
+            J2dTraceLn(J2D_TRACE_ERROR,
+                       "IsDWMCompositionEnabled: error %x when detecting"\
+                       "if composition is enabled", res);
         }
     } catch (const DllUtil::Exception &) {
         J2dTraceLn(J2D_TRACE_ERROR,
@@ -145,7 +139,9 @@ Java_sun_awt_Win32GraphicsEnvironment_initDisplay(JNIEnv *env,
 
     DWMIsCompositionEnabled();
 
-    initScreens(env);
+    if (!initScreens(env)) {
+        JNU_ThrowInternalError(env, "Could not update the devices array.");
+    }
 }
 
 /*
@@ -183,7 +179,7 @@ Java_sun_awt_Win32FontManager_registerFontWithPlatform(JNIEnv *env,
                                                        jclass cl,
                                                        jstring fontName)
 {
-    LPTSTR file = (LPTSTR)JNU_GetStringPlatformChars(env, fontName, JNI_FALSE);
+    LPTSTR file = (LPTSTR)JNU_GetStringPlatformChars(env, fontName, NULL);
     if (file) {
         ::AddFontResourceEx(file, FR_PRIVATE, NULL);
         JNU_ReleaseStringPlatformChars(env, fontName, file);
@@ -203,7 +199,7 @@ Java_sun_awt_Win32FontManager_deRegisterFontWithPlatform(JNIEnv *env,
                                                          jclass cl,
                                                          jstring fontName)
 {
-    LPTSTR file = (LPTSTR)JNU_GetStringPlatformChars(env, fontName, JNI_FALSE);
+    LPTSTR file = (LPTSTR)JNU_GetStringPlatformChars(env, fontName, NULL);
     if (file) {
         ::RemoveFontResourceEx(file, FR_PRIVATE, NULL);
         JNU_ReleaseStringPlatformChars(env, fontName, file);
@@ -234,7 +230,7 @@ Java_sun_awt_Win32FontManager_getEUDCFontFile(JNIEnv *env, jclass cl) {
     unsigned long fontPathLen = MAX_PATH + 1;
     WCHAR  tmpPath[MAX_PATH + 1];
     LPWSTR fontPath = fontPathBuf;
-    LPWSTR eudcKey = NULL;
+    LPCWSTR eudcKey = NULL;
 
     LANGID langID = GetSystemDefaultLangID();
     //lookup for encoding ID, EUDC only supported in
@@ -283,7 +279,7 @@ Java_sun_awt_Win32FontManager_getEUDCFontFile(JNIEnv *env, jclass cl) {
             return NULL;
         }
     } else if (wcscmp(fontPath, L"EUDC.TTE") == 0) {
-        //else to see if it only inludes "EUDC.TTE"
+        //else to see if it only includes "EUDC.TTE"
         WCHAR systemRoot[MAX_PATH + 1];
         if (GetWindowsDirectory(systemRoot, MAX_PATH + 1) != 0) {
             swprintf(tmpPath, MAX_PATH, L"%s\\FONTS\\EUDC.TTE", systemRoot);
@@ -334,13 +330,3 @@ Java_sun_awt_Win32GraphicsEnvironment_getYResolution(JNIEnv *env, jobject wge)
     CATCH_BAD_ALLOC_RET(0);
 }
 
-/*
- * Class:     sun_awt_Win32GraphicsEnvironment
- * Method:    isVistaOS
- * Signature: ()Z
- */
-JNIEXPORT jboolean JNICALL Java_sun_awt_Win32GraphicsEnvironment_isVistaOS
-  (JNIEnv *env, jclass wgeclass)
-{
-    return IS_WINVISTA;
-}

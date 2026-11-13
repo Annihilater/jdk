@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -89,7 +89,7 @@ jint forceSharedPixmaps = JNI_FALSE;
 int mitShmPermissionMask = MITSHM_PERM_OWNER;
 #endif
 
-/* Cached shared image, one for all surface datas. */
+/* Cached shared image, one for all surface data. */
 static XImage * cachedXImage;
 
 #endif /* !HEADLESS */
@@ -176,6 +176,9 @@ Java_sun_java2d_x11_XSurfaceData_isDrawableValid(JNIEnv *env, jobject this)
 
 #ifndef HEADLESS
     X11SDOps *xsdo = X11SurfaceData_GetOps(env, this);
+    if (xsdo == NULL) {
+        return JNI_FALSE;
+    }
 
     AWT_LOCK();
     if (xsdo->drawable != 0 || X11SD_InitWindow(env, xsdo) == SD_SUCCESS) {
@@ -291,7 +294,7 @@ Java_sun_java2d_x11_XSurfaceData_flushNativeSurface(JNIEnv *env, jobject xsd)
 }
 
 
-JNIEXPORT X11SDOps * JNICALL
+X11SDOps *
 X11SurfaceData_GetOps(JNIEnv *env, jobject sData)
 {
 #ifdef HEADLESS
@@ -534,9 +537,9 @@ XImage* X11SD_CreateSharedImage(X11SDOps *xsdo,
         shmget(IPC_PRIVATE, (size_t) height * img->bytes_per_line,
                IPC_CREAT|mitShmPermissionMask);
     if (shminfo->shmid < 0) {
-        J2dRlsTraceLn1(J2D_TRACE_ERROR,
-                       "X11SD_SetupSharedSegment shmget has failed: %s",
-                       strerror(errno));
+        J2dRlsTraceLn(J2D_TRACE_ERROR,
+                      "X11SD_SetupSharedSegment shmget has failed: %s",
+                      strerror(errno));
         free((void *)shminfo);
         XDestroyImage(img);
         return NULL;
@@ -545,9 +548,9 @@ XImage* X11SD_CreateSharedImage(X11SDOps *xsdo,
     shminfo->shmaddr = (char *) shmat(shminfo->shmid, 0, 0);
     if (shminfo->shmaddr == ((char *) -1)) {
         shmctl(shminfo->shmid, IPC_RMID, 0);
-        J2dRlsTraceLn1(J2D_TRACE_ERROR,
-                       "X11SD_SetupSharedSegment shmat has failed: %s",
-                       strerror(errno));
+        J2dRlsTraceLn(J2D_TRACE_ERROR,
+                      "X11SD_SetupSharedSegment shmat has failed: %s",
+                      strerror(errno));
         free((void *)shminfo);
         XDestroyImage(img);
         return NULL;
@@ -567,9 +570,9 @@ XImage* X11SD_CreateSharedImage(X11SDOps *xsdo,
     shmctl(shminfo->shmid, IPC_RMID, 0);
 
     if (isXShmAttachFailed() == JNI_TRUE) {
-        J2dRlsTraceLn1(J2D_TRACE_ERROR,
-                       "X11SD_SetupSharedSegment XShmAttach has failed: %s",
-                       strerror(errno));
+        J2dRlsTraceLn(J2D_TRACE_ERROR,
+                      "X11SD_SetupSharedSegment XShmAttach has failed: %s",
+                      strerror(errno));
         shmdt(shminfo->shmaddr);
         free((void *)shminfo);
         XDestroyImage(img);
@@ -882,11 +885,9 @@ static void X11SD_GetRasInfo(JNIEnv *env,
     } else
 #endif /* MITSHM */
     if (xpriv->lockType == X11SD_LOCK_BY_XIMAGE) {
-        int x, y, w, h;
+        int x, y;
         x = pRasInfo->bounds.x1;
         y = pRasInfo->bounds.y1;
-        w = pRasInfo->bounds.x2 - x;
-        h = pRasInfo->bounds.y2 - y;
 
         xpriv->img = X11SD_GetImage(env, xsdo, &pRasInfo->bounds, lockFlags);
         if (xpriv->img) {
@@ -1298,6 +1299,7 @@ void X11SD_DisposeXImage(XImage * image) {
 #ifdef MITSHM
         if (image->obdata != NULL) {
             X11SD_DropSharedSegment((XShmSegmentInfo*)image->obdata);
+            free(image->obdata);
             image->obdata = NULL;
         }
 #endif /* MITSHM */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@ import jdk.test.lib.jfr.Events;
 /**
  * @test
  * @summary Test SettingDescriptor.getName()
- * @key jfr
+ * @requires vm.flagless
  * @requires vm.hasJFR
  * @library /test/lib /test/jdk
  * @run main/othervm jdk.jfr.api.metadata.settingdescriptor.TestDefaultValue
@@ -52,6 +52,6 @@ public class TestDefaultValue {
         SettingDescriptor overridden = Events.getSetting(type, "overridden");
         Asserts.assertEquals(overridden.getDefaultValue(), PlainSetting.DEFAULT_VALUE);
 
-        CustomEvent.assertOnDisk((x, y) -> x.getName().compareTo(y.getName()));
+        CustomEvent.assertOnDisk((x, y) -> x.getDefaultValue().compareTo(y.getDefaultValue()));
     }
 }

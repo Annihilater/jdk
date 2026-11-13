@@ -31,7 +31,7 @@
  * @build jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      compiler.ciReplay.TestIncrementalInlining
+ *      ${test.main.class}
  */
 
 package compiler.ciReplay;
@@ -68,6 +68,7 @@ public class TestIncrementalInlining extends InliningBase {
         commandLineNormal.add("-XX:+WhiteBoxAPI");
         commandLineNormal.add("-XX:MaxInlineLevel=2");
         commandLineNormal.add("-XX:-AlwaysIncrementalInline");
+        commandLineNormal.add("-XX:-StressIncrementalInlining");
         runTest();
     }
 

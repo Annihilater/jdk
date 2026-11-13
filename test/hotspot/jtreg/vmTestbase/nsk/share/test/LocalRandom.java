@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,8 @@ import nsk.share.TestFailure;
 public class LocalRandom {
     static {
         // ensure seed got printed out
-        Utils.getRandomInstance();
+        // TODO re-enalbe when monitor doesn't require to pin thread
+        // Utils.getRandomInstance();
     }
     private final static ThreadLocal<Random> random = new ThreadLocal<>() {
         protected Random initialValue() {
@@ -101,6 +102,32 @@ public class LocalRandom {
     }
 
     public static void validate(byte[] arr) {
+        int k = Math.max(1, arr.length / maxRandomCount);
+        byte hash = 0;
+        for (int i = 0; i < arr.length; i += k) {
+            hash ^= arr[i];
+        }
+        if (hash != 0) {
+            throw new TestFailure(
+                    "Validation failure: " + arr.getClass() + " hash: " + hash);
+        }
+    }
+
+    public static void nextBytes(Byte[] arr) {
+        if (arr.length == 0) {
+            return;
+        }
+        int k = Math.max(1, arr.length / maxRandomCount);
+        byte hash = 0;
+        byte b;
+        for (int i = 0; i < arr.length - k; i += k) {
+            b = nextByte();
+            arr[i] = b;
+            hash ^= b;
+        }
+        arr[arr.length - k] = hash;
+    }
+    public static void validate(Byte[] arr) {
         int k = Math.max(1, arr.length / maxRandomCount);
         byte hash = 0;
         for (int i = 0; i < arr.length; i += k) {
@@ -193,6 +220,34 @@ public class LocalRandom {
         }
     }
 
+
+    public static void nextInts(Integer[] arr) {
+        if (arr.length == 0) {
+            return;
+        }
+        int k = Math.max(1, arr.length / maxRandomCount);
+        int hash = 0;
+        int in;
+        for (int i = 0; i < arr.length - k; i += k) {
+            in = nextInt();
+            hash ^= in;
+            arr[i] = in;
+        }
+        arr[arr.length - k] = hash;
+    }
+
+    public static void validate(Integer[] arr) {
+        int k = Math.max(1, arr.length / maxRandomCount);
+        int hash = 0;
+        for (int i = 0; i < arr.length; i += k) {
+            hash ^= arr[i];
+        }
+        if (hash != 0) {
+            throw new TestFailure(
+                    "Validation failure: " + arr.getClass() + " hash: " + hash);
+        }
+    }
+
     public static void nextBooleans(boolean[] arr) {
         if (arr.length == 0) {
             return;
@@ -219,6 +274,34 @@ public class LocalRandom {
                     "Validation failure: " + arr.getClass() + " hash: " + hash);
         }
     }
+
+    public static void nextBooleans(Boolean[] arr) {
+        if (arr.length == 0) {
+            return;
+        }
+        int k = Math.max(1, arr.length / maxRandomCount);
+        boolean hash = false;
+        boolean b;
+        for (int i = 0; i < arr.length - k; i += k) {
+            b = nextBoolean();
+            hash ^= b;
+            arr[i] = b;
+        }
+        arr[arr.length - k] = hash;
+    }
+
+    public static void validate(Boolean[] arr) {
+        int k = Math.max(1, arr.length / maxRandomCount);
+        boolean hash = false;
+        for (int i = 0; i < arr.length; i += k) {
+            hash ^= arr[i];
+        }
+        if (hash != false) {
+            throw new TestFailure(
+                    "Validation failure: " + arr.getClass() + " hash: " + hash);
+        }
+    }
+
 
     public static void nextLongs(long[] arr) {
         if (arr.length == 0) {

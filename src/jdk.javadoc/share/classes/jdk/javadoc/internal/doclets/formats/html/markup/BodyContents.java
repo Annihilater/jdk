@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,62 +25,50 @@
 
 package jdk.javadoc.internal.doclets.formats.html.markup;
 
-import jdk.javadoc.internal.doclets.toolkit.Content;
-
 import java.io.IOException;
 import java.io.Writer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import jdk.javadoc.internal.html.Content;
+import jdk.javadoc.internal.html.ContentBuilder;
+import jdk.javadoc.internal.html.HtmlTree;
+import jdk.javadoc.internal.html.Text;
+
 /**
  * Content for the {@code <body>} element.
  *
  * The content is a {@code <div>} element that contains a
- * header that is always visible, and main content that
- * can be scrolled if necessary.
- *
- *  <p><b>This is NOT part of any supported API.
- *  If you write code that depends on this, you do so at your own risk.
- *  This code and its internal interfaces are subject to change or
- *  deletion without notice.</b>
+ * header that is always visible, main content that
+ * can be scrolled if necessary, and optional side and footer
+ * contents that are only rendered if available.
  */
-public class BodyContents extends Content {
+public class BodyContents {
 
-    private List<Content> mainContents = new ArrayList<>();
-    private HtmlTree header = null;
-    private HtmlTree footer = null;
+    private final List<Content> mainContents = new ArrayList<>();
+    private Content side = null;
+    private Content header = null;
+    private Content footer = null;
 
     public BodyContents addMainContent(Content content) {
         mainContents.add(content);
         return this;
     }
 
-    public BodyContents setHeader(HtmlTree header) {
+    public BodyContents setSideContent(Content side) {
+        this.side = Objects.requireNonNull(side);
+        return this;
+    }
+
+    public BodyContents setHeader(Content header) {
         this.header = Objects.requireNonNull(header);
         return this;
     }
 
-    public BodyContents setFooter(HtmlTree footer) {
+    public BodyContents setFooter(Content footer) {
         this.footer = footer;
         return this;
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * @implSpec This implementation always returns {@code false}.
-     *
-     * @return {@code false}
-     */
-    @Override
-    public boolean isEmpty() {
-        return false;
-    }
-
-    @Override
-    public boolean write(Writer out, boolean atNewline) throws IOException {
-        return toContent().write(out, atNewline);
     }
 
     /**
@@ -88,18 +76,16 @@ public class BodyContents extends Content {
      *
      * @return the HTML
      */
-    private Content toContent() {
+    public Content toContent() {
         if (header == null)
             throw new NullPointerException();
 
-        HtmlTree flexHeader = header.addStyle(HtmlStyle.flexHeader);
-
-        HtmlTree flexContent = HtmlTree.DIV(HtmlStyle.flexContent)
-                .add(HtmlTree.MAIN().add(mainContents))
-                .add(footer == null ? HtmlTree.EMPTY : footer);
-
-        return HtmlTree.DIV(HtmlStyle.flexBox)
-                .add(flexHeader)
-                .add(flexContent);
+        return new ContentBuilder()
+                .add(header)
+                .add(HtmlTree.DIV(HtmlStyles.mainGrid)
+                        .add(side == null ? Text.EMPTY : side)
+                        .add(HtmlTree.MAIN()
+                                .add(mainContents)
+                                .add(footer == null ? Text.EMPTY : footer)));
     }
 }

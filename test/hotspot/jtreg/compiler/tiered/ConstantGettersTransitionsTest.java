@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,15 +24,16 @@
 /**
  * @test ConstantGettersTransitionsTest
  * @summary Test the correctness of compilation level transitions for constant getters methods
+ * @requires vm.opt.final.TieredCompilation
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
  *          java.management
  *
- * @build sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
  *        compiler.tiered.ConstantGettersTransitionsTest
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/timeout=240 -Xmixed -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
- *      -XX:+WhiteBoxAPI -XX:+TieredCompilation -XX:-UseCounterDecay
+ *      -XX:+WhiteBoxAPI -XX:+TieredCompilation
  *      -XX:CompileCommand=compileonly,compiler.tiered.ConstantGettersTransitionsTest$ConstantGettersTestCase$TrivialMethods::*
  *      compiler.tiered.ConstantGettersTransitionsTest
  */

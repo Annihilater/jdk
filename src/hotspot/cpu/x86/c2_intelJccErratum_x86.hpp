@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,10 +22,10 @@
  *
  */
 
-#ifndef CPU_X86_INTELJCCERRATUM_X86_HPP
-#define CPU_X86_INTELJCCERRATUM_X86_HPP
+#ifndef CPU_X86_C2_INTELJCCERRATUM_X86_HPP
+#define CPU_X86_C2_INTELJCCERRATUM_X86_HPP
 
-#include "memory/allocation.hpp"
+#include "memory/allStatic.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 class Block;
@@ -54,15 +54,14 @@ public:
 
 class IntelJccErratumAlignment {
 private:
-  MacroAssembler& _masm;
+  MacroAssembler* _masm;
   uintptr_t       _start_pc;
 
   uintptr_t pc();
 
 public:
-  IntelJccErratumAlignment(MacroAssembler& masm, int jcc_size);
+  IntelJccErratumAlignment(MacroAssembler* masm, int jcc_size);
   ~IntelJccErratumAlignment();
 };
 
-#endif // CPU_X86_INTELJCCERRATUM_X86_HPP
-
+#endif // CPU_X86_C2_INTELJCCERRATUM_X86_HPP

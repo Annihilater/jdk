@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,6 +67,16 @@ package java.lang;
  * </pre>
  * then it must be the case that {@code r.equals(copy)}.
  *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ *          When preview features are enabled, {@code Record} is
+ *          an abstract {@linkplain Class#isValue value class}.
+ *          Subclasses of {@code Record} can be either identity classes
+ *          or {@linkplain Class#isValue value classes}.
+ *          See The Java Language Specification {@jls value-objects-8.1.1.5 Value Classes}.
+ *      </div>
+ * </div>
+ *
  * @apiNote
  * A record class that {@code implements} {@link java.io.Serializable} is said
  * to be a <i>serializable record</i>. Serializable records are serialized and
@@ -83,10 +93,12 @@ package java.lang;
  * A record class structure can be obtained at runtime via reflection.
  * See {@link Class#isRecord()} and {@link Class#getRecordComponents()} for more details.
  *
- * @jls 8.10 Record Types
+ * @spec serialization/index.html Java Object Serialization Specification
+ * @jls 8.10 Record Classes
  * @since 16
  */
-public abstract class Record {
+// See doc/value-class-preview.md for an overview of value class generation
+public abstract /*value*/ class Record {
     /**
      * Constructor for record classes to call.
      */
@@ -115,7 +127,7 @@ public abstract class Record {
      * <li> If the component is of a reference type, the component is
      * considered equal if and only if {@link
      * java.util.Objects#equals(Object,Object)
-     * Objects.equals(this.c, r.c} would return {@code true}.
+     * Objects.equals(this.c, r.c)} would return {@code true}.
      *
      * <li> If the component is of a primitive type, using the
      * corresponding primitive wrapper class {@code PW} (the
@@ -126,7 +138,12 @@ public abstract class Record {
      *
      * </ul>
      *
-     * Apart from the semantics described above, the precise algorithm
+     * Note that these rules imply that {@linkplain
+     * Double##repEquivalence representation equivalence} is used for
+     * the equality comparison of both primitive floating-point values
+     * and wrapped floating-point values.
+     *
+     * <p>Apart from the semantics described above, the precise algorithm
      * used in the implicitly provided implementation is unspecified
      * and is subject to change. The implementation may or may not use
      * calls to the particular methods listed, and may or may not

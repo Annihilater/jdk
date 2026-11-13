@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2007, 2019, Oracle and/or its affiliates. All rights reserved.
+// Copyright (c) 2007, 2025, Oracle and/or its affiliates. All rights reserved.
 // DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 //
 // This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,6 @@
 // questions.
 //
 
-#include "precompiled.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compileBroker.hpp"
 #include "runtime/mutexLocker.hpp"
@@ -42,15 +41,27 @@ bool AbstractCompiler::should_perform_init() {
   return false;
 }
 
-bool AbstractCompiler::should_perform_shutdown() {
+void AbstractCompiler::wait_for_initialization() {
+  MonitorLocker locker(CompileThread_lock);
+  // Wait for initialized, failed or shut_down state
+  while (_compiler_state == uninitialized || _compiler_state == initializing) {
+    locker.wait();
+  }
+}
+
+bool AbstractCompiler::should_perform_shutdown(bool is_aot_comp_thread) {
   // Since this method can be called by multiple threads, the lock ensures atomicity of
   // decrementing '_num_compiler_threads' and the following operations.
   MutexLocker only_one(CompileThread_lock);
-  _num_compiler_threads--;
+  if (is_aot_comp_thread) {
+    _num_aot_compiler_threads--;
+  } else {
+    _num_compiler_threads--;
+  }
   assert (CompileBroker::is_compilation_disabled_forever(), "Must be set, otherwise thread waits forever");
 
   // Only the last thread will perform shutdown operations
-  if (_num_compiler_threads == 0) {
+  if (_num_compiler_threads == 0 && _num_aot_compiler_threads == 0) {
     return true;
   }
   return false;

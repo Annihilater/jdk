@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,9 +26,11 @@ package compiler.lib.ir_framework.test;
 import compiler.lib.ir_framework.*;
 import compiler.lib.ir_framework.Compiler;
 import compiler.lib.ir_framework.shared.*;
+import compiler.lib.ir_framework.test.network.MessageTag;
+import compiler.lib.ir_framework.test.network.TestVmSocket;
 import jdk.test.lib.Platform;
 import jdk.test.lib.Utils;
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -39,7 +41,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * This class' main method is called from {@link TestFramework} and represents the so-called "test VM". The class is
+ * This class' main method is called from {@link TestFramework} and represents the so-called "Test VM". The class is
  * the heart of the framework and is responsible for executing all the specified tests in the test class. It uses the
  * Whitebox API and reflection to achieve this task.
  */
@@ -56,7 +58,7 @@ public class TestVM {
                                   TestFramework in main() of your test? Make sure to
                                   only call setup/run methods and no checks or
                                   assertions from main() of your test!
-                                - Are you rerunning the test VM (TestVM class)
+                                - Are you rerunning the Test VM (TestVM class)
                                   directly after a JTreg run? Make sure to start it
                                   from within JTwork/scratch and with the flag
                                   -DReproduce=true!
@@ -73,6 +75,7 @@ public class TestVM {
      */
     public static final int WARMUP_ITERATIONS = Integer.parseInt(System.getProperty("Warmup", "2000"));
 
+    private static final boolean ALLOW_METHOD_NOT_COMPILABLE = Boolean.getBoolean("AllowNotCompilable");
     private static final boolean TIERED_COMPILATION = (Boolean)WHITE_BOX.getVMFlag("TieredCompilation");
     private static final CompLevel TIERED_COMPILATION_STOP_AT_LEVEL;
     private static final boolean CLIENT_VM = Platform.isClient();
@@ -89,72 +92,48 @@ public class TestVM {
 
     static final boolean XCOMP = Platform.isComp();
     static final boolean VERBOSE = Boolean.getBoolean("Verbose");
-    private static final boolean PRINT_TIMES = Boolean.getBoolean("PrintTimes");
+    private static final boolean PRINT_TIMES = Boolean.getBoolean("PrintTimes") || VERBOSE;
     public static final boolean USE_COMPILER = WHITE_BOX.getBooleanVMFlag("UseCompiler");
     static final boolean EXCLUDE_RANDOM = Boolean.getBoolean("ExcludeRandom");
-    private static final String TESTLIST = System.getProperty("Test", "");
-    private static final String EXCLUDELIST = System.getProperty("Exclude", "");
+    // We ignore @Skip when running with -DIgnoreSkip=true
     private static final boolean DUMP_REPLAY = Boolean.getBoolean("DumpReplay");
     private static final boolean GC_AFTER = Boolean.getBoolean("GCAfter");
     private static final boolean SHUFFLE_TESTS = Boolean.parseBoolean(System.getProperty("ShuffleTests", "true"));
-    // Use separate flag as VERIFY_IR could have been set by user but due to other flags it was disabled by flag VM.
+    // Use separate flag as VERIFY_IR could have been set by user but due to other flags it was disabled by Flag VM.
     private static final boolean PRINT_VALID_IR_RULES = Boolean.getBoolean("ShouldDoIRVerification");
     protected static final long PER_METHOD_TRAP_LIMIT = (Long)WHITE_BOX.getVMFlag("PerMethodTrapLimit");
     protected static final boolean PROFILE_INTERPRETER = (Boolean)WHITE_BOX.getVMFlag("ProfileInterpreter");
+    protected static final boolean DEOPT_BARRIERS_ALOT = (Boolean)WHITE_BOX.getVMFlag("DeoptimizeNMethodBarriersALot");
     private static final boolean FLIP_C1_C2 = Boolean.getBoolean("FlipC1C2");
     private static final boolean IGNORE_COMPILER_CONTROLS = Boolean.getBoolean("IgnoreCompilerControls");
 
     private final HashMap<Method, DeclaredTest> declaredTests = new HashMap<>();
     private final List<AbstractTest> allTests = new ArrayList<>();
     private final HashMap<String, Method> testMethodMap = new HashMap<>();
-    private final List<String> excludeList;
-    private final List<String> testList;
+    private final HashMap<String, Method> setupMethodMap = new HashMap<>();
+    private final TestExecutionPolicy testExecutionPolicy;
     private Set<Class<?>> helperClasses = null; // Helper classes that contain framework annotations to be processed.
-    private final IREncodingPrinter irMatchRulePrinter;
+    private final ApplicableIRRulesPrinter irMatchRulePrinter;
     private final Class<?> testClass;
     private final Map<Executable, CompLevel> forceCompileMap = new HashMap<>();
 
     private TestVM(Class<?> testClass) {
         TestRun.check(testClass != null, "Test class cannot be null");
         this.testClass = testClass;
-        this.testList = createTestFilterList(TESTLIST, testClass);
-        this.excludeList = createTestFilterList(EXCLUDELIST, testClass);
-
+        this.testExecutionPolicy = new TestExecutionPolicy();
         if (PRINT_VALID_IR_RULES) {
-            irMatchRulePrinter = new IREncodingPrinter();
+            irMatchRulePrinter = new ApplicableIRRulesPrinter();
         } else {
             irMatchRulePrinter = null;
         }
     }
 
     /**
-     * Parse "test1,test2,test3" into a list.
-     */
-    private static List<String> createTestFilterList(String list, Class<?> testClass) {
-        List<String> filterList = null;
-        if (!list.isEmpty()) {
-            String classPrefix = testClass.getSimpleName() + ".";
-            filterList = new ArrayList<>(Arrays.asList(list.split(",")));
-            for (int i = filterList.size() - 1; i >= 0; i--) {
-                String test = filterList.get(i);
-                if (test.indexOf(".") > 0) {
-                    if (test.startsWith(classPrefix)) {
-                        test = test.substring(classPrefix.length());
-                        filterList.set(i, test);
-                    } else {
-                        filterList.remove(i);
-                    }
-                }
-            }
-        }
-        return filterList;
-    }
-
-    /**
-     * Main entry point of the test VM.
+     * Main entry point of the Test VM.
      */
     public static void main(String[] args) {
         try {
+            TestVmSocket.connect();
             String testClassName = args[0];
             System.out.println("TestVM main() called - about to run tests in class " + testClassName);
             Class<?> testClass = getClassObject(testClassName, "test");
@@ -163,7 +142,7 @@ public class TestVM {
             framework.addHelperClasses(args);
             framework.start();
         } finally {
-            TestFrameworkSocket.closeClientSocket();
+            TestVmSocket.close();
         }
     }
 
@@ -225,6 +204,8 @@ public class TestVM {
                                     "Cannot use @Run annotation in " + clazzType + " " + c + " at " + m);
             TestFormat.checkNoThrow(getAnnotation(m, Check.class) == null,
                                     "Cannot use @Check annotation in " + clazzType + " " + c + " at " + m);
+            TestFormat.checkNoThrow(getAnnotation(m, Setup.class) == null,
+                                    "Cannot use @Setup annotation in " + clazzType + " " + c + " at " + m);
         }
     }
 
@@ -250,12 +231,20 @@ public class TestVM {
     }
 
     private void setupTests() {
-        for (Class<?> clazz : testClass.getDeclaredClasses()) {
-            checkAnnotationsInClass(clazz, "inner");
+        // TODO remove this once JDK-8273591 is fixed
+        if (!IGNORE_COMPILER_CONTROLS) {
+            for (Class<?> clazz : testClass.getDeclaredClasses()) {
+                checkAnnotationsInClass(clazz, "inner");
+            }
         }
         if (DUMP_REPLAY) {
             addReplay();
         }
+
+        // Collect the @Setup methods so we can reference them
+        // from the test methods
+        collectSetupMethods();
+
         // Make sure to first setup test methods and make them non-inlineable and only then process compile commands.
         setupDeclaredTests();
         processControlAnnotations(testClass);
@@ -266,8 +255,9 @@ public class TestVM {
         addBaseTests();
         if (PRINT_VALID_IR_RULES) {
             irMatchRulePrinter.emit();
+            VMInfoPrinter.emit();
         }
-        TestFormat.reportIfAnyFailures();
+        TestFormat.throwIfAnyFailures();
         declaredTests.clear();
         testMethodMap.clear();
     }
@@ -278,30 +268,20 @@ public class TestVM {
                 try {
                     Arguments argumentsAnno = getAnnotation(m, Arguments.class);
                     TestFormat.check(argumentsAnno != null || m.getParameterCount() == 0, "Missing @Arguments annotation to define arguments of " + m);
-                    BaseTest baseTest = new BaseTest(test, shouldExcludeTest(m.getName()));
+                    if (testExecutionPolicy.shouldExcludeBaseOrCheckedTest(test)) {
+                        return;
+                    }
+
+                    BaseTest baseTest = new BaseTest(test);
                     allTests.add(baseTest);
                     if (PRINT_VALID_IR_RULES) {
-                        irMatchRulePrinter.emitRuleEncoding(m, baseTest.isSkipped());
+                        irMatchRulePrinter.emitApplicableIRRules(m);
                     }
                 } catch (TestFormatException e) {
                     // Failure logged. Continue and report later.
                 }
             }
         });
-    }
-
-    /**
-     * Check if user wants to exclude this test by checking the -DTest and -DExclude lists.
-     */
-    private boolean shouldExcludeTest(String testName) {
-        boolean hasTestList = testList != null;
-        boolean hasExcludeList = excludeList != null;
-        if (hasTestList) {
-            return !testList.contains(testName) || (hasExcludeList && excludeList.contains(testName));
-        } else if (hasExcludeList) {
-            return excludeList.contains(testName);
-        }
-        return false;
     }
 
     /**
@@ -363,7 +343,9 @@ public class TestVM {
             TestFormat.checkNoThrow(WHITE_BOX.enqueueInitializerForCompilation(c, level.getValue()),
                                     "Failed to enqueue <clinit> of " + c + " for compilation. Did you specify "
                                     + "@ForceCompileClassInitializer without providing a static class initialization? "
-                                    + "Make sure to provide any form of static initialization or remove the annotation.");
+                                    + "Make sure to provide any form of static initialization or remove the annotation. "
+                                    + "For debugging purposes, -DIgnoreCompilerControls=true can be used to temporarly "
+                                    + "ignore @ForceCompileClassInitializer annotations.");
         }
     }
 
@@ -467,7 +449,6 @@ public class TestVM {
                              "Cannot define compilation level SKIP or WAIT_FOR_COMPILATION in @ForceCompile at " + ex);
             compLevel = restrictCompLevel(forceCompileAnno.value());
             if (FLIP_C1_C2) {
-                compLevel = compLevel.flipCompLevel();
                 compLevel = restrictCompLevel(compLevel.flipCompLevel());
             }
             if (EXCLUDE_RANDOM) {
@@ -492,8 +473,37 @@ public class TestVM {
         }
     }
 
+
     /**
-     * Setup @Test annotated method an add them to the declaredTests map to have a convenient way of accessing them
+     *  Collect all @Setup annotated methods and add them to setupMethodMap, for convenience to reference later from
+     *  tests with @Arguments(setup = "setupMethodName").
+     */
+    private void collectSetupMethods() {
+        for (Method m : testClass.getDeclaredMethods()) {
+            Setup setupAnnotation = getAnnotation(m, Setup.class);
+            if (setupAnnotation != null) {
+                addSetupMethod(m);
+            }
+        }
+    }
+
+    private void addSetupMethod(Method m) {
+        TestFormat.checkNoThrow(getAnnotation(m, Test.class) == null,
+                                "@Setup method cannot have @Test annotation: " + m);
+        TestFormat.checkNoThrow(getAnnotation(m, Check.class) == null,
+                                "@Setup method cannot have @Check annotation: " + m);
+        TestFormat.checkNoThrow(getAnnotation(m, Arguments.class) == null,
+                                "@Setup method cannot have @Arguments annotation: " + m);
+        TestFormat.checkNoThrow(getAnnotation(m, Run.class) == null,
+                                "@Setup method cannot have @Run annotation: " + m);
+        Method mOverloaded = setupMethodMap.put(m.getName(), m);
+        TestFormat.checkNoThrow(mOverloaded == null,
+                                "@Setup method cannot be overloaded: " + mOverloaded + " with " + m);
+        m.setAccessible(true);
+    }
+
+    /**
+     * Setup @Test annotated method and add them to the declaredTests map to have a convenient way of accessing them
      * once setting up a framework test (base  checked, or custom run test).
      */
     private void setupDeclaredTests() {
@@ -503,9 +513,12 @@ public class TestVM {
                 if (testAnno != null) {
                     addDeclaredTest(m);
                 } else {
-                    TestFormat.checkNoThrow(!m.isAnnotationPresent(IR.class), "Found @IR annotation on non-@Test method " + m);
+                    TestFormat.checkNoThrow(!m.isAnnotationPresent(IR.class) && !m.isAnnotationPresent(IRs.class),
+                                            "Found @IR annotation on non-@Test method " + m);
                     TestFormat.checkNoThrow(!m.isAnnotationPresent(Warmup.class) || getAnnotation(m, Run.class) != null,
                                             "Found @Warmup annotation on non-@Test or non-@Run method " + m);
+                    TestFormat.checkNoThrow(!m.isAnnotationPresent(Skip.class) ,
+                                            "Found @Skip annotation on non-@Test method " + m);
                 }
             } catch (TestFormatException e) {
                 // Failure logged. Continue and report later.
@@ -528,22 +541,34 @@ public class TestVM {
             // Don't inline test methods by default. Do not apply this when -DIgnoreCompilerControls=true is set.
             WHITE_BOX.testSetDontInlineMethod(m, true);
         }
+
         CompLevel compLevel = restrictCompLevel(testAnno.compLevel());
         if (FLIP_C1_C2) {
-            compLevel = compLevel.flipCompLevel();
             compLevel = restrictCompLevel(compLevel.flipCompLevel());
         }
+
         if (EXCLUDE_RANDOM) {
             compLevel = compLevel.excludeCompilationRandomly(m);
         }
-        DeclaredTest test = new DeclaredTest(m, ArgumentValue.getArguments(m), compLevel, warmupIterations);
+
+        boolean allowNotCompilable = testAnno.allowNotCompilable() || ALLOW_METHOD_NOT_COMPILABLE;
+        ArgumentsProvider argumentsProvider = ArgumentsProviderBuilder.build(m, setupMethodMap);
+        Skip skip = getAnnotation(m, Skip.class);
+        boolean hasSkip = skip != null;
+        DeclaredTest test = new DeclaredTest(m, argumentsProvider, compLevel, warmupIterations,
+                                             hasSkip, allowNotCompilable);
         declaredTests.put(m, test);
         testMethodMap.put(m.getName(), m);
     }
 
     private void checkTestAnnotations(Method m, Test testAnno) {
-        TestFormat.check(!testMethodMap.containsKey(m.getName()),
-                         "Cannot overload two @Test methods: " + m + ", " + testMethodMap.get(m.getName()));
+        List<Method> overloads = Arrays.stream(testClass.getDeclaredMethods()).filter(other -> !m.equals(other) && m.getName().equals(other.getName())).toList();
+        TestFormat.check(overloads.isEmpty(),
+                "Cannot overload @Test methods, but method " + m + " has " + overloads.size() + " overload" + (overloads.size() == 1 ? "" : "s") + ":" +
+                overloads.stream().map(String::valueOf).collect(Collectors.joining("\n    - ", "\n    - ", ""))
+        );
+        TestFramework.check(!testMethodMap.containsKey(m.getName()),
+                            "Cannot overload two @Test methods: " + m + ", " + testMethodMap.get(m.getName()));
         TestFormat.check(testAnno != null, m + " must be a method with a @Test annotation");
 
         Check checkAnno = getAnnotation(m, Check.class);
@@ -636,12 +661,16 @@ public class TestVM {
                          "Missing @Arguments annotation to define arguments of " + testMethod + " required by "
                          + "checked test " + m);
         CheckedTest.Parameter parameter = getCheckedTestParameter(m, testMethod);
+        if (testExecutionPolicy.shouldExcludeBaseOrCheckedTest(test)) {
+            return;
+        }
+
         dontCompileAndDontInlineMethod(m);
-        CheckedTest checkedTest = new CheckedTest(test, m, checkAnno, parameter, shouldExcludeTest(testMethod.getName()));
+        CheckedTest checkedTest = new CheckedTest(test, m, checkAnno, parameter);
         allTests.add(checkedTest);
         if (PRINT_VALID_IR_RULES) {
             // Only need to emit IR verification information if IR verification is actually performed.
-            irMatchRulePrinter.emitRuleEncoding(testMethod, checkedTest.isSkipped());
+            irMatchRulePrinter.emitApplicableIRRules(testMethod);
         }
     }
 
@@ -685,68 +714,107 @@ public class TestVM {
      * Set up a custom run test by first verifying the correct format of the @Test and @Run method and then adding it
      * to the allTests list which keeps track of all framework tests that are eventually executed.
      */
-    private void addCustomRunTest(Method m, Run runAnno) {
-        checkRunMethod(m, runAnno);
+    private void addCustomRunTest(Method runMethod, Run runAnno) {
+        checkRunMethod(runMethod, runAnno);
         List<DeclaredTest> tests = new ArrayList<>();
-        boolean shouldExcludeTest = true;
         for (String testName : runAnno.test()) {
             try {
                 Method testMethod = testMethodMap.get(testName);
                 DeclaredTest test = declaredTests.get(testMethod);
-                checkCustomRunTest(m, testName, testMethod, test, runAnno.mode());
-                test.setAttachedMethod(m);
+                checkCustomRunTest(runMethod, testName, testMethod, test, runAnno.mode());
+                test.setAttachedMethod(runMethod);
                 tests.add(test);
-                // Only exclude custom run test if all test methods excluded
-                shouldExcludeTest &= shouldExcludeTest(testMethod.getName());
             } catch (TestFormatException e) {
                 // Logged, continue.
             }
         }
-        if (tests.isEmpty()) {
-            return; // There was a format violation. Return.
+
+
+        if (tests.size() != runAnno.test().length) {
+            // At least one test is invalid. Return and report the already recorded format violation(s) later.
+            return;
         }
-        dontCompileAndDontInlineMethod(m);
-        CustomRunTest customRunTest = new CustomRunTest(m, getAnnotation(m, Warmup.class), runAnno, tests, shouldExcludeTest);
+
+        checkNoneOrAllAssociatedTestsSkipped(runMethod, tests);
+        testExecutionPolicy.checkPolicyForCustomRunTest(runMethod, runAnno.test());
+        if (testExecutionPolicy.shouldExcludeCustomRunTest(tests)) {
+            return;
+        }
+
+        dontCompileAndDontInlineMethod(runMethod);
+        CustomRunTest customRunTest = new CustomRunTest(runMethod, getAnnotation(runMethod, Warmup.class), runAnno, tests);
         allTests.add(customRunTest);
         if (PRINT_VALID_IR_RULES) {
-            tests.forEach(test -> irMatchRulePrinter.emitRuleEncoding(test.getTestMethod(), customRunTest.isSkipped()));
+            tests.forEach(test -> irMatchRulePrinter.emitApplicableIRRules(test.getTestMethod()));
         }
     }
 
     /**
      * Only allow parameters as specified in {@link Run}.
      */
-    private void checkCustomRunTest(Method m, String testName, Method testMethod, DeclaredTest test, RunMode runMode) {
-        TestFormat.check(testMethod != null, "Did not find associated @Test method \""  + m.getDeclaringClass().getName()
-                                             + "." + testName + "\" specified in @Run at " + m);
+    private void checkCustomRunTest(Method runMethod, String testName, Method testMethod, DeclaredTest test, RunMode runMode) {
+        TestFormat.check(testMethod != null, "Did not find associated @Test method \"" + runMethod.getDeclaringClass().getName()
+                                             + "." + testName + "\" specified in @Run at " + runMethod);
         TestFormat.check(test != null,
-                         "Missing @Test annotation for associated test method " + testName + " for @Run at " + m);
+                         "Missing @Test annotation for associated test method " + testName + " for @Run at " + runMethod);
         Method attachedMethod = test.getAttachedMethod();
         TestFormat.check(attachedMethod == null,
                          "Cannot use @Test " + testMethod + " for more than one @Run/@Check method. Found: "
-                         + m + ", " + attachedMethod);
-        TestFormat.check(!test.hasArguments(),
-                         "Cannot use @Arguments at test method " + testMethod + " in combination with @Run method " + m);
+                         + runMethod + ", " + attachedMethod);
+        Arguments argumentsAnno = getAnnotation(testMethod, Arguments.class);
+        TestFormat.check(argumentsAnno == null,
+                         "Cannot use @Arguments at test method " + testMethod + " in combination with @Run method " + runMethod);
         Warmup warmupAnno = getAnnotation(testMethod, Warmup.class);
         TestFormat.checkNoThrow(warmupAnno == null,
                                 "Cannot set @Warmup at @Test method " + testMethod + " when used with its @Run method "
-                                + m + ". Use @Warmup at @Run method instead.");
+                                + runMethod + ". Use @Warmup at @Run method instead.");
         Test testAnno = getAnnotation(testMethod, Test.class);
         TestFormat.checkNoThrow(runMode != RunMode.STANDALONE || testAnno.compLevel() == CompLevel.ANY,
                                 "Setting explicit compilation level for @Test method " + testMethod + " has no effect "
-                                + "when used with STANDALONE @Run method " + m);
+                                + "when used with STANDALONE @Run method " + runMethod);
     }
 
-    private void checkRunMethod(Method m, Run runAnno) {
-        TestFormat.check(runAnno.test().length > 0, "@Run method " + m + " must specify at least one test method");
-        TestFormat.checkNoThrow(m.getParameterCount() == 0 || (m.getParameterCount() == 1 && m.getParameterTypes()[0].equals(RunInfo.class)),
-                                "@Run method " + m + " must specify either no parameter or exactly one " + RunInfo.class + " parameter.");
-        Warmup warmupAnno = getAnnotation(m, Warmup.class);
-        TestFormat.checkNoThrow(warmupAnno == null || runAnno.mode() != RunMode.STANDALONE,
-                                "Cannot set @Warmup at @Run method " + m + " when used with RunMode.STANDALONE. The @Run method is only invoked once.");
+    private void checkRunMethod(Method runMethod, Run runAnno) {
+        TestFormat.check(runAnno.test().length > 0, "@Run method " + runMethod + " must specify at least one test method");
+        TestFormat.checkNoThrow(runMethod.getParameterCount() == 0 || (runMethod.getParameterCount() == 1 && runMethod.getParameterTypes()[0].equals(RunInfo.class)),
+                                "@Run method " + runMethod + " must specify either no parameter or exactly one " + RunInfo.class + " parameter.");
+        Warmup warmupAnno = getAnnotation(runMethod, Warmup.class);
+        if (warmupAnno != null) {
+            TestFormat.checkNoThrow(warmupAnno.value() >= 0, "Cannot have negative value for @Warmup at " + runMethod);
+            TestFormat.checkNoThrow(runAnno.mode() != RunMode.STANDALONE,
+                                    "Cannot set @Warmup at @Run method " + runMethod + " when used with RunMode.STANDALONE. " +
+                                    "The @Run method is only invoked once.");
+
+        }
+  }
+
+    private void checkNoneOrAllAssociatedTestsSkipped(Method runMethod, List<DeclaredTest> tests) {
+        List<Method> testMethodsWithoutSkip = testMethodsWithoutSkipAnnotation(tests);
+        if (testMethodsWithoutSkip.isEmpty() ||
+            testMethodsWithoutSkip.size() == tests.size()) {
+            // All with @Skip or none.
+            return;
+        }
+
+        // Skipping some tests but not all is a format violation.
+        reportPartiallySkippingTests(runMethod, testMethodsWithoutSkip);
     }
 
-    private static <T extends Annotation> T getAnnotation(AnnotatedElement element, Class<T> c) {
+    private List<Method> testMethodsWithoutSkipAnnotation(List<DeclaredTest> tests) {
+        return tests.stream().filter(test -> !test.hasSkipAnno()).map(DeclaredTest::getTestMethod).toList();
+    }
+
+    private void reportPartiallySkippingTests(Method runMethod, List<Method> testMethodsWithoutSkip) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("@Run-methods with multiple tests can only either skip none or all methods with @Skip:")
+               .append(System.lineSeparator())
+               .append("   - @Run-method: ").append(runMethod);
+        testMethodsWithoutSkip.forEach(method -> builder.append(System.lineSeparator())
+                                                        .append("   - @Test without @Skip: ").append(method));
+        TestFormat.fail(builder.toString());
+    }
+
+    public static <T extends Annotation> T getAnnotation(AnnotatedElement element, Class<T> c) {
         T[] annos =  element.getAnnotationsByType(c);
         TestFormat.check(annos.length < 2, element + " has duplicated annotations");
         return Arrays.stream(annos).findFirst().orElse(null);
@@ -776,43 +844,36 @@ public class TestVM {
         forceCompileMap.forEach((key, value) -> builder.append("- ").append(key).append(" at CompLevel.").append(value)
                                                        .append(System.lineSeparator()));
         throw new TestRunException("Could not force compile the following @ForceCompile methods:"
-                                   + System.lineSeparator() + builder.toString());
+                                   + System.lineSeparator() + builder);
     }
 
     /**
      * Once all framework tests are collected, they are run in this method.
      */
     private void runTests() {
-        TreeMap<Long, String> durations = (PRINT_TIMES || VERBOSE) ? new TreeMap<>() : null;
         long startTime = System.nanoTime();
-        List<AbstractTest> testList;
-        boolean testFilterPresent = testFilterPresent();
-        if (testFilterPresent) {
-            // Only run the specified tests by the user filters -DTest and/or -DExclude.
-            testList = allTests.stream().filter(test -> !test.isSkipped()).collect(Collectors.toList());
-            if (testList.isEmpty()) {
-                // Throw an exception to inform the user about an empty specified test set with -DTest and/or -DExclude
-                throw new NoTestsRunException();
-            }
-        } else {
-            testList = allTests;
+        boolean testExecutionPolicyActive = testExecutionPolicy.isTestOrExcludePolicyActive();
+        if (testExecutionPolicyActive && allTests.isEmpty()) {
+            // Throw an exception to inform the user about an empty specified test set with -DTest and/or -DExclude
+            throw new NoTestsRunException();
         }
 
         if (SHUFFLE_TESTS) {
             // Execute tests in random order (execution sequence affects profiling). This is done by default.
-            Collections.shuffle(testList, Utils.getRandomInstance());
+            Collections.shuffle(allTests, Utils.getRandomInstance());
         }
         StringBuilder builder = new StringBuilder();
         int failures = 0;
 
         // Execute all tests and keep track of each exception that is thrown. These are then reported once all tests
         // are executing. This prevents a premature exit without running all tests.
-        for (AbstractTest test : testList) {
+        for (AbstractTest test : allTests) {
+            String testName = test.getName();
             if (VERBOSE) {
-                System.out.println("Run " + test.toString());
+                System.out.println("Run \"" + testName + "\"");
             }
-            if (testFilterPresent) {
-                TestFrameworkSocket.write("Run " + test.toString(), TestFrameworkSocket.TESTLIST_TAG, true);
+            if (testExecutionPolicyActive) {
+                TestVmSocket.sendWithTag(MessageTag.TEST_LIST, test.toString());
             }
             try {
                 test.run();
@@ -820,17 +881,18 @@ public class TestVM {
                 StringWriter sw = new StringWriter();
                 PrintWriter pw = new PrintWriter(sw);
                 e.printStackTrace(pw);
-                builder.append(test.toString()).append(":").append(System.lineSeparator()).append(sw.toString())
+                builder.append("Failed test: ").append(test).append(":").append(System.lineSeparator()).append(sw)
                        .append(System.lineSeparator()).append(System.lineSeparator());
                 failures++;
             }
-            if (PRINT_TIMES || VERBOSE) {
+            if (PRINT_TIMES) {
                 long endTime = System.nanoTime();
-                long duration = (endTime - startTime);
-                durations.put(duration, test.getName());
+                long durationMs = (endTime - startTime) / 1_000_000;
                 if (VERBOSE) {
-                    System.out.println("Done " + test.getName() + ": " + duration + " ns = " + (duration / 1000000) + " ms");
+                    System.out.println("Done " + testName + ": " + durationMs + " ms");
                 }
+                // Will be correctly formatted later.
+                TestVmSocket.sendWithTag(MessageTag.PRINT_TIMES, test + "," + durationMs);
             }
             if (GC_AFTER) {
                 System.out.println("doing GC");
@@ -838,24 +900,12 @@ public class TestVM {
             }
         }
 
-        // Print execution times
-        if (VERBOSE || PRINT_TIMES) {
-            System.out.println(System.lineSeparator() + System.lineSeparator() + "Test execution times:");
-            for (Map.Entry<Long, String> entry : durations.entrySet()) {
-                System.out.format("%-10s%15d ns%n", entry.getValue() + ":", entry.getKey());
-            }
-        }
-
         if (failures > 0) {
             // Finally, report all occurred exceptions in a nice format.
             String msg = System.lineSeparator() + System.lineSeparator() + "Test Failures (" + failures + ")"
                          + System.lineSeparator() + "----------------" + "-".repeat(String.valueOf(failures).length());
-            throw new TestRunException(msg + System.lineSeparator() + builder.toString());
+            throw new TestRunException(msg + System.lineSeparator() + builder);
         }
-    }
-
-    private boolean testFilterPresent() {
-        return testList != null || excludeList != null;
     }
 
     enum TriState {
@@ -891,24 +941,23 @@ public class TestVM {
     }
 
     public static void assertDeoptimizedByC1(Method m) {
-        if (notUnstableDeoptAssertion(m, CompLevel.C1_SIMPLE)) {
-            TestRun.check(compiledByC1(m) != TriState.Yes || PER_METHOD_TRAP_LIMIT == 0 || !PROFILE_INTERPRETER,
-                          m + " should have been deoptimized by C1");
+        if (isStableDeopt(m, CompLevel.C1_SIMPLE)) {
+            TestRun.check(compiledByC1(m) != TriState.Yes, m + " should have been deoptimized by C1");
         }
     }
 
     public static void assertDeoptimizedByC2(Method m) {
-        if (notUnstableDeoptAssertion(m, CompLevel.C2)) {
-            TestRun.check(compiledByC2(m) != TriState.Yes || PER_METHOD_TRAP_LIMIT == 0 || !PROFILE_INTERPRETER,
-                          m + " should have been deoptimized by C2");
+        if (isStableDeopt(m, CompLevel.C2)) {
+            TestRun.check(compiledByC2(m) != TriState.Yes, m + " should have been deoptimized by C2");
         }
     }
 
     /**
      * Some VM flags could make the deopt assertions unstable.
      */
-    private static boolean notUnstableDeoptAssertion(Method m, CompLevel level) {
+    public static boolean isStableDeopt(Method m, CompLevel level) {
         return (USE_COMPILER && !XCOMP && !IGNORE_COMPILER_CONTROLS && !TEST_C1 &&
+                PER_METHOD_TRAP_LIMIT != 0 && PROFILE_INTERPRETER && !DEOPT_BARRIERS_ALOT &&
                 (!EXCLUDE_RANDOM || WHITE_BOX.isMethodCompilable(m, level.getValue(), false)));
     }
 
@@ -964,7 +1013,7 @@ public class TestVM {
                 default -> throw new TestRunException("compiledAtLevel() should not be called with " + level);
             }
         }
-        if (!USE_COMPILER || XCOMP || TEST_C1 || IGNORE_COMPILER_CONTROLS || FLIP_C1_C2 ||
+        if (!USE_COMPILER || XCOMP || TEST_C1 || IGNORE_COMPILER_CONTROLS || FLIP_C1_C2 || DEOPT_BARRIERS_ALOT ||
             (EXCLUDE_RANDOM && !WHITE_BOX.isMethodCompilable(m, level.getValue(), false))) {
             return TriState.Maybe;
         }

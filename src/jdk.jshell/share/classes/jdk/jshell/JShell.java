@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,15 +31,18 @@ import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.PrintStream;
 import java.net.InetAddress;
+import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.MissingResourceException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -55,6 +58,7 @@ import jdk.jshell.spi.ExecutionControl.ExecutionControlException;
 import jdk.jshell.spi.ExecutionControlProvider;
 import jdk.jshell.spi.ExecutionEnv;
 import static jdk.jshell.Util.expunge;
+import jdk.jshell.execution.impl.RestartableInputStream;
 
 /**
  * The JShell evaluation state engine.  This is the central class in the JShell
@@ -92,11 +96,13 @@ public class JShell implements AutoCloseable {
     final InputStream in;
     final PrintStream out;
     final PrintStream err;
+    final Optional<JShellConsole> console;
     final Supplier<String> tempVariableNameGenerator;
     final BiFunction<Snippet, Integer, String> idGenerator;
     final List<String> extraRemoteVMOptions;
     final List<String> extraCompilerOptions;
     final Function<StandardJavaFileManager, StandardJavaFileManager> fileManagerMapping;
+    final Function<Path, Collection<? extends Path>> binarySourceMapping;
 
     private int nextKeyIndex = 1;
 
@@ -113,14 +119,16 @@ public class JShell implements AutoCloseable {
     private static ResourceBundle outputRB  = null;
 
     JShell(Builder b) throws IllegalStateException {
-        this.in = b.in;
+        this.in = new RestartableInputStream(b.in);
         this.out = b.out;
         this.err = b.err;
+        this.console = Optional.ofNullable(b.console);
         this.tempVariableNameGenerator = b.tempVariableNameGenerator;
         this.idGenerator = b.idGenerator;
         this.extraRemoteVMOptions = b.extraRemoteVMOptions;
         this.extraCompilerOptions = b.extraCompilerOptions;
         this.fileManagerMapping = b.fileManagerMapping;
+        this.binarySourceMapping = b.binarySourceMapping;
         try {
             if (b.executionControlProvider != null) {
                 executionControl = b.executionControlProvider.generate(new ExecutionEnvImpl(),
@@ -170,6 +178,7 @@ public class JShell implements AutoCloseable {
         InputStream in = new ByteArrayInputStream(new byte[0]);
         PrintStream out = System.out;
         PrintStream err = System.err;
+        JShellConsole console = null;
         Supplier<String> tempVariableNameGenerator = null;
         BiFunction<Snippet, Integer, String> idGenerator = null;
         List<String> extraRemoteVMOptions = new ArrayList<>();
@@ -178,6 +187,7 @@ public class JShell implements AutoCloseable {
         Map<String,String> executionControlParameters;
         String executionControlSpec;
         Function<StandardJavaFileManager, StandardJavaFileManager> fileManagerMapping;
+        Function<Path, Collection<? extends Path>> binarySourceMapping;
 
         Builder() { }
 
@@ -235,6 +245,22 @@ public class JShell implements AutoCloseable {
          */
         public Builder err(PrintStream err) {
             this.err = err;
+            return this;
+        }
+
+        /**
+         * Sets the console for the running evaluation.
+         * <p>
+         * The default, if this is not set, is no console ({@code System.console()}
+         * will return {@code null} while running a snippet).
+         *
+         * @param console console to use while a snippet is run
+         * @return the {@code Builder} instance (for use in chained
+         * initialization)
+         * @since 21
+         */
+        public Builder console(JShellConsole console) {
+            this.console = console;
             return this;
         }
 
@@ -390,6 +416,38 @@ public class JShell implements AutoCloseable {
          */
         public Builder fileManager(Function<StandardJavaFileManager, StandardJavaFileManager> mapping) {
             this.fileManagerMapping = mapping;
+            return this;
+        }
+
+        /**
+         * Add a mapping from roots containing classfiles to roots containing
+         * their corresponding sources.
+         *
+         * <p>The given {@code binarySourceMapping} will be called for various paths
+         * used by JShell. Some of them may be distinct from roots specified in classpath
+         * and module path.
+         *
+         * <p>When looking for a source for a binary class or interface, the roots
+         * containing sources are searched in the given order, and once
+         * a source file corresponding to the given class or interface is found,
+         * the rest of the roots containing sources will be ignored.
+         *
+         * <p>The results of calling {@code binarySourceMapping} may be cached, and the
+         * same file may or may not be queried again.
+         *
+         * <p>The result of calling the {@code binarySourceMapping} may be {@code null},
+         * which will be treated the same way as an empty collection.
+         *
+         * <p>If the result value is of a type that is {@link AutoCloseable}, then it will
+         * be closed when not needed anymore.
+         *
+         * @param binarySourceMapping the binary to source mapper, or {@code null} if none.
+         * @return the {@code Builder} instance (for use in chained
+         *         initialization)
+         * @since 28
+         */
+        public Builder binarySourceMapping(Function<Path, Collection<? extends Path>> binarySourceMapping) {
+            this.binarySourceMapping = binarySourceMapping;
             return this;
         }
 
@@ -658,6 +716,12 @@ public class JShell implements AutoCloseable {
      * Return the diagnostics of the most recent evaluation of the snippet.
      * The evaluation can either because of an explicit {@code eval()} call or
      * an automatic update triggered by a dependency.
+     *
+     * <p>This method will return best-effort diagnostics for snippets returned
+     * from {@link SourceCodeAnalysis#sourceToSnippets(java.lang.String) }. The
+     * diagnostics returned for such snippets may differ from diagnostics provided
+     * after the snippet is {@link #eval(java.lang.String) }-ed.
+     *
      * @param snippet the {@code Snippet} to look up
      * @return the diagnostics corresponding to this snippet.  This does not
      * include unresolvedDependencies references reported in {@code unresolvedDependencies()}.
@@ -666,7 +730,7 @@ public class JShell implements AutoCloseable {
      * this {@code JShell} instance.
      */
     public Stream<Diag> diagnostics(Snippet snippet) {
-        return checkValidSnippet(snippet).diagnostics().stream();
+        return checkValidSnippet(snippet, true).diagnostics().stream();
     }
 
     /**
@@ -706,7 +770,7 @@ public class JShell implements AutoCloseable {
         }
         String value;
         try {
-            value = executionControl().varValue(snippet.classFullName(), snippet.name());
+            value = executionControl().varValue(snippet.classFullName(), snippet.fieldName());
         } catch (EngineTerminationException ex) {
             throw new IllegalStateException(ex.getMessage());
         } catch (ExecutionControlException ex) {
@@ -795,6 +859,11 @@ public class JShell implements AutoCloseable {
             JShell.this.closeDown();
         }
 
+        @Override
+        public Optional<JShellConsole> console() {
+            return console;
+        }
+
     }
 
     // --- private / package-private implementation support ---
@@ -876,10 +945,22 @@ public class JShell implements AutoCloseable {
      * @return the input Snippet (for chained calls)
      */
     private Snippet checkValidSnippet(Snippet sn) {
+        return checkValidSnippet(sn, false);
+    }
+
+    /**
+     * Check a Snippet parameter coming from the API user
+     * @param sn the Snippet to check
+     * @param acceptUnassociated  accept snippets that are unassociated
+     * @throws NullPointerException if Snippet parameter is null
+     * @throws IllegalArgumentException if Snippet is not from this JShell
+     * @return the input Snippet (for chained calls)
+     */
+    private Snippet checkValidSnippet(Snippet sn, boolean acceptUnassociated) {
         if (sn == null) {
             throw new NullPointerException(messageFormat("jshell.exc.null"));
         } else {
-            if (sn.key().state() != this || sn.id() == Snippet.UNASSOCIATED_ID) {
+            if (sn.key().state() != this || (!acceptUnassociated && sn.id() == Snippet.UNASSOCIATED_ID)) {
                 throw new IllegalArgumentException(messageFormat("jshell.exc.alien", sn.toString()));
             }
             return sn;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,6 @@ package sun.net.smtp;
 import java.io.*;
 import java.net.*;
 import sun.net.TransferProtocolClient;
-import sun.security.action.GetPropertyAction;
 
 /**
  * This class implements the SMTP client.
@@ -75,9 +74,9 @@ public class SmtpClient extends TransferProtocolClient {
     }
 
     public void to(String s) throws IOException {
-        if (s.indexOf('\n') != -1) {
+        if (s.indexOf('\n') != -1 || s.indexOf('\r') != -1) {
             throw new IOException("Illegal SMTP command",
-                    new IllegalArgumentException("Illegal carriage return"));
+                    new IllegalArgumentException("Illegal carriage return or line feed"));
         }
         int st = 0;
         int limit = s.length();
@@ -121,9 +120,9 @@ public class SmtpClient extends TransferProtocolClient {
     }
 
     public void from(String s) throws IOException {
-        if (s.indexOf('\n') != -1) {
+        if (s.indexOf('\n') != -1 || s.indexOf('\r') != -1) {
             throw new IOException("Illegal SMTP command",
-                    new IllegalArgumentException("Illegal carriage return"));
+                    new IllegalArgumentException("Illegal carriage return or line feed"));
         }
         if (s.startsWith("<")) {
             issueCommand("mail from: " + s + "\r\n", 250);
@@ -167,7 +166,7 @@ public class SmtpClient extends TransferProtocolClient {
         }
         try {
             String s;
-            mailhost = GetPropertyAction.privilegedGetProperty("mail.host");
+            mailhost = System.getProperty("mail.host");
             if (mailhost != null) {
                 openServer(mailhost);
                 return;
@@ -193,7 +192,7 @@ public class SmtpClient extends TransferProtocolClient {
         setConnectTimeout(to);
         try {
             String s;
-            mailhost = GetPropertyAction.privilegedGetProperty("mail.host");
+            mailhost = System.getProperty("mail.host");
             if (mailhost != null) {
                 openServer(mailhost);
                 return;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,59 +23,54 @@
 
 /*
  * @test
- * @run testng TestSpliterator
+ * @run junit TestSpliterator
  */
 
-import jdk.incubator.foreign.MemoryLayout;
-import jdk.incubator.foreign.MemorySegment;
-import jdk.incubator.foreign.ResourceScope;
-import jdk.incubator.foreign.SequenceLayout;
+import java.lang.foreign.*;
 
 import java.lang.invoke.VarHandle;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Spliterator;
+import java.util.*;
 import java.util.concurrent.CountedCompleter;
 import java.util.concurrent.RecursiveTask;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.LongStream;
 
-import jdk.incubator.foreign.ValueLayout;
-import org.testng.annotations.*;
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
-import static org.testng.Assert.*;
-
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class TestSpliterator {
-
-    static final VarHandle INT_HANDLE = MemoryLayout.sequenceLayout(ValueLayout.JAVA_INT)
-            .varHandle(MemoryLayout.PathElement.sequenceElement());
 
     final static int CARRIER_SIZE = 4;
 
-    @Test(dataProvider = "splits")
+    @ParameterizedTest
+    @MethodSource("splits")
     public void testSum(int size, int threshold) {
         SequenceLayout layout = MemoryLayout.sequenceLayout(size, ValueLayout.JAVA_INT);
 
         //setup
-        try (ResourceScope scope = ResourceScope.newSharedScope()) {
-            MemorySegment segment = MemorySegment.allocateNative(layout, scope);
-            for (int i = 0; i < layout.elementCount().getAsLong(); i++) {
-                INT_HANDLE.set(segment, (long) i, i);
+        try (Arena arena = Arena.ofShared()) {
+            MemorySegment segment = arena.allocate(layout);;
+            for (int i = 0; i < layout.elementCount(); i++) {
+                segment.setAtIndex(ValueLayout.JAVA_INT, i, i);
             }
-            long expected = LongStream.range(0, layout.elementCount().getAsLong()).sum();
+            long expected = LongStream.range(0, layout.elementCount()).sum();
             //serial
             long serial = sum(0, segment);
-            assertEquals(serial, expected);
+            assertEquals(expected, serial);
             //parallel counted completer
             long parallelCounted = new SumSegmentCounted(null, segment.spliterator(layout.elementLayout()), threshold).invoke();
-            assertEquals(parallelCounted, expected);
+            assertEquals(expected, parallelCounted);
             //parallel recursive action
             long parallelRecursive = new SumSegmentRecursive(segment.spliterator(layout.elementLayout()), threshold).invoke();
-            assertEquals(parallelRecursive, expected);
+            assertEquals(expected, parallelRecursive);
             //parallel stream
             long streamParallel = segment.elements(layout.elementLayout()).parallel()
                     .reduce(0L, TestSpliterator::sumSingle, Long::sum);
-            assertEquals(streamParallel, expected);
+            assertEquals(expected, streamParallel);
         }
     }
 
@@ -84,58 +79,106 @@ public class TestSpliterator {
         SequenceLayout layout = MemoryLayout.sequenceLayout(1024, ValueLayout.JAVA_INT);
 
         //setup
-        MemorySegment segment = MemorySegment.allocateNative(layout, ResourceScope.newImplicitScope());
-        for (int i = 0; i < layout.elementCount().getAsLong(); i++) {
-            INT_HANDLE.set(segment, (long) i, i);
+        Arena scope = Arena.ofAuto();
+        MemorySegment segment = scope.allocate(layout);
+        for (int i = 0; i < layout.elementCount(); i++) {
+            segment.setAtIndex(ValueLayout.JAVA_INT, i, i);
         }
-        long expected = LongStream.range(0, layout.elementCount().getAsLong()).sum();
+        long expected = LongStream.range(0, layout.elementCount()).sum();
 
         //check that a segment w/o ACQUIRE access mode can still be used from same thread
         AtomicLong spliteratorSum = new AtomicLong();
         segment.spliterator(layout.elementLayout())
                 .forEachRemaining(s -> spliteratorSum.addAndGet(sumSingle(0L, s)));
-        assertEquals(spliteratorSum.get(), expected);
+        assertEquals(expected, spliteratorSum.get());
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadSpliteratorElementSizeTooBig() {
-        MemorySegment.ofArray(new byte[2]).spliterator(ValueLayout.JAVA_INT);
+        MemorySegment segment = Arena.ofAuto().allocate(2, 1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            segment.spliterator(ValueLayout.JAVA_INT);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadStreamElementSizeTooBig() {
-        MemorySegment.ofArray(new byte[2]).elements(ValueLayout.JAVA_INT);
+        MemorySegment segment = Arena.ofAuto().allocate(2, 1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            segment.elements(ValueLayout.JAVA_INT);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadSpliteratorElementSizeNotMultiple() {
-        MemorySegment.ofArray(new byte[7]).spliterator(ValueLayout.JAVA_INT);
+        MemorySegment segment = Arena.ofAuto().allocate(7, 1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            segment.spliterator(ValueLayout.JAVA_INT);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadStreamElementSizeNotMultiple() {
-        MemorySegment.ofArray(new byte[7]).elements(ValueLayout.JAVA_INT);
+        MemorySegment segment = Arena.ofAuto().allocate(7, 1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            segment.elements(ValueLayout.JAVA_INT);
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
+    public void testSpliteratorElementSizeMultipleButNotPowerOfTwo() {
+        Arena scope = Arena.ofAuto();
+        scope.allocate(12, 1)
+                .spliterator(ValueLayout.JAVA_INT);
+    }
+
+    @Test
+    public void testStreamElementSizeMultipleButNotPowerOfTwo() {
+        Arena scope = Arena.ofAuto();
+        scope.allocate(12, 1)
+                .elements(ValueLayout.JAVA_INT);
+    }
+
+    @Test
     public void testBadSpliteratorElementSizeZero() {
-        MemorySegment.ofArray(new byte[7]).spliterator(MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_INT));
+        MemorySegment segment = Arena.ofAuto().allocate(7, 1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            segment.spliterator(MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_INT));
+        });
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testBadStreamElementSizeZero() {
-        MemorySegment.ofArray(new byte[7]).elements(MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_INT));
+        MemorySegment segment = Arena.ofAuto().allocate(7, 1);
+        assertThrows(IllegalArgumentException.class, () -> {
+            segment.elements(MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_INT));
+        });
+    }
+
+    @Test
+    public void testHyperAligned() {
+        Arena scope = Arena.ofAuto();
+        MemorySegment segment = scope.allocate(8, 1);
+        // compute an alignment constraint (in bytes) which exceed that of the native segment
+        long bigByteAlign = Long.lowestOneBit(segment.address()) << 1;
+        MemoryLayout elementLayout = MemoryLayout.structLayout(
+                Collections.nCopies(Math.toIntExact(bigByteAlign), ValueLayout.JAVA_BYTE).toArray(MemoryLayout[]::new))
+                .withByteAlignment(bigByteAlign);
+        SequenceLayout layout = MemoryLayout.sequenceLayout(2, elementLayout);
+        IllegalArgumentException iae = assertThrows(IllegalArgumentException.class,
+                () -> segment.elements(layout));
+        assertEquals("Incompatible alignment constraints", iae.getMessage());
     }
 
     static long sumSingle(long acc, MemorySegment segment) {
-        return acc + (int)INT_HANDLE.get(segment, 0L);
+        return acc + segment.getAtIndex(ValueLayout.JAVA_INT, 0);
     }
 
     static long sum(long start, MemorySegment segment) {
         long sum = start;
         int length = (int)segment.byteSize();
         for (int i = 0 ; i < length / CARRIER_SIZE ; i++) {
-            sum += (int)INT_HANDLE.get(segment, (long)i);
+            sum += segment.getAtIndex(ValueLayout.JAVA_INT, i);
         }
         return sum;
     }
@@ -206,7 +249,6 @@ public class TestSpliterator {
         }
     }
 
-    @DataProvider(name = "splits")
     public Object[][] splits() {
         return new Object[][] {
                 { 10, 1 },

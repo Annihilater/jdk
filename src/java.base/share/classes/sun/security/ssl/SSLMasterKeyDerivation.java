@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.NoSuchAlgorithmException;
 import java.security.ProviderException;
-import java.security.spec.AlgorithmParameterSpec;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import sun.security.internal.spec.TlsMasterSecretParameterSpec;
@@ -43,7 +42,7 @@ enum SSLMasterKeyDerivation implements SSLKeyDerivationGenerator {
 
     final String name;
 
-    private SSLMasterKeyDerivation(String name) {
+    SSLMasterKeyDerivation(String name) {
         this.name = name;
     }
 
@@ -84,9 +83,7 @@ enum SSLMasterKeyDerivation implements SSLKeyDerivationGenerator {
 
         @Override
         @SuppressWarnings("deprecation")
-        public SecretKey deriveKey(String algorithm,
-                AlgorithmParameterSpec params) throws IOException {
-
+        public SecretKey deriveKey(String typeNotUsed) throws IOException {
             CipherSuite cipherSuite = context.negotiatedCipherSuite;
             ProtocolVersion protocolVersion = context.negotiatedProtocol;
 
@@ -124,7 +121,11 @@ enum SSLMasterKeyDerivation implements SSLKeyDerivationGenerator {
             TlsMasterSecretParameterSpec spec;
             if (context.handshakeSession.useExtendedMasterSecret) {
                 // reset to use the extended master secret algorithm
-                masterAlg = "SunTlsExtendedMasterSecret";
+                if (protocolVersion.id == ProtocolVersion.TLS12.id) {
+                    masterAlg = "SunTls12ExtendedMasterSecret";
+                } else {
+                    masterAlg = "SunTlsExtendedMasterSecret";
+                }
 
                 // For the session hash, use the handshake messages up to and
                 // including the ClientKeyExchange message.
@@ -154,7 +155,8 @@ enum SSLMasterKeyDerivation implements SSLKeyDerivationGenerator {
                 //
                 // For RSA premaster secrets, do not signal a protocol error
                 // due to the Bleichenbacher attack. See comments further down.
-                if (SSLLogger.isOn && SSLLogger.isOn("handshake")) {
+                if (SSLLogger.isOn() &&
+                        SSLLogger.isOn(SSLLogger.Opt.HANDSHAKE)) {
                     SSLLogger.fine("RSA master secret generation error.", iae);
                 }
                 throw new ProviderException(iae);

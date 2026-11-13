@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "runtime/fieldDescriptor.hpp"
 
+#include "oops/fieldInfo.inline.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/signature.hpp"
 
@@ -34,52 +35,44 @@
 // must be put in this file, as they require runtime/handles.inline.hpp.
 
 inline Symbol* fieldDescriptor::name() const {
-  return field()->name(_cp());
+  return field().name(_cp());
 }
 
 inline Symbol* fieldDescriptor::signature() const {
-  return field()->signature(_cp());
-}
-
-inline InstanceKlass* fieldDescriptor::field_holder() const {
-  return _cp->pool_holder();
+  return field().signature(_cp());
 }
 
 inline ConstantPool* fieldDescriptor::constants() const {
   return _cp();
 }
 
-inline FieldInfo* fieldDescriptor::field() const {
-  InstanceKlass* ik = field_holder();
-  return ik->field(_index);
-}
+inline int fieldDescriptor::offset()                    const    { return field().offset(); }
+inline bool fieldDescriptor::has_initial_value()        const    { return field().field_flags().is_initialized(); }
+inline int fieldDescriptor::initial_value_index()       const    { return field().initializer_index(); }
 
-inline int fieldDescriptor::offset()                    const    { return field()->offset(); }
-inline bool fieldDescriptor::has_initial_value()        const    { return field()->initval_index() != 0; }
-inline int fieldDescriptor::initial_value_index()       const    { return field()->initval_index(); }
-
-inline void fieldDescriptor::update_klass_field_access_flag() {
-  InstanceKlass* ik = field_holder();
-  ik->field(index())->set_access_flags(_access_flags.as_short());
+inline bool fieldDescriptor::is_strict_static_unset() const {
+  return (is_strict() && is_static() &&
+          field_holder()->field_status(index()).is_strict_static_unset());
 }
 
 inline void fieldDescriptor::set_is_field_access_watched(const bool value) {
-  _access_flags.set_is_field_access_watched(value);
-  update_klass_field_access_flag();
+  field_holder()->fields_status()->adr_at(index())->update_access_watched(value);
 }
 
 inline void fieldDescriptor::set_is_field_modification_watched(const bool value) {
-  _access_flags.set_is_field_modification_watched(value);
-  update_klass_field_access_flag();
+  field_holder()->fields_status()->adr_at(index())->update_modification_watched(value);
 }
 
 inline void fieldDescriptor::set_has_initialized_final_update(const bool value) {
-  _access_flags.set_has_field_initialized_final_update(value);
-  update_klass_field_access_flag();
+  field_holder()->fields_status()->adr_at(index())->update_initialized_final_update(value);
 }
 
 inline BasicType fieldDescriptor::field_type() const {
   return Signature::basic_type(signature());
 }
+
+inline bool fieldDescriptor::is_flat()  const  { return field().field_flags().is_flat(); }
+inline bool fieldDescriptor::is_null_free_value_type() const { return field().field_flags().is_null_free_value_type(); }
+inline bool fieldDescriptor::has_null_marker() const { return field().field_flags().has_null_marker(); }
 
 #endif // SHARE_RUNTIME_FIELDDESCRIPTOR_INLINE_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -93,6 +93,8 @@ import java.time.zone.ZoneRules;
 import java.util.Comparator;
 import java.util.Objects;
 
+import jdk.internal.util.DateTimeHelper;
+
 /**
  * A date-time with an offset from UTC/Greenwich in the ISO-8601 calendar system,
  * such as {@code 2007-12-03T10:15:30+01:00}.
@@ -114,11 +116,18 @@ import java.util.Objects;
  * more detail, or when communicating to a database or in a network protocol.
  * <p>
  * This is a <a href="{@docRoot}/java.base/java/lang/doc-files/ValueBased.html">value-based</a>
- * class; programmers should treat instances that are
- * {@linkplain #equals(Object) equal} as interchangeable and should not
- * use instances for synchronization, or unpredictable behavior may
- * occur. For example, in a future release, synchronization may fail.
- * The {@code equals} method should be used for comparisons.
+ * class; programmers should treat instances that are {@linkplain #equals(Object) equal}
+ * as interchangeable and should not use instances for synchronization or
+ * with {@linkplain java.lang.ref.Reference object references}.
+ *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ *          When preview features are enabled, {@code OffsetDateTime} is a {@linkplain Class#isValue value class}.
+ *          Use of value class instances for synchronization or with
+ *          {@linkplain java.lang.ref.Reference object references} result in
+ *          {@link IdentityException}.
+ *      </div>
+ * </div>
  *
  * @implSpec
  * This class is immutable and thread-safe.
@@ -126,7 +135,8 @@ import java.util.Objects;
  * @since 1.8
  */
 @jdk.internal.ValueBased
-public final class OffsetDateTime
+// See doc/value-class-preview.md for an overview of value class generation
+public final /*value*/ class OffsetDateTime
         implements Temporal, TemporalAdjuster, Comparable<OffsetDateTime>, Serializable {
 
     /**
@@ -169,7 +179,8 @@ public final class OffsetDateTime
      *
      * @param datetime1  the first date-time to compare, not null
      * @param datetime2  the other date-time to compare to, not null
-     * @return the comparator value, negative if less, positive if greater
+     * @return the comparator value, that is less than zero if {@code datetime1} is before {@code datetime2},
+     *          zero if they are equal, greater than zero if {@code datetime1} is after {@code datetime2}
      */
     private static int compareInstant(OffsetDateTime datetime1, OffsetDateTime datetime2) {
         if (datetime1.getOffset().equals(datetime2.getOffset())) {
@@ -189,11 +200,11 @@ public final class OffsetDateTime
     private static final long serialVersionUID = 2287754244819255394L;
 
     /**
-     * The local date-time.
+     * @serial The local date-time.
      */
     private final LocalDateTime dateTime;
     /**
-     * The offset from UTC/Greenwich.
+     * @serial The offset from UTC/Greenwich.
      */
     private final ZoneOffset offset;
 
@@ -1801,11 +1812,20 @@ public final class OffsetDateTime
      * consistent with {@code equals()}.
      *
      * @param other  the other date-time to compare to, not null
-     * @return the comparator value, negative if less, positive if greater
+     * @return the comparator value, that is the comparison with the {@code other}'s instant, if they are not equal;
+     *          and if equal to the {@code other}'s instant, the comparison of the {@code other}'s local date-time
+     * @see #isBefore
+     * @see #isAfter
      */
     @Override
     public int compareTo(OffsetDateTime other) {
-        int cmp = compareInstant(this, other);
+        int cmp = getOffset().compareTo(other.getOffset());
+        if (cmp != 0) {
+            cmp = Long.compare(toEpochSecond(), other.toEpochSecond());
+            if (cmp == 0) {
+                cmp = toLocalTime().getNano() - other.toLocalTime().getNano();
+            }
+        }
         if (cmp == 0) {
             cmp = toLocalDateTime().compareTo(other.toLocalDateTime());
         }
@@ -1913,7 +1933,10 @@ public final class OffsetDateTime
      */
     @Override
     public String toString() {
-        return dateTime.toString() + offset.toString();
+        var offsetStr = offset.toString();
+        var buf = new StringBuilder(29 + offsetStr.length());
+        DateTimeHelper.formatTo(buf, dateTime);
+        return buf.append(offsetStr).toString();
     }
 
     //-----------------------------------------------------------------------
@@ -1941,6 +1964,7 @@ public final class OffsetDateTime
      * @throws InvalidObjectException always
      */
     @java.io.Serial
+    @SuppressWarnings("serial") // this method is not invoked for value classes
     private void readObject(ObjectInputStream s) throws InvalidObjectException {
         throw new InvalidObjectException("Deserialization via serialization delegate");
     }

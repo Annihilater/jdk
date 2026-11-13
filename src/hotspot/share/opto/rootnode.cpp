@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,7 @@
  *
  */
 
-#include "precompiled.hpp"
+#include "code/aotCodeCache.hpp"
 #include "memory/allocation.inline.hpp"
 #include "opto/callnode.hpp"
 #include "opto/cfgnode.hpp"
@@ -58,7 +58,7 @@ Node *RootNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   // If we want to get the rest of the win later, we should pattern match
   // simple recursive call trees to closed-form solutions.
 
-  return modified ? this : NULL;
+  return modified ? this : nullptr;
 }
 
 //=============================================================================
@@ -71,6 +71,7 @@ HaltNode::HaltNode(Node* ctrl, Node* frameptr, const char* halt_reason, bool rea
   init_req(TypeFunc::Memory,   top);
   init_req(TypeFunc::FramePtr, frameptr    );
   init_req(TypeFunc::ReturnAdr,top);
+  AOTCodeCache::add_C_string(halt_reason);
 }
 
 const Type *HaltNode::bottom_type() const { return Type::BOTTOM; }
@@ -78,7 +79,7 @@ uint HaltNode::size_of() const { return sizeof(*this); }
 
 //------------------------------Ideal------------------------------------------
 Node *HaltNode::Ideal(PhaseGVN *phase, bool can_reshape) {
-  return remove_dead_region(phase, can_reshape) ? this : NULL;
+  return remove_dead_region(phase, can_reshape) ? this : nullptr;
 }
 
 //------------------------------Value------------------------------------------
@@ -89,20 +90,50 @@ const Type* HaltNode::Value(PhaseGVN* phase) const {
 }
 
 const RegMask &HaltNode::out_RegMask() const {
-  return RegMask::Empty;
+  return RegMask::EMPTY;
 }
 
-#ifndef PRODUCT
-//-----------------------------related-----------------------------------------
-// Include all control inputs in the related set, and also the input data
-// boundary. In compact mode, include all inputs till level 2. Also include
-// all outputs at level 1.
-void HaltNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
-  if (compact) {
-    this->collect_nodes(in_rel, 2, false, false);
-  } else {
-    this->collect_nodes_in_all_ctrl(in_rel, true);
+Node* DeadPathNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+  assert(unique_ctrl_out() == phase->C->root(), "only referenced from root");
+  assert(can_reshape, "only used once igvn executes");
+  bool modified = false;
+  for (uint i = 1; i < req(); i++) { // For all inputs
+    // Check for and remove dead inputs
+    if (phase->type(in(i)) == Type::TOP) {
+      del_req(i--);             // Delete TOP inputs
+      modified = true;
+    }
   }
-  this->collect_nodes(out_rel, -1, false, false);
+  if (req() == 1 && is_active()) {
+    assert(modified, "only if some inputs were removed");
+    deactivate();
+  }
+  return modified ? this : nullptr;
 }
-#endif
+
+const Type* DeadPathNode::Value(PhaseGVN* phase) const {
+  if (req() == 1) {
+    return Type::TOP;
+  }
+  return bottom_type();
+}
+
+void DeadPathNode::activate(PhaseIterGVN* igvn) {
+  assert(Compile::current()->root()->find_edge(this) < 0, "should be disconnected from root");
+  set_req(0, this);
+  // If an entire subgraph died such as with Node::remove_dead_region(), some dead inputs to the DeadPath node will have
+  // been left behind
+  while (req() > 1) {
+    uint last = req() - 1;
+    assert(in(last) == nullptr || in(last)->is_top(), "only dead inputs should remain");
+    del_req(last);
+  }
+  Node* root_node = Compile::current()->root();
+  root_node->add_req(this);
+  igvn->_worklist.push(root_node);
+  igvn->set_type(this, bottom_type());
+}
+
+void DeadPathNode::deactivate() {
+  set_req(0, nullptr);
+}

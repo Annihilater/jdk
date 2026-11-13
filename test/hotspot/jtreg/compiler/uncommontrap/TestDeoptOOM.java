@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,23 +26,54 @@
  * @bug 6898462 8198826
  * @summary failed reallocations of scalar replaced objects during deoptimization causes crash
  *
- * @requires !vm.graal.enabled
- * @run main/othervm -XX:-BackgroundCompilation -Xmx128M -XX:+IgnoreUnrecognizedVMOptions -XX:+VerifyStack
+ * @run main/othervm/timeout=480 -XX:-BackgroundCompilation -Xmx128M -XX:+IgnoreUnrecognizedVMOptions -XX:+VerifyStack
  *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::main
  *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::m9_1
  *      compiler.uncommontrap.TestDeoptOOM
  */
 
 /*
- * @test
+ * @test id=Z
  * @bug 8273456
  * @summary Test that ttyLock is ranked above StackWatermark_lock
- * @requires !vm.graal.enabled & vm.gc.Z
- * @run main/othervm -XX:-BackgroundCompilation -Xmx128M -XX:+IgnoreUnrecognizedVMOptions -XX:+VerifyStack
+ * @requires vm.gc.Z
+ * @run main/othervm/timeout=480 -XX:-BackgroundCompilation -Xmx128M -XX:+IgnoreUnrecognizedVMOptions -XX:+VerifyStack
  *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::main
  *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::m9_1
  *      -XX:+UnlockDiagnosticVMOptions
- *      -XX:+UseZGC -XX:+LogCompilation -XX:+PrintDeoptimizationDetails -XX:+TraceDeoptimization -XX:+Verbose
+ *      -XX:-DisplayVMOutput -XX:+UseZGC -XX:+LogCompilation
+ *      -Xlog:deoptimization=debug -XX:+Verbose
+ *      compiler.uncommontrap.TestDeoptOOM
+ */
+
+/*
+ * @test
+ * @bug 6898462 8198826
+ * @summary failed reallocations of scalar replaced objects during deoptimization causes crash
+ *
+ * @requires os.arch == "aarch64" | os.arch == "riscv64"
+ * @requires vm.compiler2.enabled
+ * @run main/othervm/timeout=480 -XX:-BackgroundCompilation -Xmx128M -XX:+IgnoreUnrecognizedVMOptions -XX:+VerifyStack
+ *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::main
+ *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::m9_1
+ *      -XX:+UnlockExperimentalVMOptions -XX:+PreferCallBasedUncommonTraps
+ *      compiler.uncommontrap.TestDeoptOOM
+ */
+
+/*
+ * @test id=Z_PreferCallBasedUncommonTraps
+ * @bug 8273456
+ * @summary Test that ttyLock is ranked above StackWatermark_lock
+ * @requires vm.gc.Z
+ * @requires os.arch == "aarch64" | os.arch == "riscv64"
+ * @requires vm.compiler2.enabled
+ * @run main/othervm/timeout=480 -XX:-BackgroundCompilation -Xmx128M -XX:+IgnoreUnrecognizedVMOptions -XX:+VerifyStack
+ *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::main
+ *      -XX:CompileCommand=exclude,compiler.uncommontrap.TestDeoptOOM::m9_1
+ *      -XX:+UnlockDiagnosticVMOptions
+ *      -XX:-DisplayVMOutput -XX:+UseZGC -XX:+LogCompilation
+ *      -Xlog:deoptimization=debug -XX:+Verbose
+ *      -XX:+UnlockExperimentalVMOptions -XX:+PreferCallBasedUncommonTraps
  *      compiler.uncommontrap.TestDeoptOOM
  */
 
@@ -67,17 +98,22 @@ public class TestDeoptOOM {
 
     static LinkedList ll;
 
-    static void consume_all_memory() {
-        int size = 128 * 1024 * 1024;
-        while(size > 0) {
-            try {
-                while(true) {
-                    ll = new LinkedList(ll, size);
-                }
-            } catch(OutOfMemoryError oom) {
+    static void alloc_in_chunks(int size) {
+        try {
+            while(true) {
+                ll = new LinkedList(ll, size);
             }
-            size = size / 2;
+        } catch(OutOfMemoryError oom) {
         }
+    }
+
+    static void consume_all_memory() {
+        // O(MiB) allocations
+        alloc_in_chunks(1024*1024);
+        // O(KiB) allocations
+        alloc_in_chunks(1024);
+        // O(B) allocations
+        alloc_in_chunks(1);
     }
 
     static void free_memory() {

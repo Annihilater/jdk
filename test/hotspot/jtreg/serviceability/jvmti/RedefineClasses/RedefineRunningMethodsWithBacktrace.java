@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,8 +32,12 @@
  *          java.instrument
  *          jdk.jartool/sun.tools.jar
  * @run main RedefineClassHelper
- * @run main/othervm -javaagent:redefineagent.jar RedefineRunningMethodsWithBacktrace
+ * @compile RedefineRunningMethodsWithBacktrace.java
+ * @run main/othervm -javaagent:redefineagent.jar RedefineRunningMethodsWithBacktrace platform
+ * @run main/othervm -javaagent:redefineagent.jar RedefineRunningMethodsWithBacktrace virtual
  */
+
+import java.util.concurrent.ThreadFactory;
 
 import static jdk.test.lib.Asserts.*;
 
@@ -81,41 +85,61 @@ class RedefineRunningMethodsWithBacktrace_B {
 
 public class RedefineRunningMethodsWithBacktrace {
 
-    public static String newB =
-                "class RedefineRunningMethodsWithBacktrace_B {" +
-                "   static int count1 = 0;" +
-                "   static int count2 = 0;" +
-                "   public static volatile boolean stop = false;" +
-                "  static void localSleep() { " +
-                "    try{ " +
-                "      Thread.sleep(10);" +
-                "    } catch(InterruptedException ie) { " +
-                "    } " +
-                " } " +
-                "   public static void infinite() { " +
-                "       System.out.println(\"infinite called\");" +
-                "   }" +
-                "   public static void throwable() { " +
-                "       throw new RuntimeException(\"throwable called\");" +
-                "   }" +
-                "}";
+    public static String newB = """
+                class RedefineRunningMethodsWithBacktrace_B {
+                    static int count1 = 0;
+                    static int count2 = 0;
+                    public static volatile boolean stop = false;
+                    static void localSleep() {
+                        try {
+                            Thread.sleep(10);
+                        } catch(InterruptedException ie) {
+                        }
+                    }
+                    public static void infinite() {
+                        System.out.println("infinite called");
+                    }
+                    public static void throwable() {
+                        throw new RuntimeException("throwable called");
+                    }
+                }
+                """;
 
-    public static String evenNewerB =
-                "class RedefineRunningMethodsWithBacktrace_B {" +
-                "   static int count1 = 0;" +
-                "   static int count2 = 0;" +
-                "   public static volatile boolean stop = false;" +
-                "  static void localSleep() { " +
-                "    try{ " +
-                "      Thread.sleep(1);" +
-                "    } catch(InterruptedException ie) { " +
-                "    } " +
-                " } " +
-                "   public static void infinite() { }" +
-                "   public static void throwable() { " +
-                "       throw new RuntimeException(\"throwable called\");" +
-                "   }" +
-                "}";
+    public static String evenNewerB = """
+                class RedefineRunningMethodsWithBacktrace_B {
+                    static int count1 = 0;
+                    static int count2 = 0;
+                    public static volatile boolean stop = false;
+                    static void localSleep() {
+                        try {
+                            Thread.sleep(1);
+                        } catch(InterruptedException ie) {
+                        }
+                    }
+                    public static void infinite() {}
+                    public static void throwable() {
+                        throw new RuntimeException("throwable called"); /* line 13 */
+                    }
+                }
+                """;
+
+    private static boolean matchSource(String source) {
+        // The first version is in this file, the second version was cleaned up.
+        return source == null ||
+               source.equals("RedefineRunningMethodsWithBacktrace.java") ||
+               source.equals("RedefineRunningMethodsWithBacktrace_B.java");
+    }
+
+    static final int firstLineNumber = 82;
+    static final int cleanedupLineNumber = -1;
+    static final int rerunLineNumber = 13;
+
+    private static boolean matchLineNumber(int lineNumber) {
+        // Line number of the throw in the each version of the redefined class.
+        // The first version of this method is running so we have the line number,
+        // the second is cleaned up, so we don't, the third version is current so we do.
+        return lineNumber == firstLineNumber || lineNumber == cleanedupLineNumber || lineNumber == rerunLineNumber;
+    }
 
     private static void touchRedefinedMethodInBacktrace(Throwable throwable) {
         System.out.println("touchRedefinedMethodInBacktrace: ");
@@ -125,8 +149,24 @@ public class RedefineRunningMethodsWithBacktrace {
         // Make sure that we can convert the backtrace, which is referring to
         // the redefined method, to a  StrackTraceElement[] without crashing.
         StackTraceElement[] stackTrace = throwable.getStackTrace();
-        for (int i = 0; i < stackTrace.length; i++) {
-            StackTraceElement frame = stackTrace[i];
+        StackTraceElement frame = stackTrace[0];
+        assertEquals(frame.getClassName(), "RedefineRunningMethodsWithBacktrace_B",
+              "\nTest failed: trace[0].getClassName() returned " + frame.getClassName());
+        assertEquals(frame.getMethodName(), "throwable",
+              "\nTest failed: trace[0].getMethodName() returned " + frame.getMethodName());
+        assertTrue(matchSource(frame.getFileName()),
+              "\nTest failed: trace[0].getFileName() returned " + frame.getFileName());
+        assertTrue(matchLineNumber(frame.getLineNumber()),
+              "\nTest failed: trace[0].getLineNumber() returned " + frame.getLineNumber());
+
+        frame = stackTrace[1];
+        assertEquals(frame.getClassName(), "RedefineRunningMethodsWithBacktrace",
+              "\nTest failed: trace[1].getClassName() returned " + frame.getClassName());
+        assertEquals(frame.getMethodName(), "getThrowableInB",
+              "\nTest failed: trace[1].getMethodName() returned " + frame.getMethodName());
+
+        for (int i = 2; i < stackTrace.length; i++) {
+            frame = stackTrace[i];
             assertNotNull(frame.getClassName(),
               "\nTest failed: trace[" + i + "].getClassName() returned null");
             assertNotNull(frame.getMethodName(),
@@ -149,11 +189,11 @@ public class RedefineRunningMethodsWithBacktrace {
 
     public static void main(String[] args) throws Exception {
 
-        new Thread() {
-            public void run() {
-                RedefineRunningMethodsWithBacktrace_B.infinite();
-            }
-        }.start();
+        ThreadFactory factory = args[0].equals("platform")
+                ? Thread.ofPlatform().factory()
+                : Thread.ofVirtual().factory();
+
+        factory.newThread(RedefineRunningMethodsWithBacktrace_B::infinite).start();
 
         Throwable t1 = getThrowableInB();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,7 @@
 /*
  * @test
  * @bug 4974913
- * @summary Test that array classes can be found in signatures always
- * and can be deserialized by the deprecated MBeanServer.deserialize method
+ * @summary Test that array classes found in signatures can be deserialized
  * @author Eamonn McManus
  *
  * @run clean ArrayClassTest
@@ -51,7 +50,7 @@ public class ArrayClassTest {
             urls[i] = Paths.get(cpaths[i]).toUri().toURL();
         }
 
-        // Create an MLet that can load the same class names but
+        // Create a SpyLoader MBean that can load the same class names but
         // will produce different results.
         ClassLoader loader = new SpyLoader(urls);
         ObjectName loaderName = new ObjectName("test:type=SpyLoader");
@@ -72,16 +71,20 @@ public class ArrayClassTest {
         oout.writeObject(new Z[0]);
         oout.close();
         byte[] bytes = bout.toByteArray();
-        ObjectInputStream oin = mbs.deserialize(testName, bytes);
-        Object zarray = oin.readObject();
+
+        ClassLoader newLoader = mbs.getClassLoaderFor(testName);
+        ByteLoaderStream byteLoaderStream = new ByteLoaderStream(new ByteArrayInputStream(bytes), newLoader);
+        Object zarray = byteLoaderStream.readObject();
+
         String failed = null;
-        if (zarray instanceof Z[])
+        if (zarray instanceof Z[]) {
             failed = "read back a real Z[]";
-        else if (!zarray.getClass().getName().equals(Z[].class.getName())) {
-            failed = "returned object of wrong type: " +
-                zarray.getClass().getName();
-        } else if (Array.getLength(zarray) != 0)
+        } else if (!zarray.getClass().getName().equals(Z[].class.getName())) {
+            failed = "returned object of wrong type: " + zarray.getClass().getName();
+        } else if (Array.getLength(zarray) != 0) {
             failed = "returned array of wrong size: " + Array.getLength(zarray);
+        }
+
         if (failed != null) {
             System.out.println("TEST FAILED: " + failed);
             System.exit(1);
@@ -105,10 +108,6 @@ public class ArrayClassTest {
 
     public static interface SpyLoaderMBean {}
 
-    /* We originally had this extend MLet but for some reason that
-       stopped the bug from happening.  Some side-effect of registering
-       the MLet in the MBean server caused it not to fail when asked
-       to load Z[].  */
     public static class SpyLoader extends URLClassLoader
             implements SpyLoaderMBean, PrivateClassLoader {
         public SpyLoader(URL[] urls) {
@@ -117,19 +116,6 @@ public class ArrayClassTest {
             super(urls, null);
         }
 
-        /*
-        public Class loadClass(String name) throws ClassNotFoundException {
-            System.out.println("loadClass: " + name);
-            return super.loadClass(name);
-        }
-
-        public Class loadClass(String name, boolean resolve)
-                throws ClassNotFoundException {
-            System.out.println("loadClass: " + name + ", " + resolve);
-            return super.loadClass(name, resolve);
-        }
-        */
-
         public Class findClass(String name) throws ClassNotFoundException {
             System.out.println("findClass: " + name);
             if (false)
@@ -137,6 +123,24 @@ public class ArrayClassTest {
             Class c = super.findClass(name);
             System.out.println(" -> " + name + " (" + c.getClassLoader() + ")");
             return c;
+        }
+    }
+
+    public static class ByteLoaderStream extends ObjectInputStream {
+        private ClassLoader loader;
+
+        public ByteLoaderStream(InputStream is, ClassLoader loader) throws IOException {
+            super(is);
+            this.loader = loader;
+        }
+
+        @Override
+        protected Class<?> resolveClass(ObjectStreamClass osc) throws IOException, ClassNotFoundException {
+            try {
+                return Class.forName(osc.getName(), false, loader);
+            } catch (ClassNotFoundException cnfe) {
+                return super.resolveClass(osc);
+            }
         }
     }
 }

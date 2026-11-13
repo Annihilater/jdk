@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,17 +25,27 @@
 
 package sun.nio.fs;
 
-import java.nio.file.*;
-import java.nio.charset.*;
-import java.io.*;
+import java.io.IOException;
 import java.net.URI;
-import java.util.*;
+import java.nio.charset.CharacterCodingException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.ProviderMismatchException;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.util.Arrays;
+import java.util.Objects;
 
 import jdk.internal.access.JavaLangAccess;
 import jdk.internal.access.SharedSecrets;
+import jdk.internal.util.ArraysSupport;
+import jdk.internal.vm.annotation.Stable;
 
-import static sun.nio.fs.UnixNativeDispatcher.*;
 import static sun.nio.fs.UnixConstants.*;
+import static sun.nio.fs.UnixNativeDispatcher.*;
 
 /**
  * Linux/Mac implementation of java.nio.file.Path
@@ -49,8 +59,8 @@ class UnixPath implements Path {
     // internal representation
     private final byte[] path;
 
-    // String representation (created lazily)
-    private volatile String stringValue;
+    // String representation (created lazily, no need to be volatile)
+    private @Stable String stringValue;
 
     // cached hashcode (created lazily, no need to be volatile)
     private int hash;
@@ -80,8 +90,9 @@ class UnixPath implements Path {
             checkNotNul(input, c);
             prevChar = c;
         }
-        if (prevChar == '/')
-            return normalize(input, n, n - 1);
+        if (prevChar == '/' && n > 1) {
+            return input.substring(0, n - 1);
+        }
         return input;
     }
 
@@ -99,7 +110,7 @@ class UnixPath implements Path {
             return "/";
         StringBuilder sb = new StringBuilder(input.length());
         if (off > 0)
-            sb.append(input.substring(0, off));
+            sb.append(input, 0, off);
         char prevChar = 0;
         for (int i=off; i < n; i++) {
             char c = input.charAt(i);
@@ -114,9 +125,8 @@ class UnixPath implements Path {
 
     // encodes the given path-string into a sequence of bytes
     private static byte[] encode(UnixFileSystem fs, String input) {
-        input = fs.normalizeNativePath(input);
         try {
-            return JLA.getBytesNoRepl(input, Util.jnuEncoding());
+            return JLA.uncheckedGetBytesOrThrow(input, Util.jnuEncoding());
         } catch (CharacterCodingException cce) {
             throw new InvalidPathException(input,
                 "Malformed input or input contains unmappable characters");
@@ -387,6 +397,83 @@ class UnixPath implements Path {
         return resolve(new UnixPath(getFileSystem(), other));
     }
 
+   private static final byte[] resolve(byte[] base, byte[]... children) {
+       // 'start' is either zero, indicating the base, or indicates which
+       // child is that last one which is an absolute path
+       int start = 0;
+       int resultLength = base.length;
+
+       // Locate the last child which is an absolute path and calculate
+       // the total number of bytes in the resolved path
+       final int count = children.length;
+       if (count > 0) {
+           for (int i = 0; i < count; i++) {
+               byte[] b = children[i];
+               if (b.length > 0) {
+                   if (b[0] == '/') {
+                       start = i + 1;
+                       resultLength = b.length;
+                   } else {
+                       if (resultLength > 0)
+                           resultLength++;
+                       resultLength += b.length;
+                   }
+               }
+           }
+       }
+
+       // If the base is not being superseded by a child which is an
+       // absolute path, then if at least one child is non-empty and
+       // the base consists only of a '/', then decrement resultLength to
+       // account for an extra '/' added in the resultLength computation.
+       if (start == 0 && resultLength > base.length && base.length == 1 && base[0] == '/')
+           resultLength--;
+
+       // Allocate the result array and return if empty.
+       byte[] result = new byte[resultLength];
+       if (result.length == 0)
+           return result;
+
+       // Prepend the base if it is non-empty and would not later be
+       // overwritten by an absolute child
+       int offset = 0;
+       if (start == 0 && base.length > 0) {
+           System.arraycopy(base, 0, result, 0, base.length);
+           offset += base.length;
+       }
+
+       // Append children starting with the last one which is an
+       // absolute path
+       if (count > 0) {
+           int idx = Math.max(0, start - 1);
+           for (int i = idx; i < count; i++) {
+               byte[] b = children[i];
+               if (b.length > 0) {
+                   if (offset > 0 && result[offset - 1] != '/')
+                       result[offset++] = '/';
+                   System.arraycopy(b, 0, result, offset, b.length);
+                   offset += b.length;
+               }
+           }
+       }
+
+       return result;
+   }
+
+    @Override
+    public UnixPath resolve(Path first, Path... more) {
+        if (more.length == 0)
+            return resolve(first);
+
+        byte[][] children = new byte[1 + more.length][];
+        children[0] = toUnixPath(first).path;
+        for (int i = 0; i < more.length; i++)
+            children[i + 1] = toUnixPath(more[i]).path;
+
+        byte[] result = resolve(path, children);
+        return new UnixPath(getFileSystem(), result);
+    }
+
     @Override
     public UnixPath relativize(Path obj) {
         UnixPath child = toUnixPath(obj);
@@ -478,95 +565,74 @@ class UnixPath implements Path {
     @Override
     public UnixPath normalize() {
         final int count = getNameCount();
-        if (count == 0 || isEmpty())
+        if (count == 0 || isEmpty()) {
             return this;
+        }
 
-        boolean[] ignore = new boolean[count];      // true => ignore name
-        int[] size = new int[count];                // length of name
-        int remaining = count;                      // number of names remaining
-        boolean hasDotDot = false;                  // has at least one ..
-        boolean isAbsolute = isAbsolute();
-
-        // first pass:
-        //   1. compute length of names
-        //   2. mark all occurrences of "." to ignore
-        //   3. and look for any occurrences of ".."
-        for (int i=0; i<count; i++) {
-            int begin = offsets[i];
-            int len;
-            if (i == (offsets.length-1)) {
-                len = path.length - begin;
-            } else {
-                len = offsets[i+1] - begin - 1;
-            }
-            size[i] = len;
-
-            if (path[begin] == '.') {
-                if (len == 1) {
-                    ignore[i] = true;  // ignore  "."
-                    remaining--;
-                }
-                else {
-                    if (path[begin+1] == '.')   // ".." found
-                        hasDotDot = true;
+        // find the first "." or ".." name element
+        int first = 0;
+        for (; first < count; first++) {
+            int start = offsets[first];
+            if (path[start] == '.') {
+                int len = (first == (count - 1))
+                        ? (path.length - start)
+                        : (offsets[first + 1] - start - 1);
+                if (len == 1 || (len == 2 && path[start + 1] == '.')) {
+                    break;
                 }
             }
         }
+        if (first == count) {
+            return this;    // no "." or ".." name element
+        }
 
-        // multiple passes to eliminate all occurrences of name/..
-        if (hasDotDot) {
-            int prevRemaining;
-            do {
-                prevRemaining = remaining;
-                int prevName = -1;
-                for (int i=0; i<count; i++) {
-                    if (ignore[i])
-                        continue;
+        int[] lengths = new int[count];       // lengths of name elements
+        int[] names = new int[count];         // indices of remaining name elements
+        int remaining = first;                // number of name elements remaining
+        boolean isAbsolute = isAbsolute();
 
-                    // not a ".."
-                    if (size[i] != 2) {
-                        prevName = i;
-                        continue;
-                    }
+        // lengths/indices for the name elements before the first "." or ".."
+        for (int i = 0; i < first; i++) {
+            lengths[i] = offsets[i + 1] - offsets[i] - 1;
+            names[i] = i;
+         }
 
-                    int begin = offsets[i];
-                    if (path[begin] != '.' || path[begin+1] != '.') {
-                        prevName = i;
-                        continue;
-                    }
-
-                    // ".." found
-                    if (prevName >= 0) {
-                        // name/<ignored>/.. found so mark name and ".." to be
-                        // ignored
-                        ignore[prevName] = true;
-                        ignore[i] = true;
-                        remaining = remaining - 2;
-                        prevName = -1;
-                    } else {
-                        // Case: /<ignored>/.. so mark ".." as ignored
-                        if (isAbsolute) {
-                            boolean hasPrevious = false;
-                            for (int j=0; j<i; j++) {
-                                if (!ignore[j]) {
-                                    hasPrevious = true;
-                                    break;
-                                }
-                            }
-                            if (!hasPrevious) {
-                                // all proceeding names are ignored
-                                ignore[i] = true;
-                                remaining--;
-                            }
+        // process name elements from the first "." or ".."
+        for (int i = first; i < count; i++) {
+            int start = offsets[i];
+            int len = (i == (count - 1))
+                    ? (path.length - start)
+                    : (offsets[i + 1] - start - 1);
+            lengths[i] = len;
+            boolean keep = true;
+            if (path[start] == '.') {
+                if (len == 1) {
+                    keep = false;
+                } else if (len == 2 && path[start + 1] == '.') {
+                    if (remaining > 0) {
+                        int previous = names[remaining - 1];
+                        int previousStart = offsets[previous];
+                        if ((lengths[previous] != 2)
+                                || (path[previousStart] != '.')
+                                || (path[previousStart + 1] != '.')) {
+                            remaining--;  // cancel previous
+                            keep = false;
                         }
                     }
+                    if (isAbsolute) {
+                        keep = false;
+                    }
                 }
-            } while (prevRemaining > remaining);
+            }
+            if (keep) {
+                names[remaining++] = i;
+            }
         }
 
         // no redundant names
-        if (remaining == count)
+        if (remaining == count) {
             return this;
+        }
 
         // corner case - all names removed
         if (remaining == 0) {
@@ -575,26 +641,24 @@ class UnixPath implements Path {
 
         // compute length of result
         int len = remaining - 1;
-        if (isAbsolute)
+        if (isAbsolute) {
             len++;
-
-        for (int i=0; i<count; i++) {
-            if (!ignore[i])
-                len += size[i];
         }
-        byte[] result = new byte[len];
+        for (int i = 0; i < remaining; i++) {
+            len += lengths[names[i]];
+        }
 
         // copy names into result
+        byte[] result = new byte[len];
         int pos = 0;
         if (isAbsolute)
             result[pos++] = '/';
-        for (int i=0; i<count; i++) {
-            if (!ignore[i]) {
-                System.arraycopy(path, offsets[i], result, pos, size[i]);
-                pos += size[i];
-                if (--remaining > 0) {
-                    result[pos++] = '/';
-                }
+        for (int i = 0; i < remaining; i++) {
+            int name = names[i];
+            System.arraycopy(path, offsets[name], result, pos, lengths[name]);
+            pos += lengths[name];
+            if (i < (remaining - 1)) {
+                result[pos++] = '/';
             }
         }
         return new UnixPath(getFileSystem(), result);
@@ -698,43 +762,17 @@ class UnixPath implements Path {
         // compare bytes
         int thisPos = offsets[thisOffsetCount - thatOffsetCount];
         int thatPos = that.offsets[0];
-        if ((thatLen - thatPos) != (thisLen - thisPos))
-            return false;
-        while (thatPos < thatLen) {
-            if (this.path[thisPos++] != that.path[thatPos++])
-                return false;
-        }
-
-        return true;
+        return Arrays.equals(this.path, thisPos, thisLen, that.path, thatPos, thatLen);
     }
 
     @Override
     public int compareTo(Path other) {
-        int len1 = path.length;
-        int len2 = ((UnixPath) other).path.length;
-
-        int n = Math.min(len1, len2);
-        byte v1[] = path;
-        byte v2[] = ((UnixPath) other).path;
-
-        int k = 0;
-        while (k < n) {
-            int c1 = v1[k] & 0xff;
-            int c2 = v2[k] & 0xff;
-            if (c1 != c2) {
-                return c1 - c2;
-            }
-           k++;
-        }
-        return len1 - len2;
+        return Arrays.compareUnsigned(path, ((UnixPath) other).path);
     }
 
     @Override
     public boolean equals(Object ob) {
-        if (ob instanceof UnixPath path) {
-            return compareTo(path) == 0;
-        }
-        return false;
+        return ob instanceof UnixPath p && compareTo(p) == 0;
     }
 
     @Override
@@ -742,9 +780,7 @@ class UnixPath implements Path {
         // OK if two or more threads compute hash
         int h = hash;
         if (h == 0) {
-            for (int i = 0; i< path.length; i++) {
-                h = 31*h + (path[i] & 0xff);
-            }
+            h = ArraysSupport.hashCodeOfUnsigned(path, 0, path.length, 0);
             hash = h;
         }
         return h;
@@ -753,8 +789,9 @@ class UnixPath implements Path {
     @Override
     public String toString() {
         // OK if two or more threads create a String
+        String stringValue = this.stringValue;
         if (stringValue == null) {
-            stringValue = fs.normalizeJavaPath(Util.toString(path));     // platform encoding
+            this.stringValue = stringValue = Util.toString(path);     // platform encoding
         }
         return stringValue;
     }
@@ -773,47 +810,18 @@ class UnixPath implements Path {
         return open(this, flags, 0);
     }
 
-    void checkRead() {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null)
-            sm.checkRead(getPathForPermissionCheck());
-    }
-
-    void checkWrite() {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null)
-            sm.checkWrite(getPathForPermissionCheck());
-    }
-
-    void checkDelete() {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null)
-            sm.checkDelete(getPathForPermissionCheck());
-    }
-
     @Override
     public UnixPath toAbsolutePath() {
         if (isAbsolute()) {
             return this;
         }
-        // The path is relative so need to resolve against default directory,
-        // taking care not to reveal the user.dir
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            sm.checkPropertyAccess("user.dir");
-        }
+        // The path is relative so need to resolve against default directory
         return new UnixPath(getFileSystem(),
             resolve(getFileSystem().defaultDirectory(), path));
     }
 
     @Override
     public Path toRealPath(LinkOption... options) throws IOException {
-        checkRead();
-
         UnixPath absolute = toAbsolutePath();
 
         // if resolving links then use realpath
@@ -827,17 +835,26 @@ class UnixPath implements Path {
         }
 
         // if not resolving links then eliminate "." and also ".."
-        // where the previous element is not a link.
+        // where the previous element is neither a link nor "..".
+        // if there is a preceding "..", then it might have followed
+        // a link or a link followed by a sequence of two or more "..".
+        // if for example one has the path "link/../../file",
+        // then if a preceding ".." were eliminated, then the result
+        // would be "<root>/link/file" instead of the correct
+        // "<root>/link/../../file".
         UnixPath result = fs.rootDirectory();
-        for (int i=0; i<absolute.getNameCount(); i++) {
+        boolean parentIsDotDot = false;
+        for (int i = 0; i < absolute.getNameCount(); i++) {
             UnixPath element = absolute.getName(i);
 
             // eliminate "."
-            if ((element.asByteArray().length == 1) && (element.asByteArray()[0] == '.'))
+            if ((element.asByteArray().length == 1) &&
+                (element.asByteArray()[0] == '.'))
                 continue;
 
-            // cannot eliminate ".." if previous element is a link
-            if ((element.asByteArray().length == 2) && (element.asByteArray()[0] == '.') &&
+            // cannot eliminate ".." if previous element is a link or ".."
+            if ((element.asByteArray().length == 2) &&
+                (element.asByteArray()[0] == '.') &&
                 (element.asByteArray()[1] == '.'))
             {
                 UnixFileAttributes attrs = null;
@@ -846,24 +863,119 @@ class UnixPath implements Path {
                 } catch (UnixException x) {
                     x.rethrowAsIOException(result);
                 }
-                if (!attrs.isSymbolicLink()) {
+                if (!attrs.isSymbolicLink() && !parentIsDotDot) {
                     result = result.getParent();
                     if (result == null) {
                         result = fs.rootDirectory();
                     }
                     continue;
                 }
+                parentIsDotDot = true;
+            } else {
+                parentIsDotDot = false;
             }
             result = result.resolve(element);
         }
 
-        // check file exists (without following links)
+        // check whether file exists (without following links)
         try {
             UnixFileAttributes.get(result, false);
         } catch (UnixException x) {
             x.rethrowAsIOException(result);
         }
-        return result;
+
+        // Return if the file system is not both case insensitive and retentive
+        if (!fs.isCaseInsensitiveAndPreserving())
+            return result;
+
+        UnixPath path = fs.rootDirectory();
+
+        // Traverse the result obtained above from the root downward, leaving
+        // any '..' elements intact, and replacing other elements with the
+        // entry in the same directory which has an equal key
+        for (int i = 0; i < result.getNameCount(); i++ ) {
+            UnixPath element = result.getName(i);
+
+            // If the element is "..", append it directly and continue
+            if (element.toString().equals("..")) {
+                path = path.resolve(element);
+                continue;
+            }
+
+            // Derive full path to element and check readability
+            UnixPath elementPath = path.resolve(element);
+
+            // Obtain the file key of elementPath
+            UnixFileAttributes attrs = null;
+            try {
+                attrs = UnixFileAttributes.get(elementPath, false);
+            } catch (UnixException x) {
+                x.rethrowAsIOException(result);
+            }
+            final UnixFileKey elementKey = attrs.fileKey();
+
+            // Obtain the directory stream pointer. It will be closed by
+            // UnixDirectoryStream::close.
+            long dp = -1;
+            try {
+                dp = opendir(path);
+            } catch (UnixException x) {
+                x.rethrowAsIOException(path);
+            }
+
+            // Obtain the stream of entries in the directory corresponding
+            // to the path constructed thus far, and extract the entry whose
+            // internal path bytes equal the internal path bytes of the current
+            // element, or whose key is equal to the key  of the current element
+            boolean found = false;
+            DirectoryStream.Filter<Path> filter = (p) -> { return true; };
+            // compare path bytes until a match is found or no more entries
+            try (DirectoryStream<Path> entries = new UnixDirectoryStream(path, dp, filter)) {
+                for (Path entry : entries) {
+                    Path name = entry.getFileName();
+                    if (name.compareTo(element) == 0) {
+                        found = true;
+                        path = path.resolve(entry);
+                        break;
+                    }
+                }
+            }
+
+            // if no path match found, compare file keys
+            if (!found) {
+                try {
+                    dp = opendir(path);
+                } catch (UnixException x) {
+                    x.rethrowAsIOException(path);
+                }
+
+                try (DirectoryStream<Path> entries = new UnixDirectoryStream(path, dp, filter)) {
+                    for (Path entry : entries) {
+                        Path name = entry.getFileName();
+                        UnixPath p = path.resolve(name);
+                        UnixFileAttributes attributes = null;
+                        try {
+                            attributes = UnixFileAttributes.get(p, false);
+                            UnixFileKey key = attributes.fileKey();
+                            if (key.equals(elementKey)) {
+                                found = true;
+                                path = path.resolve(entry);
+                                break;
+                            }
+                        } catch (UnixException ignore) {
+                            continue;
+                        }
+                    }
+                }
+
+                if (!found) {
+                    // Fallback which should in theory never happen
+                    path = path.resolve(element);
+                }
+            }
+        }
+
+        return path;
     }
 
     @Override
@@ -881,7 +993,6 @@ class UnixPath implements Path {
             throw new NullPointerException();
         if (!(watcher instanceof AbstractWatchService))
             throw new ProviderMismatchException();
-        checkRead();
         return ((AbstractWatchService)watcher).register(this, events, modifiers);
     }
 }

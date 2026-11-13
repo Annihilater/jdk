@@ -27,21 +27,21 @@
 
 #include "gc/shenandoah/heuristics/shenandoahHeuristics.hpp"
 
+/*
+ * This is a diagnostic heuristic that continuously runs collections
+ * cycles and adds every region with any garbage to the collection set.
+ */
 class ShenandoahAggressiveHeuristics : public ShenandoahHeuristics {
 public:
-  ShenandoahAggressiveHeuristics();
+  static void configure();
 
-  virtual void choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,
-                                                     RegionData* data, size_t size,
-                                                     size_t free);
+  ShenandoahAggressiveHeuristics(ShenandoahSpaceInfo* space_info);
 
-  virtual bool should_start_gc();
+  void choose_collection_set_from_regiondata(ShenandoahCollectionSet* cset,
+                                             RegionData* data, size_t size,
+                                             size_t free) override;
 
-  virtual bool should_unload_classes();
-
-  virtual const char* name()     { return "Aggressive"; }
-  virtual bool is_diagnostic()   { return true; }
-  virtual bool is_experimental() { return false; }
+  bool should_start_gc() override;
 };
 
 #endif // SHARE_GC_SHENANDOAH_HEURISTICS_SHENANDOAHAGGRESSIVEHEURISTICS_HPP

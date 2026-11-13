@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  *  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  *  This code is free software; you can redistribute it and/or modify it
@@ -24,70 +24,74 @@
 
 /*
  * @test
- * @run testng TestVarHandleCombinators
+ * @run junit TestVarHandleCombinators
  */
 
-import jdk.incubator.foreign.MemoryHandles;
-import jdk.incubator.foreign.ResourceScope;
-import jdk.incubator.foreign.ValueLayout;
-import org.testng.annotations.DataProvider;
-import org.testng.annotations.Test;
+import java.lang.foreign.Arena;
+import java.lang.foreign.ValueLayout;
 
-import jdk.incubator.foreign.MemorySegment;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
-import static org.testng.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import org.junit.jupiter.api.Test;
 
 public class TestVarHandleCombinators {
 
     @Test
     public void testElementAccess() {
-        VarHandle vh = MemoryHandles.varHandle(ValueLayout.JAVA_BYTE);
+        VarHandle vh = ValueLayout.JAVA_BYTE.varHandle();
 
         byte[] arr = { 0, 0, -1, 0 };
         MemorySegment segment = MemorySegment.ofArray(arr);
-        assertEquals((byte) vh.get(segment, 2), (byte) -1);
+        assertEquals((byte) -1, (byte) vh.get(segment, 2));
     }
 
-    @Test(expectedExceptions = IllegalStateException.class)
+    @Test
     public void testUnalignedElement() {
-        VarHandle vh = MemoryHandles.varHandle(ValueLayout.JAVA_BYTE.withBitAlignment(32));
+        VarHandle vh = ValueLayout.JAVA_BYTE.withByteAlignment(4).varHandle();
         MemorySegment segment = MemorySegment.ofArray(new byte[4]);
-        vh.get(segment, 2L); //should throw
+        assertThrows(IllegalArgumentException.class, () -> {
+            vh.get(segment, 2L);
+        });
         //FIXME: the VH only checks the alignment of the segment, which is fine if the VH is derived from layouts,
         //FIXME: but not if the VH is just created from scratch - we need a VH variable to govern this property,
         //FIXME: at least until the VM is fixed
+
     }
 
     @Test
     public void testAlign() {
-        VarHandle vh = MemoryHandles.varHandle(ValueLayout.JAVA_BYTE.withBitAlignment(16));
+        VarHandle vh = ValueLayout.JAVA_BYTE.withByteAlignment(2).varHandle();
 
-        MemorySegment segment = MemorySegment.allocateNative(1, 2, ResourceScope.newImplicitScope());
+        Arena scope = Arena.ofAuto();
+        MemorySegment segment = scope.allocate(1L, 2);
         vh.set(segment, 0L, (byte) 10); // fine, memory region is aligned
-        assertEquals((byte) vh.get(segment, 0L), (byte) 10);
+        assertEquals((byte) 10, (byte) vh.get(segment, 0L));
     }
 
     @Test
     public void testByteOrderLE() {
-        VarHandle vh = MemoryHandles.varHandle(ValueLayout.JAVA_SHORT.withOrder(ByteOrder.LITTLE_ENDIAN));
+        VarHandle vh = ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).varHandle();
         byte[] arr = new byte[2];
         MemorySegment segment = MemorySegment.ofArray(arr);
         vh.set(segment, 0L, (short) 0xFF);
-        assertEquals(arr[0], (byte) 0xFF);
-        assertEquals(arr[1], (byte) 0);
+        assertEquals((byte) 0xFF, arr[0]);
+        assertEquals((byte) 0, arr[1]);
     }
 
     @Test
     public void testByteOrderBE() {
-        VarHandle vh = MemoryHandles.varHandle(ValueLayout.JAVA_SHORT.withOrder(ByteOrder.BIG_ENDIAN));
+        VarHandle vh = ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN).varHandle();
         byte[] arr = new byte[2];
         MemorySegment segment = MemorySegment.ofArray(arr);
         vh.set(segment, 0L, (short) 0xFF);
-        assertEquals(arr[0], (byte) 0);
-        assertEquals(arr[1], (byte) 0xFF);
+        assertEquals((byte) 0, arr[0]);
+        assertEquals((byte) 0xFF, arr[1]);
     }
 
     @Test
@@ -97,16 +101,14 @@ public class TestVarHandleCombinators {
 
         //[10 : [5 : [x32 i32]]]
 
-        VarHandle vh = MemoryHandles.varHandle(ValueLayout.JAVA_INT.withBitAlignment(32));
+        VarHandle vh = ValueLayout.JAVA_INT.varHandle();
         int count = 0;
-        try (ResourceScope scope = ResourceScope.newConfinedScope()) {
-            MemorySegment segment = MemorySegment.allocateNative(inner_size * outer_size * 8, 4, scope);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment segment = arena.allocate(inner_size * outer_size * 8, 4);
             for (long i = 0; i < outer_size; i++) {
                 for (long j = 0; j < inner_size; j++) {
                     vh.set(segment, i * 40 + j * 8, count);
-                    assertEquals(
-                            (int)vh.get(segment.asSlice(i * inner_size * 8), j * 8),
-                            count);
+                    assertEquals(                            count, (int)vh.get(segment.asSlice(i * inner_size * 8), j * 8));
                     count++;
                 }
             }

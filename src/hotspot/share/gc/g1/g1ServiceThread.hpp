@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,8 +32,8 @@ class G1ServiceTaskQueue;
 class G1ServiceThread;
 
 class G1ServiceTask : public CHeapObj<mtGC> {
-  friend class G1ServiceTaskQueue;
   friend class G1ServiceThread;
+  friend class G1ServiceTaskQueue;
 
   // The next absolute time this task should be executed.
   jlong _time;
@@ -111,7 +111,7 @@ class G1ServiceThread: public ConcurrentGCThread {
   void stop_service();
 
   // Return the next ready task, waiting until a task is ready.
-  // Instead returns nullptr if termination requested.
+  // Instead returns null if termination requested.
   G1ServiceTask* wait_for_task();
 
   void run_task(G1ServiceTask* task);
@@ -119,6 +119,9 @@ class G1ServiceThread: public ConcurrentGCThread {
   // Helper used by both schedule_task() and G1ServiceTask::schedule()
   // to schedule a registered task to run after the given delay.
   void schedule(G1ServiceTask* task, jlong delay, bool notify);
+
+  // Update the perf data counter for service thread.
+  void update_perf_counter_cpu_time();
 
 public:
   G1ServiceThread();

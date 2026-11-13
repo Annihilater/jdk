@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2019, 2021, Red Hat, Inc. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2022, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,152 +23,198 @@
  *
  */
 
-#include "precompiled.hpp"
 
+#include "code/relocInfo.hpp"
+#include "gc/shenandoah/shenandoahBarrierSetAssembler.hpp"
 #include "gc/shenandoah/shenandoahClosures.inline.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
 #include "gc/shenandoah/shenandoahNMethod.inline.hpp"
 #include "memory/resourceArea.hpp"
+#include "runtime/continuation.hpp"
+#include "runtime/icache.hpp"
+#include "runtime/safepointVerifiers.hpp"
 
-ShenandoahNMethod::ShenandoahNMethod(nmethod* nm, GrowableArray<oop*>& oops, bool non_immediate_oops) :
-  _nm(nm), _oops(NULL), _oops_count(0), _unregistered(false) {
-
-  if (!oops.is_empty()) {
-    _oops_count = oops.length();
-    _oops = NEW_C_HEAP_ARRAY(oop*, _oops_count, mtGC);
-    for (int c = 0; c < _oops_count; c++) {
-      _oops[c] = oops.at(c);
-    }
-  }
-  _has_non_immed_oops = non_immediate_oops;
-
-  assert_same_oops();
+ShenandoahNMethod::ShenandoahNMethod(nmethod* nm) :
+  _nm(nm), _oops(nullptr), _oops_count(0), _patchable_jumps(nullptr), _patchable_jumps_count(0), _unregistered(false), _lock(), _ic_lock() {
+  init_from(nm);
 }
 
 ShenandoahNMethod::~ShenandoahNMethod() {
-  if (_oops != NULL) {
-    FREE_C_HEAP_ARRAY(oop*, _oops);
+  if (_oops != nullptr) {
+    FREE_C_HEAP_ARRAY(_oops);
   }
-}
-
-class ShenandoahHasCSetOopClosure : public OopClosure {
-private:
-  ShenandoahHeap* const _heap;
-  bool                  _has_cset_oops;
-
-public:
-  ShenandoahHasCSetOopClosure(ShenandoahHeap *heap) :
-    _heap(heap),
-    _has_cset_oops(false) {
+  if (_patchable_jumps != nullptr) {
+    FREE_C_HEAP_ARRAY(_patchable_jumps);
   }
-
-  bool has_cset_oops() const {
-    return _has_cset_oops;
-  }
-
-  void do_oop(oop* p) {
-    oop value = RawAccess<>::oop_load(p);
-    if (!_has_cset_oops && _heap->in_collection_set(value)) {
-      _has_cset_oops = true;
-    }
-  }
-
-  void do_oop(narrowOop* p) {
-    ShouldNotReachHere();
-  }
-};
-
-bool ShenandoahNMethod::has_cset_oops(ShenandoahHeap *heap) {
-  ShenandoahHasCSetOopClosure cl(heap);
-  oops_do(&cl);
-  return cl.has_cset_oops();
 }
 
 void ShenandoahNMethod::update() {
+  init_from(nm());
+}
+
+void ShenandoahNMethod::init_from(nmethod* nm) {
   ResourceMark rm;
   bool non_immediate_oops = false;
   GrowableArray<oop*> oops;
+  GrowableArray<ShenandoahPatchableJump> jumps;
 
-  detect_reloc_oops(nm(), oops, non_immediate_oops);
-  if (oops.length() != _oops_count) {
-    if (_oops != NULL) {
-      FREE_C_HEAP_ARRAY(oop*, _oops);
-      _oops = NULL;
+  parse(nm, oops, non_immediate_oops, jumps);
+
+  int new_oops_count = oops.length();
+  if (_oops_count != new_oops_count) {
+    if (_oops != nullptr) {
+      FREE_C_HEAP_ARRAY(_oops);
+      _oops = nullptr;
     }
-
-    _oops_count = oops.length();
-    if (_oops_count > 0) {
-      _oops = NEW_C_HEAP_ARRAY(oop*, _oops_count, mtGC);
+    if (new_oops_count > 0) {
+      _oops = NEW_C_HEAP_ARRAY(oop*, new_oops_count, mtGC);
     }
   }
-
-  for (int index = 0; index < _oops_count; index ++) {
-    _oops[index] = oops.at(index);
+  _oops_count = new_oops_count;
+  for (int c = 0; c < _oops_count; c++) {
+    _oops[c] = oops.at(c);
   }
-  _has_non_immed_oops = non_immediate_oops;
-
   assert_same_oops();
+
+  int new_jumps_count = jumps.length();
+  if (_patchable_jumps_count != new_jumps_count) {
+    if (_patchable_jumps != nullptr) {
+      FREE_C_HEAP_ARRAY(_patchable_jumps);
+      _patchable_jumps = nullptr;
+    }
+    if (new_jumps_count > 0) {
+      _patchable_jumps = NEW_C_HEAP_ARRAY(ShenandoahPatchableJump, new_jumps_count, mtGC);
+    }
+  }
+  _patchable_jumps_count = new_jumps_count;
+  for (int c = 0; c < _patchable_jumps_count; c++) {
+    _patchable_jumps[c] = jumps.at(c);
+  }
+
+  _has_non_immed_oops = non_immediate_oops;
 }
 
-void ShenandoahNMethod::detect_reloc_oops(nmethod* nm, GrowableArray<oop*>& oops, bool& has_non_immed_oops) {
+void ShenandoahNMethod::parse(nmethod* nm, GrowableArray<oop*>& oops, bool& has_non_immed_oops, GrowableArray<ShenandoahPatchableJump>& jumps) {
   has_non_immed_oops = false;
-  // Find all oops relocations
+  address code_begin = nm->code_begin();
   RelocIterator iter(nm);
   while (iter.next()) {
-    if (iter.type() != relocInfo::oop_type) {
-      // Not an oop
-      continue;
-    }
+    switch (iter.type()) {
+      case relocInfo::oop_type: {
+        oop_Relocation* r = iter.oop_reloc();
+        if (!r->oop_is_immediate()) {
+          // Non-immediate oop found
+          has_non_immed_oops = true;
+          break;
+        }
 
-    oop_Relocation* r = iter.oop_reloc();
-    if (!r->oop_is_immediate()) {
-      // Non-immediate oop found
-      has_non_immed_oops = true;
-      continue;
-    }
+        oop value = r->oop_value();
+        if (value != nullptr) {
+          oop* addr = r->oop_addr();
+          shenandoah_assert_correct(addr, value);
+          shenandoah_assert_not_in_cset_except(addr, value, ShenandoahHeap::heap()->cancelled_gc() || ShenandoahHeap::heap()->has_self_forwarded_objects());
+          shenandoah_assert_not_forwarded_except(addr, value, ShenandoahHeap::heap()->cancelled_gc() || ShenandoahHeap::heap()->has_self_forwarded_objects());
+          // Non-null immediate oop found. null oops can safely be
+          // ignored since the method will be re-registered if they
+          // are later patched to be non-null.
+          oops.push(addr);
+        }
+        break;
+      }
+      case relocInfo::patchable_barrier_type: {
+        patchable_barrier_Relocation* r = iter.patchable_barrier_reloc();
 
-    oop value = r->oop_value();
-    if (value != NULL) {
-      oop* addr = r->oop_addr();
-      shenandoah_assert_correct(addr, value);
-      shenandoah_assert_not_in_cset_except(addr, value, ShenandoahHeap::heap()->cancelled_gc());
-      shenandoah_assert_not_forwarded(addr, value);
-      // Non-NULL immediate oop found. NULL oops can safely be
-      // ignored since the method will be re-registered if they
-      // are later patched to be non-NULL.
-      oops.push(addr);
+        ShenandoahPatchableJump b;
+        b._rel_pc = checked_cast<int32_t>(pointer_delta(r->addr(), code_begin, 1));
+        b._rel_target_pc = r->target_offset();
+        b._gc_state = decode_reloc_gc_state(r->metadata());
+        b._jump_when_state = decode_reloc_jump_when_state(r->metadata());
+        jumps.push(b);
+        break;
+      }
+      default:
+        // We do not care about other relocations.
+        break;
     }
   }
 }
 
 ShenandoahNMethod* ShenandoahNMethod::for_nmethod(nmethod* nm) {
-  ResourceMark rm;
-  bool non_immediate_oops = false;
-  GrowableArray<oop*> oops;
-
-  detect_reloc_oops(nm, oops, non_immediate_oops);
-  return new ShenandoahNMethod(nm, oops, non_immediate_oops);
+  return new ShenandoahNMethod(nm);
 }
 
-void ShenandoahNMethod::heal_nmethod(nmethod* nm) {
+void ShenandoahNMethod::handle_oops(nmethod* nm, ICacheInvalidationContext* icic) {
   ShenandoahNMethod* data = gc_data(nm);
-  assert(data != NULL, "Sanity");
+  assert(data != nullptr, "Sanity");
   assert(data->lock()->owned_by_self(), "Must hold the lock");
 
   ShenandoahHeap* const heap = ShenandoahHeap::heap();
-  if (heap->is_concurrent_mark_in_progress()) {
+  if ((heap->is_concurrent_weak_root_in_progress() && heap->is_evacuation_in_progress()) ||
+      heap->is_concurrent_strong_root_in_progress()) {
+    heal_nmethod_metadata(data, icic);
+  } else if (heap->is_concurrent_mark_in_progress()) {
     ShenandoahKeepAliveClosure cl;
-    data->oops_do(&cl);
-  } else if (heap->is_concurrent_weak_root_in_progress() ||
-             heap->is_concurrent_strong_root_in_progress()) {
-    ShenandoahEvacOOMScope evac_scope;
-    heal_nmethod_metadata(data);
+    data->oops_do(&cl, /* fix_relocations = */ false, /* icic = */ nullptr);
   } else {
-    // There is possibility that GC is cancelled when it arrives final mark.
-    // In this case, concurrent root phase is skipped and degenerated GC should be
-    // followed, where nmethods are disarmed.
-    assert(heap->cancelled_gc(), "What else?");
+    // No other phases need oop fixups or scans.
   }
+}
+
+void ShenandoahNMethod::handle_jumps(nmethod* nm, ICacheInvalidationContext* icic) {
+  ShenandoahNMethod* data = gc_data(nm);
+  assert(data != nullptr, "Sanity");
+  assert(data->lock()->owned_by_self(), "Must hold the lock");
+
+  char gc_state = ShenandoahHeap::heap()->gc_state();
+  address code_begin = nm->code_begin();
+
+  bool changed = false;
+  for (int c = 0; c < data->_patchable_jumps_count; c++) {
+    ShenandoahPatchableJump& b = data->_patchable_jumps[c];
+    changed |= patch_jump(code_begin + b._rel_pc,
+                          code_begin + b._rel_target_pc,
+                          ((gc_state & b._gc_state) != 0) == b._jump_when_state);
+  }
+  if (changed) {
+    icic->set_has_modified_code();
+  }
+}
+
+// Use precise instruction rewrite code, and only when it recognizes the current insns.
+//
+// This patching code is non-atomic, but it runs in two safe contexts:
+//   a) For new nmethods that are not yet executing and not yet live. This covers the paths
+//      for newly compiled methods, nmethods that were just relocated, the nmethods that
+//      were AOT-loaded.
+//   b) For existing methods in the nmethod entry barrier context. The nmethod entry barriers
+//      are armed along with stack watermark machinery activation. Together they guarantee
+//      the nmethod updates are not interleaved with execution, and nmethod would be patched
+//      before allowing to proceed.
+//
+// The icache flushing is also handled on both paths.
+//
+bool ShenandoahNMethod::patch_jump(address pc, address target_pc, bool should_jump) {
+  bool patched = true;
+  if (should_jump && ShenandoahBarrierSetAssembler::is_patchable_nop(pc)) {
+    ShenandoahBarrierSetAssembler::insert_patchable_jump(pc, target_pc);
+  } else if (!should_jump && ShenandoahBarrierSetAssembler::is_patchable_jump(pc, target_pc)) {
+    ShenandoahBarrierSetAssembler::insert_patchable_nop(pc);
+  } else {
+    patched = false;
+  }
+
+  // Failing to change the jump is catastrophic for correctness,
+  // so prefer to crash hard even in product.
+  if (should_jump) {
+    guarantee(ShenandoahBarrierSetAssembler::is_patchable_jump(pc, target_pc),
+      "Should be jump to the same address");
+    assert(ShenandoahBarrierSetAssembler::parse_jump_address(pc) == target_pc,
+      "Cross-checking, jump should be to the same address");
+  } else {
+    guarantee(ShenandoahBarrierSetAssembler::is_patchable_nop(pc),
+      "Should be patchable nop");
+  }
+  return patched;
 }
 
 #ifdef ASSERT
@@ -177,7 +224,7 @@ void ShenandoahNMethod::assert_correct() {
     oop *loc = _oops[c];
     assert(_nm->code_contains((address) loc) || _nm->oops_contains(loc), "nmethod should contain the oop*");
     oop o = RawAccess<>::oop_load(loc);
-    shenandoah_assert_correct_except(loc, o, o == NULL || heap->is_full_gc_move_in_progress());
+    shenandoah_assert_correct_except(loc, o, o == nullptr || heap->is_full_gc_move_in_progress());
   }
 
   oop* const begin = _nm->oops_begin();
@@ -185,7 +232,7 @@ void ShenandoahNMethod::assert_correct() {
   for (oop* p = begin; p < end; p++) {
     if (*p != Universe::non_oop_word()) {
       oop o = RawAccess<>::oop_load(p);
-      shenandoah_assert_correct_except(p, o, o == NULL || heap->is_full_gc_move_in_progress());
+      shenandoah_assert_correct_except(p, o, o == nullptr || heap->is_full_gc_move_in_progress());
     }
   }
 }
@@ -208,15 +255,11 @@ public:
   GrowableArray<oop*>* oops() {
     return &_oops;
   }
-
-  bool has_oops() {
-    return !_oops.is_empty();
-  }
 };
 
-void ShenandoahNMethod::assert_same_oops(bool allow_dead) {
+void ShenandoahNMethod::assert_same_oops() {
   ShenandoahNMethodOopDetector detector;
-  nm()->oops_do(&detector, allow_dead);
+  nm()->oops_do(&detector);
 
   GrowableArray<oop*>* oops = detector.oops();
 
@@ -242,27 +285,29 @@ void ShenandoahNMethod::assert_same_oops(bool allow_dead) {
       debug_stream.print_cr("-> " PTR_FORMAT, p2i(_oops[i]));
     }
     GrowableArray<oop*> check;
+    GrowableArray<ShenandoahPatchableJump> jumps;
     bool non_immed;
-    detect_reloc_oops(nm(), check, non_immed);
+    parse(nm(), check, non_immed, jumps);
     debug_stream.print_cr("check oops: %d", check.length());
     for (int i = 0; i < check.length(); i++) {
       debug_stream.print_cr("-> " PTR_FORMAT, p2i(check.at(i)));
     }
     fatal("Must match #detected: %d, #recorded: %d, #total: %d, begin: " PTR_FORMAT ", end: " PTR_FORMAT "\n%s",
-          oops->length(), _oops_count, count, p2i(nm()->oops_begin()), p2i(nm()->oops_end()), debug_stream.as_string());
+          oops->length(), _oops_count, count, p2i(nm()->oops_begin()), p2i(nm()->oops_end()), debug_stream.freeze());
   }
 }
 #endif
 
 ShenandoahNMethodTable::ShenandoahNMethodTable() :
   _heap(ShenandoahHeap::heap()),
+  _bs_nm(BarrierSet::barrier_set()->barrier_set_nmethod()),
   _index(0),
   _itr_cnt(0) {
   _list = new ShenandoahNMethodList(minSize);
 }
 
 ShenandoahNMethodTable::~ShenandoahNMethodTable() {
-  assert(_list != NULL, "Sanity");
+  assert(_list != nullptr, "Sanity");
   _list->release();
 }
 
@@ -272,57 +317,52 @@ void ShenandoahNMethodTable::register_nmethod(nmethod* nm) {
 
   ShenandoahNMethod* data = ShenandoahNMethod::gc_data(nm);
 
-  if (data != NULL) {
+  if (data != nullptr) {
+    // Re-registering the existing nmethod. This is the C1 oop patching path.
+    // We expect no patchable jumps here, as only oops can change in C1 case.
     assert(contain(nm), "Must have been registered");
     assert(nm == data->nm(), "Must be same nmethod");
+    assert(nm->is_compiled_by_c1(), "Must be compiled by C1");
+    assert(!data->has_patchable_jumps(), "Must not have patchable jumps");
     // Prevent updating a nmethod while concurrent iteration is in progress.
     wait_until_concurrent_iteration_done();
-    ShenandoahReentrantLocker data_locker(data->lock());
+    ShenandoahNMethodLocker data_locker(data->lock());
     data->update();
   } else {
-    // For a new nmethod, we can safely append it to the list, because
-    // concurrent iteration will not touch it.
+    // New nmethod, not yet executing. We can safely append it to the list,
+    // because concurrent iteration will not touch it. Ditto we do jump
+    // fixups right here, without relying on nmethod entry barrier to be armed
+    // for new nmethods.
     data = ShenandoahNMethod::for_nmethod(nm);
-    assert(data != NULL, "Sanity");
+    assert(data != nullptr, "Sanity");
     ShenandoahNMethod::attach_gc_data(nm, data);
     ShenandoahLocker locker(&_lock);
     log_register_nmethod(nm);
     append(data);
+    ShenandoahNMethodLocker data_locker(data->lock());
+    {
+      ICacheInvalidationContext icic;
+      ShenandoahNMethod::handle_jumps(nm, &icic);
+    }
+    ShenandoahNMethod::disarm_nmethod(nm);
   }
-  // Disarm new nmethod
-  ShenandoahNMethod::disarm_nmethod(nm);
+
+  assert(!data->has_patchable_jumps() || _bs_nm->supports_entry_barrier(nm),
+         "NMethods with patchable jumps require entry barrier support");
 }
 
 void ShenandoahNMethodTable::unregister_nmethod(nmethod* nm) {
   assert_locked_or_safepoint(CodeCache_lock);
 
   ShenandoahNMethod* data = ShenandoahNMethod::gc_data(nm);
-  assert(data != NULL, "Sanity");
-  if (Thread::current()->is_Code_cache_sweeper_thread()) {
-    wait_until_concurrent_iteration_done();
-  }
+  assert(data != nullptr, "Sanity");
   log_unregister_nmethod(nm);
   ShenandoahLocker locker(&_lock);
   assert(contain(nm), "Must have been registered");
 
-  ShenandoahReentrantLocker data_locker(data->lock());
-  data->mark_unregistered();
-}
-
-void ShenandoahNMethodTable::flush_nmethod(nmethod* nm) {
-  assert(CodeCache_lock->owned_by_self(), "Must have CodeCache_lock held");
-  assert(Thread::current()->is_Code_cache_sweeper_thread(), "Must from Sweep thread");
-  ShenandoahNMethod* data = ShenandoahNMethod::gc_data(nm);
-  assert(data != NULL, "Sanity");
-
-  // Can not alter the array when iteration is in progress
-  wait_until_concurrent_iteration_done();
-  log_flush_nmethod(nm);
-
-  ShenandoahLocker locker(&_lock);
   int idx = index_of(nm);
   assert(idx >= 0 && idx < _index, "Invalid index");
-  ShenandoahNMethod::attach_gc_data(nm, NULL);
+  ShenandoahNMethod::attach_gc_data(nm, nullptr);
   remove(idx);
 }
 
@@ -346,7 +386,6 @@ int ShenandoahNMethodTable::index_of(nmethod* nm) const {
 
 void ShenandoahNMethodTable::remove(int idx) {
   shenandoah_assert_locked_or_safepoint(CodeCache_lock);
-  assert(!iteration_in_progress(), "Can not happen");
   assert(_index >= 0 && _index <= _list->size(), "Sanity");
 
   assert(idx >= 0 && idx < _index, "Out of bound");
@@ -394,7 +433,7 @@ ShenandoahNMethodTableSnapshot* ShenandoahNMethodTable::snapshot_for_iteration()
 void ShenandoahNMethodTable::finish_iteration(ShenandoahNMethodTableSnapshot* snapshot) {
   assert(CodeCache_lock->owned_by_self(), "Must have CodeCache_lock held");
   assert(iteration_in_progress(), "Why we here?");
-  assert(snapshot != NULL, "No snapshot");
+  assert(snapshot != nullptr, "No snapshot");
   _itr_cnt--;
 
   delete snapshot;
@@ -427,16 +466,6 @@ void ShenandoahNMethodTable::log_unregister_nmethod(nmethod* nm) {
             p2i(nm));
 }
 
-void ShenandoahNMethodTable::log_flush_nmethod(nmethod* nm) {
-  LogTarget(Debug, gc, nmethod) log;
-  if (!log.is_enabled()) {
-    return;
-  }
-
-  ResourceMark rm;
-  log.print("Flush NMethod: (" PTR_FORMAT ")", p2i(nm));
-}
-
 #ifdef ASSERT
 void ShenandoahNMethodTable::assert_nmethods_correct() {
   assert_locked_or_safepoint(CodeCache_lock);
@@ -457,9 +486,9 @@ ShenandoahNMethodList::ShenandoahNMethodList(int size) :
 }
 
 ShenandoahNMethodList::~ShenandoahNMethodList() {
-  assert(_list != NULL, "Sanity");
+  assert(_list != nullptr, "Sanity");
   assert(_ref_count == 0, "Must be");
-  FREE_C_HEAP_ARRAY(ShenandoahNMethod*, _list);
+  FREE_C_HEAP_ARRAY(_list);
 }
 
 void ShenandoahNMethodList::transfer(ShenandoahNMethodList* const list, int limit) {
@@ -492,30 +521,27 @@ ShenandoahNMethodTableSnapshot::~ShenandoahNMethodTableSnapshot() {
   _list->release();
 }
 
-void ShenandoahNMethodTableSnapshot::parallel_blobs_do(CodeBlobClosure *f) {
+void ShenandoahNMethodTableSnapshot::parallel_nmethods_do(NMethodClosure *f) {
   size_t stride = 256; // educated guess
 
   ShenandoahNMethod** const list = _list->list();
 
   size_t max = (size_t)_limit;
-  while (_claimed < max) {
-    size_t cur = Atomic::fetch_and_add(&_claimed, stride, memory_order_relaxed);
+  while (_claimed.load_relaxed() < max) {
+    size_t cur = _claimed.fetch_then_add(stride, memory_order_relaxed);
     size_t start = cur;
     size_t end = MIN2(cur + stride, max);
     if (start >= max) break;
 
     for (size_t idx = start; idx < end; idx++) {
       ShenandoahNMethod* nmr = list[idx];
-      assert(nmr != NULL, "Sanity");
+      assert(nmr != nullptr, "Sanity");
       if (nmr->is_unregistered()) {
         continue;
       }
 
-      // A nmethod can become a zombie before it is unregistered.
-      if (nmr->nm()->is_alive()) {
-        nmr->assert_correct();
-        f->do_code_blob(nmr->nm());
-      }
+      nmr->assert_correct();
+      f->do_nmethod(nmr->nm());
     }
   }
 }
@@ -525,15 +551,15 @@ void ShenandoahNMethodTableSnapshot::concurrent_nmethods_do(NMethodClosure* cl) 
 
   ShenandoahNMethod** list = _list->list();
   size_t max = (size_t)_limit;
-  while (_claimed < max) {
-    size_t cur = Atomic::fetch_and_add(&_claimed, stride, memory_order_relaxed);
+  while (_claimed.load_relaxed() < max) {
+    size_t cur = _claimed.fetch_then_add(stride, memory_order_relaxed);
     size_t start = cur;
     size_t end = MIN2(cur + stride, max);
     if (start >= max) break;
 
     for (size_t idx = start; idx < end; idx++) {
       ShenandoahNMethod* data = list[idx];
-      assert(data != NULL, "Should not be NULL");
+      assert(data != nullptr, "Should not be null");
       if (!data->is_unregistered()) {
         cl->do_nmethod(data->nm());
       }
@@ -542,21 +568,40 @@ void ShenandoahNMethodTableSnapshot::concurrent_nmethods_do(NMethodClosure* cl) 
 }
 
 ShenandoahConcurrentNMethodIterator::ShenandoahConcurrentNMethodIterator(ShenandoahNMethodTable* table) :
-  _table(table), _table_snapshot(NULL) {
-}
-
-void ShenandoahConcurrentNMethodIterator::nmethods_do_begin() {
-  assert(CodeCache_lock->owned_by_self(), "Lock must be held");
-  _table_snapshot = _table->snapshot_for_iteration();
-}
+  _table(table),
+  _table_snapshot(nullptr),
+  _started_workers(0),
+  _finished_workers(0) {}
 
 void ShenandoahConcurrentNMethodIterator::nmethods_do(NMethodClosure* cl) {
-  assert(_table_snapshot != NULL, "Must first call nmethod_do_begin()");
-  _table_snapshot->concurrent_nmethods_do(cl);
-}
+  // Cannot safepoint when iteration is running, because this can cause deadlocks
+  // with other threads waiting on iteration to be over.
+  NoSafepointVerifier nsv;
 
-void ShenandoahConcurrentNMethodIterator::nmethods_do_end() {
-  assert(CodeCache_lock->owned_by_self(), "Lock must be held");
-  _table->finish_iteration(_table_snapshot);
-  CodeCache_lock->notify_all();
+  MutexLocker ml(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+
+  if (_finished_workers > 0) {
+    // Some threads have already finished. We are now in rampdown: we are now
+    // waiting for all currently recorded workers to finish. No new workers
+    // should start.
+    return;
+  }
+
+  // Record a new worker and initialize the snapshot if it is a first visitor.
+  if (_started_workers++ == 0) {
+    _table_snapshot = _table->snapshot_for_iteration();
+  }
+
+  // All set, relinquish the lock and go concurrent.
+  {
+    MutexUnlocker mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
+    _table_snapshot->concurrent_nmethods_do(cl);
+  }
+
+  // Record completion. Last worker shuts down the iterator and notifies any waiters.
+  uint count = ++_finished_workers;
+  if (count == _started_workers) {
+    _table->finish_iteration(_table_snapshot);
+    CodeCache_lock->notify_all();
+  }
 }

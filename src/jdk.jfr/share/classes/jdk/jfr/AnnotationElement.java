@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 package jdk.jfr;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -39,29 +40,14 @@ import java.util.StringJoiner;
 
 import jdk.jfr.internal.Type;
 import jdk.jfr.internal.TypeLibrary;
-import jdk.jfr.internal.Utils;
+import jdk.jfr.internal.util.Utils;
 
 /**
  * Describes event metadata, such as labels, descriptions and units.
  * <p>
  * The following example shows how {@code AnnotationElement} can be used to dynamically define events.
  *
- * <pre>{@literal
- *   List<AnnotationElement> typeAnnotations = new ArrayList<>();
- *   typeAnnotations.add(new AnnotationElement(Name.class, "com.example.HelloWorld"));
- *   typeAnnotations.add(new AnnotationElement(Label.class, "Hello World"));
- *   typeAnnotations.add(new AnnotationElement(Description.class, "Helps programmer getting started"));
- *
- *   List<AnnotationElement> fieldAnnotations = new ArrayList<>();
- *   fieldAnnotations.add(new AnnotationElement(Label.class, "Message"));
- *
- *   List<ValueDescriptor> fields = new ArrayList<>();
- *   fields.add(new ValueDescriptor(String.class, "message", fieldAnnotations));
- *
- *   EventFactory f = EventFactory.create(typeAnnotations, fields);
- *   Event event = f.newEvent();
- *   event.commit();
- * }</pre>
+ * {@snippet class="Snippets" region="AnnotationElementOverview"}
  *
  * @since 9
  */
@@ -84,7 +70,7 @@ public final class AnnotationElement {
             }
             StringJoiner values = new StringJoiner(",", "[", "]");
             for (Object object : objects) {
-                descriptors.add(String.valueOf(object));
+                values.add(String.valueOf(object));
             }
             throw new IllegalArgumentException("Annotation " + descriptors + " for " + type.getName() + " doesn't match number of values " + values);
         }
@@ -127,9 +113,8 @@ public final class AnnotationElement {
      *         signatures in the {@code annotationType}
      */
     public AnnotationElement(Class<? extends Annotation> annotationType, Map<String, Object> values) {
-        Objects.requireNonNull(annotationType);
-        Objects.requireNonNull(values);
-        Utils.checkRegisterPermission();
+        Objects.requireNonNull(annotationType, "annotationType");
+        Objects.requireNonNull(values, "values");
         // copy values to avoid modification after validation
         HashMap<String, Object> map = new HashMap<>(values);
         for (Map.Entry<String, Object> entry : map.entrySet()) {
@@ -164,7 +149,8 @@ public final class AnnotationElement {
             if (object == null) {
                 throw new IllegalArgumentException("No method in annotation interface " + annotationType.getName() + " matching name " + fieldName);
             }
-            Class<?> fieldType = object.getClass();
+            object = safeObject(object);
+            Class<?> fieldType = method.getReturnType();
 
             if (fieldType == Class.class) {
                 throw new IllegalArgumentException("Annotation value for " + fieldName + " can't be class");
@@ -172,8 +158,9 @@ public final class AnnotationElement {
             if (object instanceof Enum) {
                 throw new IllegalArgumentException("Annotation value for " + fieldName + " can't be enum");
             }
-            if (!fieldType.equals(object.getClass())) {
-                throw new IllegalArgumentException("Return type of annotation " + fieldType.getName() + " must match type of object" + object.getClass());
+            Class<?> objectType = Utils.unboxType(object.getClass());
+            if (objectType != fieldType) {
+                throw new IllegalArgumentException("Return type of annotation " + fieldType.getName() + " must match type of object " + objectType.getName());
             }
 
             if (fieldType.isArray()) {
@@ -188,7 +175,6 @@ public final class AnnotationElement {
                     }
                 }
             } else {
-                fieldType = Utils.unboxType(object.getClass());
                 checkType(fieldType);
             }
             if (nameSet!= null) {
@@ -261,7 +247,7 @@ public final class AnnotationElement {
      * @return list of values, not {@code null}
      */
     public List<Object> getValues() {
-        return annotationValues;
+        return safeList(annotationValues);
     }
 
     /**
@@ -307,10 +293,10 @@ public final class AnnotationElement {
      *         not exist in the annotation
      */
     public Object getValue(String name) {
-        Objects.requireNonNull(name);
+        Objects.requireNonNull(name, "name");
         int index = type.indexOf(name);
         if (index != -1) {
-            return annotationValues.get(index);
+            return safeObject(annotationValues.get(index));
         }
         StringJoiner valueNames = new StringJoiner(",", "[", "]");
         for (ValueDescriptor v : type.getFields()) {
@@ -329,7 +315,7 @@ public final class AnnotationElement {
      * @return {@code true} if method exists, {@code false} otherwise
      */
     public boolean hasValue(String name) {
-        Objects.requireNonNull(name);
+        Objects.requireNonNull(name, "name");
         return type.indexOf(name) != -1;
     }
 
@@ -344,7 +330,7 @@ public final class AnnotationElement {
      *         it exists, else {@code null}
      */
     public final <A> A getAnnotation(Class<? extends Annotation> annotationType) {
-        Objects.requireNonNull(annotationType);
+        Objects.requireNonNull(annotationType, "annotationType");
         return type.getAnnotation(annotationType);
     }
 
@@ -401,4 +387,34 @@ public final class AnnotationElement {
         return inBootClassLoader;
     }
 
+    private static Object safeObject(Object object) {
+        return object.getClass().isArray() ? safeArray(object) : object;
+    }
+
+    private static Object safeArray(Object source) {
+        Class<?> type = source.getClass().getComponentType();
+        int length = Array.getLength(source);
+        if (length == 0) {
+            return source;
+        }
+        Object result = Array.newInstance(type, length);
+        System.arraycopy(source, 0, result, 0, length);
+        return result;
+    }
+
+    // Assumes list is created by List.copyOf(...);
+    private static List<Object> safeList(List<Object> list) {
+        if (list.isEmpty()) {
+            return list;
+        }
+        if (list.size() == 1) {
+            Object element = list.get(0);
+            return element.getClass().isArray() ? List.of(safeObject(element)) : list;
+        }
+        List<Object> result = new ArrayList<>(list.size());
+        for (Object element : list) {
+            result.add(safeObject(element));
+        }
+        return List.copyOf(result);
+    }
 }

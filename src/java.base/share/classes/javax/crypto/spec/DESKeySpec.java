@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,7 +41,7 @@ public class DESKeySpec implements java.security.spec.KeySpec {
      */
     public static final int DES_KEY_LEN = 8;
 
-    private byte[] key;
+    private final byte[] key;
 
     /*
      * Weak/semi-weak keys copied from FIPS 74.
@@ -123,7 +123,7 @@ public class DESKeySpec implements java.security.spec.KeySpec {
      * of the buffer are copied to protect against subsequent modification.
      *
      * @exception NullPointerException if the given key material is
-     * <code>null</code>
+     * <code>null</code>.
      * @exception InvalidKeyException if the given key material is shorter
      * than 8 bytes.
      */
@@ -146,11 +146,19 @@ public class DESKeySpec implements java.security.spec.KeySpec {
      * material starts.
      *
      * @exception NullPointerException if the given key material is
-     * <code>null</code>
+     * <code>null</code>.
      * @exception InvalidKeyException if the given key material, starting at
      * <code>offset</code> inclusive, is shorter than 8 bytes.
+     * @exception ArrayIndexOutOfBoundsException if <code>offset</code> is
+     * negative.
      */
     public DESKeySpec(byte[] key, int offset) throws InvalidKeyException {
+        if (key == null) {
+            throw new NullPointerException("null key");
+        }
+        if (offset < 0) {
+            throw new ArrayIndexOutOfBoundsException("offset is negative");
+        }
         if (key.length - offset < DES_KEY_LEN) {
             throw new InvalidKeyException("Wrong key size");
         }
@@ -182,16 +190,20 @@ public class DESKeySpec implements java.security.spec.KeySpec {
      * @exception InvalidKeyException if the given key material is
      * <code>null</code>, or starting at <code>offset</code> inclusive, is
      * shorter than 8 bytes.
+     * @exception ArrayIndexOutOfBoundsException if <code>offset</code> is
+     * negative.
      */
     public static boolean isParityAdjusted(byte[] key, int offset)
         throws InvalidKeyException {
             if (key == null) {
                 throw new InvalidKeyException("null key");
             }
+            if (offset < 0) {
+                throw new ArrayIndexOutOfBoundsException("offset is negative");
+            }
             if (key.length - offset < DES_KEY_LEN) {
                 throw new InvalidKeyException("Wrong key size");
             }
-
             for (int i = 0; i < DES_KEY_LEN; i++) {
                 int k = Integer.bitCount(key[offset++] & 0xff);
                 if ((k & 1) == 0) {
@@ -215,24 +227,30 @@ public class DESKeySpec implements java.security.spec.KeySpec {
      * @exception InvalidKeyException if the given key material is
      * <code>null</code>, or starting at <code>offset</code> inclusive, is
      * shorter than 8 bytes.
+     * @exception ArrayIndexOutOfBoundsException if <code>offset</code> is
+     * negative.
      */
     public static boolean isWeak(byte[] key, int offset)
         throws InvalidKeyException {
         if (key == null) {
             throw new InvalidKeyException("null key");
         }
+        if (offset < 0) {
+            throw new ArrayIndexOutOfBoundsException("offset is negative");
+        }
         if (key.length - offset < DES_KEY_LEN) {
             throw new InvalidKeyException("Wrong key size");
         }
         for (int i = 0; i < WEAK_KEYS.length; i++) {
             boolean found = true;
-            for (int j = 0; j < DES_KEY_LEN && found == true; j++) {
-                if (WEAK_KEYS[i][j] != key[j+offset]) {
+            for (int j = 0; j < DES_KEY_LEN; j++) {
+                if (WEAK_KEYS[i][j] != key[j + offset]) {
                     found = false;
+                    break;
                 }
             }
-            if (found == true) {
-                return found;
+            if (found) {
+                return true;
             }
         }
         return false;

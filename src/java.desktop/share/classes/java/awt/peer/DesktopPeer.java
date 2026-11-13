@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ import java.awt.desktop.SystemEventListener;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.util.Arrays;
 
 import javax.swing.JMenuBar;
 
@@ -99,10 +100,13 @@ public interface DesktopPeer {
      *
      * @param mailtoURL represents a mailto URL with specified values of the message.
      *        The syntax of mailto URL is defined by
-     *        <a href="http://www.ietf.org/rfc/rfc2368.txt">RFC2368: The mailto
+     *        <a href="https://www.rfc-editor.org/info/rfc2368">RFC2368: The mailto
      *        URL scheme</a>
      * @throws IOException If the user default mail client is not found,
      *         or it fails to be launched.
+     *
+     * @spec https://www.rfc-editor.org/info/rfc2368
+     *      RFC 2368: The mailto URL scheme
      */
     void mail(URI mailtoURL) throws IOException;
 
@@ -278,4 +282,25 @@ public interface DesktopPeer {
         return false;
     }
 
+    /**
+     * Returns whether or not Desktop.browse() will open URI in browser or
+     * in associated allowed app
+     *
+     * @param uri URI to be browsed
+     * @return whether or not associated app will be opened
+     */
+    default boolean isBrowseInsecureAllowed(URI uri) {
+        String allowList = System.getProperty("awt.desktop.browse_insecure");
+        String scheme = uri.getScheme();
+
+        // For http,https scheme URL should always open in browser
+        // For other schemes, it will depend on whether scheme is in allowList
+
+        return scheme != null && !(scheme.equals("http") || scheme.equals("https"))
+               && allowList != null
+               && (allowList.equals("*")
+                   || Arrays.stream(allowList.split(","))
+                            .map(String::trim)
+                            .anyMatch(allowed -> allowed.equalsIgnoreCase(scheme)));
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
 
 /**
  * @test
- * @key jfr
+ * @requires vm.flagless
  * @summary Tests emitting events in a dynamically loaded Java agent
  * @requires vm.hasJFR
  *
@@ -35,7 +35,7 @@
  * @run driver jdk.test.lib.util.JavaAgentBuilder
  *             jdk.jfr.javaagent.EventEmitterAgent EventEmitterAgent.jar
  *
- * @run main/othervm -Djdk.attach.allowAttachSelf=true jdk.jfr.javaagent.TestLoadedAgent
+ * @run main/othervm -XX:+EnableDynamicAgentLoading -Djdk.attach.allowAttachSelf=true jdk.jfr.javaagent.TestLoadedAgent
  */
 
 package jdk.jfr.javaagent;

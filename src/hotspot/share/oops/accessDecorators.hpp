@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,9 @@
 #ifndef SHARE_OOPS_ACCESSDECORATORS_HPP
 #define SHARE_OOPS_ACCESSDECORATORS_HPP
 
+#include "cppstdlib/type_traits.hpp"
 #include "gc/shared/barrierSetConfig.hpp"
-#include "memory/allocation.hpp"
-#include "metaprogramming/integralConstant.hpp"
+#include "memory/allStatic.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 // A decorator is an attribute or property that affects the way a memory access is performed in some way.
@@ -41,7 +41,7 @@ typedef uint64_t DecoratorSet;
 // The HasDecorator trait can help at compile-time determining whether a decorator set
 // has an intersection with a certain other decorator set
 template <DecoratorSet decorators, DecoratorSet decorator>
-struct HasDecorator: public IntegralConstant<bool, (decorators & decorator) != 0> {};
+struct HasDecorator: public std::integral_constant<bool, (decorators & decorator) != 0> {};
 
 // == General Decorators ==
 // * DECORATORS_NONE: This is the name for the empty decorator set (in absence of other decorators).
@@ -91,7 +91,8 @@ const DecoratorSet INTERNAL_DECORATOR_MASK           = INTERNAL_CONVERT_COMPRESS
 //    - Guarantees from relaxed stores hold.
 //  * MO_SEQ_CST: Sequentially consistent stores.
 //    - The stores are observed in the same order by MO_SEQ_CST loads on other processors
-//    - Preceding loads and stores in program order are not reordered with subsequent loads and stores in program order.
+//    - Preceding MO_SEQ_CST loads and stores in program order are not reordered with
+//      subsequent MO_SEQ_CST loads and stores in program order.
 //    - Guarantees from releasing stores hold.
 // === Loads ===
 //  * MO_UNORDERED (Default): No guarantees
@@ -108,7 +109,8 @@ const DecoratorSet INTERNAL_DECORATOR_MASK           = INTERNAL_CONVERT_COMPRESS
 //    - Guarantees from relaxed loads hold.
 //  * MO_SEQ_CST: Sequentially consistent loads.
 //    - These loads observe MO_SEQ_CST stores in the same order on other processors
-//    - Preceding loads and stores in program order are not reordered with subsequent loads and stores in program order.
+//    - Preceding MO_SEQ_CST loads and stores in program order are not reordered with
+//      subsequent MO_SEQ_CST loads and stores in program order.
 //    - Guarantees from acquiring loads hold.
 // === Atomic Cmpxchg ===
 //  * MO_RELAXED: Atomic but relaxed cmpxchg.
@@ -131,16 +133,32 @@ const DecoratorSet MO_DECORATOR_MASK = MO_UNORDERED | MO_RELAXED |
 // === Barrier Strength Decorators ===
 // * AS_RAW: The access will translate into a raw memory access, hence ignoring all semantic concerns
 //   except memory ordering and compressed oops. This will bypass runtime function pointer dispatching
-//   in the pipeline and hardwire to raw accesses without going trough the GC access barriers.
+//   in the pipeline and hardwire to raw accesses without going through the GC access barriers.
 //  - Accesses on oop* translate to raw memory accesses without runtime checks
 //  - Accesses on narrowOop* translate to encoded/decoded memory accesses without runtime checks
 //  - Accesses on HeapWord* translate to a runtime check choosing one of the above
 //  - Accesses on other types translate to raw memory accesses without runtime checks
 // * AS_NO_KEEPALIVE: The barrier is used only on oop references and will not keep any involved objects
-//   alive, regardless of the type of reference being accessed. It will however perform the memory access
-//   in a consistent way w.r.t. e.g. concurrent compaction, so that the right field is being accessed,
-//   or maintain, e.g. intergenerational or interregional pointers if applicable. This should be used with
-//   extreme caution in isolated scopes.
+//   alive, regardless of the type of reference being accessed. This should be used with extreme caution
+//   in isolated scopes.
+//   AS_NO_KEEPALIVE stores are currently used primarily by the VM implementation of java.lang.ref.Reference
+//   and reference processing. AS_NO_KEEPALIVE loads have broader use, e.g. VM / serviceability introspection,
+//   printing, liveness checks, and weak (hash) table lookups.
+//   AS_NO_KEEPALIVE does not establish liveness for the current GC cycle. The oop returned by such
+//   a load, and any oop reached only by traversing from it, must not be stored as a new oop edge into
+//   GC-visible state (GC roots and the object graph). For SATB marking, violating this rule breaks
+//   the snapshot invariant. This includes, but is not limited to:
+//  - object graph storage (e.g. static and non-static Object fields, Object array elements)
+//  - local root storage (e.g. Handles, OopMap/GC-tracked frame / register slots)
+//  - other root storage (e.g. OopHandles, WeakHandles, nmethod and class metadata)
+//   Before such an oop is stored into GC-visible state, liveness must first be explicitly re-established,
+//   for example by:
+//  - re-resolving without AS_NO_KEEPALIVE
+//  - using CollectedHeap::keep_alive(oop)
+//   Related special case: for CLD-owned OopHandles (notably java mirrors), loading the oop does not
+//   keep the owning CLD / Klass alive. In those cases, a plain resolve() is insufficient; use the corresponding
+//   owner keep-alive helper (e.g. Klass::keep_alive()) or CollectedHeap::keep_alive(oop), or have some
+//   other guarantee of liveness before storing the oop into GC-visible state.
 // * AS_NORMAL: The accesses will be resolved to an accessor on the BarrierSet class, giving the
 //   responsibility of performing the access and what barriers to be performed to the GC. This is the default.
 //   Note that primitive accesses will only be resolved on the barrier set if the appropriate build-time
@@ -191,17 +209,20 @@ const DecoratorSet IS_NOT_NULL           = UCONST64(1) << 22;
 //   are not guaranteed to be subclasses of the class of the destination array. This requires
 //   a check-cast barrier during the copying operation. If this is not set, it is assumed
 //   that the array is covariant: (the source array type is-a destination array type)
+// * ARRAYCOPY_NOTNULL: This property means that the source array may contain null elements
+//   but the destination does not allow null elements (i.e. throw NPE)
 // * ARRAYCOPY_DISJOINT: This property means that it is known that the two array ranges
 //   are disjoint.
 // * ARRAYCOPY_ARRAYOF: The copy is in the arrayof form.
 // * ARRAYCOPY_ATOMIC: The accesses have to be atomic over the size of its elements.
 // * ARRAYCOPY_ALIGNED: The accesses have to be aligned on a HeapWord.
 const DecoratorSet ARRAYCOPY_CHECKCAST            = UCONST64(1) << 23;
-const DecoratorSet ARRAYCOPY_DISJOINT             = UCONST64(1) << 24;
-const DecoratorSet ARRAYCOPY_ARRAYOF              = UCONST64(1) << 25;
-const DecoratorSet ARRAYCOPY_ATOMIC               = UCONST64(1) << 26;
-const DecoratorSet ARRAYCOPY_ALIGNED              = UCONST64(1) << 27;
-const DecoratorSet ARRAYCOPY_DECORATOR_MASK       = ARRAYCOPY_CHECKCAST | ARRAYCOPY_DISJOINT |
+const DecoratorSet ARRAYCOPY_NOTNULL              = UCONST64(1) << 24;
+const DecoratorSet ARRAYCOPY_DISJOINT             = UCONST64(1) << 25;
+const DecoratorSet ARRAYCOPY_ARRAYOF              = UCONST64(1) << 26;
+const DecoratorSet ARRAYCOPY_ATOMIC               = UCONST64(1) << 27;
+const DecoratorSet ARRAYCOPY_ALIGNED              = UCONST64(1) << 28;
+const DecoratorSet ARRAYCOPY_DECORATOR_MASK       = ARRAYCOPY_CHECKCAST | ARRAYCOPY_NOTNULL |
                                                     ARRAYCOPY_DISJOINT | ARRAYCOPY_ARRAYOF |
                                                     ARRAYCOPY_ATOMIC | ARRAYCOPY_ALIGNED;
 
@@ -209,11 +230,11 @@ const DecoratorSet ARRAYCOPY_DECORATOR_MASK       = ARRAYCOPY_CHECKCAST | ARRAYC
 // * ACCESS_READ: Indicate that the resolved object is accessed read-only. This allows the GC
 //   backend to use weaker and more efficient barriers.
 // * ACCESS_WRITE: Indicate that the resolved object is used for write access.
-const DecoratorSet ACCESS_READ                    = UCONST64(1) << 28;
-const DecoratorSet ACCESS_WRITE                   = UCONST64(1) << 29;
+const DecoratorSet ACCESS_READ                    = UCONST64(1) << 29;
+const DecoratorSet ACCESS_WRITE                   = UCONST64(1) << 30;
 
 // Keep track of the last decorator.
-const DecoratorSet DECORATOR_LAST = UCONST64(1) << 29;
+const DecoratorSet DECORATOR_LAST = UCONST64(1) << 30;
 
 namespace AccessInternal {
   // This class adds implied decorators that follow according to decorator rules.
@@ -236,10 +257,12 @@ namespace AccessInternal {
 
   // This function implements the above DecoratorFixup rules, but without meta
   // programming for code generation that does not use templates.
-  inline DecoratorSet decorator_fixup(DecoratorSet input_decorators) {
+  inline DecoratorSet decorator_fixup(DecoratorSet input_decorators, BasicType type) {
+    // Some call-sites don't specify that the access is performed on oops
+    DecoratorSet with_oop_decorators = input_decorators |= (is_reference_type(type) ? INTERNAL_VALUE_IS_OOP : 0);
     // If no reference strength has been picked, then strong will be picked
-    DecoratorSet ref_strength_default = input_decorators |
-      (((ON_DECORATOR_MASK & input_decorators) == 0 && (INTERNAL_VALUE_IS_OOP & input_decorators) != 0) ?
+    DecoratorSet ref_strength_default = with_oop_decorators |
+      (((ON_DECORATOR_MASK & with_oop_decorators) == 0 && (INTERNAL_VALUE_IS_OOP & input_decorators) != 0) ?
        ON_STRONG_OOP_REF : DECORATORS_NONE);
     // If no memory ordering has been picked, unordered will be picked
     DecoratorSet memory_ordering_default = ref_strength_default |

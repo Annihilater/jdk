@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -130,7 +130,7 @@ class WrapToken_v2 extends MessageToken_v2 {
             cipherHelper.decryptData(this, tokenData, 0, tokenDataLen,
                                 dataBuf, dataBufOffset, getKeyUsage());
 
-            return tokenDataLen - CONFOUNDER_SIZE -
+            return tokenDataLen - CONFOUNDER_SIZE - getEc() -
                 TOKEN_HEADER_SIZE - cipherHelper.getChecksumLength();
         } else {
 
@@ -220,7 +220,7 @@ class WrapToken_v2 extends MessageToken_v2 {
         return token.length;
     }
 
-    // This implementation is way to conservative. And it certainly
+    // This implementation is way too conservative. And it certainly
     // doesn't return the maximum limit.
     static int getSizeLimit(int qop, boolean confReq, int maxTokenSize,
         CipherHelper ch) throws GSSException {

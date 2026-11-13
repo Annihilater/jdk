@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #ifndef SHARE_OPTO_DIVNODE_HPP
 #define SHARE_OPTO_DIVNODE_HPP
 
+#include "opto/callnode.hpp"
 #include "opto/multnode.hpp"
 #include "opto/node.hpp"
 #include "opto/opcodes.hpp"
@@ -34,15 +35,44 @@
 
 // Optimization - Graph Style
 
+class DivModIntegerNode : public Node {
+private:
+  bool _pinned;
+
+protected:
+  DivModIntegerNode(Node* c, Node* dividend, Node* divisor) : Node(c, dividend, divisor), _pinned(false) {
+    init_class_id(Class_DivModInteger);
+  }
+
+private:
+  virtual uint size_of() const override { return sizeof(DivModIntegerNode); }
+  virtual uint hash() const override { return Node::hash() + _pinned; }
+  virtual bool cmp(const Node& o) const override { return Node::cmp(o) && _pinned == static_cast<const DivModIntegerNode&>(o)._pinned; }
+  virtual bool depends_only_on_test_impl() const override { return !_pinned; }
+  virtual DivModIntegerNode* pin_node_under_control_impl() const override {
+    DivModIntegerNode* res = static_cast<DivModIntegerNode*>(clone());
+    res->_pinned = true;
+    return res;
+  }
+
+public:
+  const TypeInteger* zero() const {
+    if (bottom_type() == TypeInt::INT) {
+      return TypeInt::ZERO;
+    }
+    assert(bottom_type() == TypeLong::LONG, "should be int or long");
+    return TypeLong::ZERO;
+  }
+};
 
 //------------------------------DivINode---------------------------------------
 // Integer division
 // Note: this is division as defined by JVMS, i.e., MinInt/-1 == MinInt.
 // On processors which don't naturally support this special case (e.g., x86),
 // the matcher or runtime system must take care of this.
-class DivINode : public Node {
+class DivINode : public DivModIntegerNode {
 public:
-  DivINode( Node *c, Node *dividend, Node *divisor ) : Node(c, dividend, divisor ) {}
+  DivINode(Node* c, Node* dividend, Node* divisor) : DivModIntegerNode(c, dividend, divisor) {}
   virtual int Opcode() const;
   virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
@@ -53,9 +83,9 @@ public:
 
 //------------------------------DivLNode---------------------------------------
 // Long division
-class DivLNode : public Node {
+class DivLNode : public DivModIntegerNode {
 public:
-  DivLNode( Node *c, Node *dividend, Node *divisor ) : Node(c, dividend, divisor ) {}
+  DivLNode(Node* c, Node* dividend, Node* divisor) : DivModIntegerNode(c, dividend, divisor) {}
   virtual int Opcode() const;
   virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
@@ -77,6 +107,20 @@ public:
   virtual uint ideal_reg() const { return Op_RegF; }
 };
 
+
+//------------------------------DivHFNode--------------------------------------
+// Half float division
+class DivHFNode : public Node {
+public:
+  DivHFNode(Node* c, Node* dividend, Node* divisor) : Node(c, dividend, divisor) {}
+  virtual int Opcode() const;
+  virtual Node* Identity(PhaseGVN* phase);
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual const Type* bottom_type() const { return Type::HALF_FLOAT; }
+  virtual uint ideal_reg() const { return Op_RegF; }
+};
+
 //------------------------------DivDNode---------------------------------------
 // Double division
 class DivDNode : public Node {
@@ -90,11 +134,37 @@ public:
   virtual uint ideal_reg() const { return Op_RegD; }
 };
 
+//------------------------------UDivINode---------------------------------------
+// Unsigned integer division
+class UDivINode : public DivModIntegerNode {
+public:
+  UDivINode(Node* c, Node* dividend, Node* divisor) : DivModIntegerNode(c, dividend, divisor) {}
+  virtual int Opcode() const;
+  virtual Node* Identity(PhaseGVN* phase);
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
+  virtual const Type *bottom_type() const { return TypeInt::INT; }
+  virtual uint ideal_reg() const { return Op_RegI; }
+};
+
+//------------------------------UDivLNode---------------------------------------
+// Unsigned long division
+class UDivLNode : public DivModIntegerNode {
+public:
+  UDivLNode(Node* c, Node* dividend, Node* divisor) : DivModIntegerNode(c, dividend, divisor) {}
+  virtual int Opcode() const;
+  virtual Node* Identity(PhaseGVN* phase);
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
+  virtual const Type *bottom_type() const { return TypeLong::LONG; }
+  virtual uint ideal_reg() const { return Op_RegL; }
+};
+
 //------------------------------ModINode---------------------------------------
 // Integer modulus
-class ModINode : public Node {
+class ModINode : public DivModIntegerNode {
 public:
-  ModINode( Node *c, Node *in1, Node *in2 ) : Node(c,in1, in2) {}
+  ModINode(Node* c, Node* in1, Node* in2) : DivModIntegerNode(c, in1, in2) {}
   virtual int Opcode() const;
   virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
@@ -104,9 +174,9 @@ public:
 
 //------------------------------ModLNode---------------------------------------
 // Long modulus
-class ModLNode : public Node {
+class ModLNode : public DivModIntegerNode {
 public:
-  ModLNode( Node *c, Node *in1, Node *in2 ) : Node(c,in1, in2) {}
+  ModLNode(Node* c, Node* in1, Node* in2) : DivModIntegerNode(c, in1, in2) {}
   virtual int Opcode() const;
   virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
@@ -114,58 +184,89 @@ public:
   virtual uint ideal_reg() const { return Op_RegL; }
 };
 
-//------------------------------ModFNode---------------------------------------
-// Float Modulus
-class ModFNode : public Node {
+// Base class for float and double modulus
+class ModFloatingNode : public CallLeafPureNode {
+protected:
+  virtual Node* dividend() const = 0;
+  virtual Node* divisor() const = 0;
+  virtual const Type* get_result_if_constant(const Type* dividend, const Type* divisor) const = 0;
+
 public:
-  ModFNode( Node *c, Node *in1, Node *in2 ) : Node(c,in1, in2) {}
-  virtual int Opcode() const;
-  virtual const Type* Value(PhaseGVN* phase) const;
-  virtual const Type *bottom_type() const { return Type::FLOAT; }
-  virtual uint ideal_reg() const { return Op_RegF; }
+  ModFloatingNode(Compile* C, const TypeFunc* tf, address addr, const char* name);
+  const Type* Value(PhaseGVN* phase) const override;
 };
 
-//------------------------------ModDNode---------------------------------------
-// Double Modulus
-class ModDNode : public Node {
+// Float Modulus
+class ModFNode : public ModFloatingNode {
+private:
+  Node* dividend() const override { return in(TypeFunc::Parms + 0); }
+  Node* divisor() const override { return in(TypeFunc::Parms + 1); }
+  const Type* get_result_if_constant(const Type* dividend, const Type* divisor) const override;
+
 public:
-  ModDNode( Node *c, Node *in1, Node *in2 ) : Node(c, in1, in2) {}
+  ModFNode(Compile* C, Node* a, Node* b);
+  int Opcode() const override;
+  uint ideal_reg() const override { return Op_RegF; }
+  uint size_of() const override { return sizeof(*this); }
+};
+
+// Double Modulus
+class ModDNode : public ModFloatingNode {
+private:
+  Node* dividend() const override { return in(TypeFunc::Parms + 0); }
+  Node* divisor() const override { return in(TypeFunc::Parms + 2); }
+  const Type* get_result_if_constant(const Type* dividend, const Type* divisor) const override;
+
+public:
+  ModDNode(Compile* C, Node* a, Node* b);
+  int Opcode() const override;
+  uint ideal_reg() const override { return Op_RegD; }
+  uint size_of() const override { return sizeof(*this); }
+};
+
+//------------------------------UModINode---------------------------------------
+// Unsigned integer modulus
+class UModINode : public DivModIntegerNode {
+public:
+  UModINode(Node* c, Node* in1, Node* in2) : DivModIntegerNode(c, in1, in2) {}
   virtual int Opcode() const;
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
+  virtual const Type *bottom_type() const { return TypeInt::INT; }
+  virtual uint ideal_reg() const { return Op_RegI; }
   virtual const Type* Value(PhaseGVN* phase) const;
-  virtual const Type *bottom_type() const { return Type::DOUBLE; }
-  virtual uint ideal_reg() const { return Op_RegD; }
+};
+
+//------------------------------UModLNode---------------------------------------
+// Unsigned long modulus
+class UModLNode : public DivModIntegerNode {
+public:
+  UModLNode(Node* c, Node* in1, Node* in2) : DivModIntegerNode(c, in1, in2) {}
+  virtual int Opcode() const;
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
+  virtual const Type *bottom_type() const { return TypeLong::LONG; }
+  virtual uint ideal_reg() const { return Op_RegL; }
+  virtual const Type* Value(PhaseGVN* phase) const;
 };
 
 //------------------------------DivModNode---------------------------------------
 // Division with remainder result.
-class DivModNode : public MultiNode {
+class DivModNode : public BinaryMultiNode {
 protected:
-  DivModNode( Node *c, Node *dividend, Node *divisor );
+  DivModNode(Node* ctrl, Node* dividend, Node* divisor) : BinaryMultiNode(ctrl, dividend, divisor) {}
 public:
-  enum {
-    div_proj_num =  0,      // quotient
-    mod_proj_num =  1       // remainder
-  };
   virtual int Opcode() const;
-  virtual Node* Identity(PhaseGVN* phase) { return this; }
-  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape) { return NULL; }
-  virtual const Type* Value(PhaseGVN* phase)  const { return bottom_type(); }
-  virtual uint hash() const { return Node::hash(); }
-  virtual bool is_CFG() const  { return false; }
-  virtual uint ideal_reg() const { return NotAMachineReg; }
 
-  ProjNode* div_proj() { return proj_out_or_null(div_proj_num); }
-  ProjNode* mod_proj() { return proj_out_or_null(mod_proj_num); }
+  static DivModNode* make(Node* div_or_mod, BasicType bt, bool is_unsigned);
 };
 
 //------------------------------DivModINode---------------------------------------
 // Integer division with remainder result.
 class DivModINode : public DivModNode {
 public:
-  DivModINode( Node *c, Node *dividend, Node *divisor ) : DivModNode(c, dividend, divisor) {}
+  DivModINode(Node* ctrl, Node* dividend, Node* divisor) : DivModNode(ctrl, dividend, divisor) {}
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return TypeTuple::INT_PAIR; }
-  virtual Node *match( const ProjNode *proj, const Matcher *m );
+  virtual Node* match(const ProjNode* proj, const Matcher* m);
 
   // Make a divmod and associated projections from a div or mod.
   static DivModINode* make(Node* div_or_mod);
@@ -175,13 +276,40 @@ public:
 // Long division with remainder result.
 class DivModLNode : public DivModNode {
 public:
-  DivModLNode( Node *c, Node *dividend, Node *divisor ) : DivModNode(c, dividend, divisor) {}
+  DivModLNode(Node* ctrl, Node* dividend, Node* divisor) : DivModNode(ctrl, dividend, divisor) {}
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return TypeTuple::LONG_PAIR; }
-  virtual Node *match( const ProjNode *proj, const Matcher *m );
+  virtual Node *match(const ProjNode* proj, const Matcher* m);
 
   // Make a divmod and associated projections from a div or mod.
   static DivModLNode* make(Node* div_or_mod);
+};
+
+
+//------------------------------UDivModINode---------------------------------------
+// Unsigend integer division with remainder result.
+class UDivModINode : public DivModNode {
+public:
+  UDivModINode(Node* ctrl, Node* dividend, Node* divisor) : DivModNode(ctrl, dividend, divisor) {}
+  virtual int Opcode() const;
+  virtual const Type *bottom_type() const { return TypeTuple::INT_PAIR; }
+  virtual Node* match(const ProjNode* proj, const Matcher* m);
+
+  // Make a divmod and associated projections from a div or mod.
+  static UDivModINode* make(Node* div_or_mod);
+};
+
+//------------------------------UDivModLNode---------------------------------------
+// Unsigned long division with remainder result.
+class UDivModLNode : public DivModNode {
+public:
+  UDivModLNode(Node* ctrl, Node* dividend, Node* divisor) : DivModNode(ctrl, dividend, divisor) {}
+  virtual int Opcode() const;
+  virtual const Type *bottom_type() const { return TypeTuple::LONG_PAIR; }
+  virtual Node* match(const ProjNode* proj, const Matcher* m);
+
+  // Make a divmod and associated projections from a div or mod.
+  static UDivModLNode* make(Node* div_or_mod);
 };
 
 #endif // SHARE_OPTO_DIVNODE_HPP

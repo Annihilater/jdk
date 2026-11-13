@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,23 +48,27 @@ class   ciNullObject;
 class   ciInstance;
 class     ciCallSite;
 class     ciMemberName;
-class     ciNativeEntryPoint;
 class     ciMethodHandle;
 class     ciMethodType;
 class     ciArray;
 class       ciObjArray;
 class       ciTypeArray;
+class       ciFlatArray;
 class   ciSymbol;
 class   ciMetadata;
 class   ciMethod;
 class   ciMethodData;
 class     ciReceiverTypeData;  // part of ciMethodData
 class   ciType;
+class    ciWrapper;
 class    ciReturnAddress;
 class    ciKlass;
 class     ciInstanceKlass;
+class       ciValueKlass;
 class     ciArrayKlass;
 class       ciObjArrayKlass;
+class         ciFlatArrayKlass;
+class         ciRefArrayKlass;
 class       ciTypeArrayKlass;
 
 // Simulate Java Language style package-private access with
@@ -76,7 +80,6 @@ class       ciTypeArrayKlass;
 // Everyone gives access to ciObjectFactory
 #define CI_PACKAGE_ACCESS \
 friend class ciObjectFactory; \
-friend class VMStructs;
 
 // These are the packages that have access to ciEnv
 // Any more access must be given explicitly.
@@ -98,7 +101,6 @@ friend class ciObject;                 \
 friend class ciNullObject;             \
 friend class ciInstance;               \
 friend class ciMemberName;             \
-friend class ciNativeEntryPoint;       \
 friend class ciMethod;                 \
 friend class ciMethodData;             \
 friend class ciMethodHandle;           \
@@ -108,15 +110,19 @@ friend class ciTypeEntries;            \
 friend class ciSpeculativeTrapData;    \
 friend class ciSymbol;                 \
 friend class ciArray;                  \
+friend class ciFlatArray;              \
 friend class ciObjArray;               \
 friend class ciMetadata;               \
 friend class ciReplay;                 \
 friend class ciTypeArray;              \
 friend class ciType;                   \
 friend class ciReturnAddress;          \
+friend class ciWrapper;                \
 friend class ciKlass;                  \
 friend class ciInstanceKlass;          \
+friend class ciValueKlass;             \
 friend class ciArrayKlass;             \
+friend class ciFlatArrayKlass;         \
 friend class ciObjArrayKlass;          \
 friend class ciTypeArrayKlass;         \
 

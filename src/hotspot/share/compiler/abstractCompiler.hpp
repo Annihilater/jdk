@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,14 +33,13 @@ typedef void (*initializer)(void);
 
 // Per-compiler statistics
 class CompilerStatistics {
-  friend class VMStructs;
-
+ public:
   class Data {
     friend class VMStructs;
   public:
     elapsedTimer _time;  // time spent compiling
-    int _bytes;          // number of bytecodes compiled, including inlined bytecodes
-    int _count;          // number of compilations
+    uint _bytes;         // number of bytecodes compiled, including inlined bytecodes
+    uint _count;         // number of compilations
     Data() : _bytes(0), _count(0) {}
     void update(elapsedTimer time, int bytes) {
       _time.add(time);
@@ -52,16 +51,18 @@ class CompilerStatistics {
     }
   };
 
- public:
   Data _standard;  // stats for non-OSR compilations
   Data _osr;       // stats for OSR compilations
-  int _nmethods_size; //
-  int _nmethods_code_size;
+  Data _bailout;
+  Data _invalidated;
+  Data _made_not_entrant;
+  uint _nmethods_size; //
+  uint _nmethods_code_size;
 
   double total_time() { return _standard._time.seconds() + _osr._time.seconds(); }
 
   double bytes_per_second() {
-    int bytes = _standard._bytes + _osr._bytes;
+    uint bytes = _standard._bytes + _osr._bytes;
     if (bytes == 0) {
       return 0.0;
     }
@@ -75,6 +76,7 @@ class CompilerStatistics {
 class AbstractCompiler : public CHeapObj<mtCompiler> {
  private:
   volatile int _num_compiler_threads;
+  volatile int _num_aot_compiler_threads;
 
  protected:
   volatile int _compiler_state;
@@ -85,17 +87,22 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   // This thread will initialize the compiler runtime.
   bool should_perform_init();
 
+  void wait_for_initialization();
+
  private:
   const CompilerType _type;
 
   CompilerStatistics _stats;
 
  public:
-  AbstractCompiler(CompilerType type) : _num_compiler_threads(0), _compiler_state(uninitialized), _type(type) {}
+  AbstractCompiler(CompilerType type) : _num_compiler_threads(0),
+                                        _num_aot_compiler_threads(0),
+                                        _compiler_state(uninitialized),
+                                        _type(type) {}
 
   // This function determines the compiler thread that will perform the
   // shutdown of the corresponding compiler runtime.
-  bool should_perform_shutdown();
+  bool should_perform_shutdown(bool is_aot_comp_thread);
 
   // Name of this compiler
   virtual const char* name() = 0;
@@ -114,7 +121,7 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   // Usually, the compilation context is the caller of the method 'method'.
   // The only case when for a non-recursive method 'method' the compilation context
   // is not the caller of the 'method' (but it is the method itself) is
-  // java.lang.ref.Referene::get.
+  // java.lang.ref.Reference::get.
   // For java.lang.ref.Reference::get, the intrinsic version is used
   // instead of the compiled version so that the value in the referent
   // field can be registered by the G1 pre-barrier code. The intrinsified
@@ -125,10 +132,12 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   // GraphBuilder::GraphBuilder() in src/share/vm/c1/c1_GraphBuilder.cpp
   // for more details.
 
-  virtual bool is_intrinsic_available(const methodHandle& method, DirectiveSet* directive) {
+  bool is_intrinsic_available(const methodHandle& method, DirectiveSet* directive) {
+    vmIntrinsics::ID id = method->intrinsic_id();
+    assert(id != vmIntrinsics::_none, "must be a VM intrinsic");
     return is_intrinsic_supported(method) &&
-           !directive->is_intrinsic_disabled(method) &&
-           !vmIntrinsics::is_disabled_by_flags(method);
+           vmIntrinsics::is_intrinsic_available(id) &&
+           !directive->is_intrinsic_disabled(id);
   }
 
   // Determines if an intrinsic is supported by the compiler, that is,
@@ -146,18 +155,20 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   // Compiler type queries.
   bool is_c1() const                     { return _type == compiler_c1; }
   bool is_c2() const                     { return _type == compiler_c2; }
-  bool is_jvmci() const                  { return _type == compiler_jvmci; }
   CompilerType type() const              { return _type; }
 
   // Customization
   virtual void initialize () = 0;
 
   void set_num_compiler_threads(int num) { _num_compiler_threads = num;  }
-  int num_compiler_threads()             { return _num_compiler_threads; }
+  int num_compiler_threads() const       { return _num_compiler_threads; }
+
+  void set_num_aot_compiler_threads(int num) { _num_aot_compiler_threads = num;  }
+  int num_aot_compiler_threads() const       { return _num_aot_compiler_threads; }
 
   // Get/set state of compiler objects
-  bool is_initialized()           { return _compiler_state == initialized; }
-  bool is_failed     ()           { return _compiler_state == failed;}
+  bool is_initialized() const     { return _compiler_state == initialized; }
+  bool is_failed     () const     { return _compiler_state == failed;}
   void set_state     (int state);
   void set_shut_down ()           { set_state(shut_down); }
   // Compilation entry point for methods

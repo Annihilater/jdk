@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +23,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "opto/addnode.hpp"
 #include "opto/callnode.hpp"
 #include "opto/connode.hpp"
@@ -33,71 +33,68 @@
 #include "opto/subtypenode.hpp"
 
 const Type* SubTypeCheckNode::sub(const Type* sub_t, const Type* super_t) const {
-  ciKlass* superk = super_t->is_klassptr()->klass();
-  ciKlass* subk   = sub_t->isa_klassptr() ? sub_t->is_klassptr()->klass() : sub_t->is_oopptr()->klass();
-
-  bool xsubk = sub_t->isa_klassptr() ? sub_t->is_klassptr()->klass_is_exact() : sub_t->is_oopptr()->klass_is_exact();
-
+  const TypeKlassPtr* super_klass_type = super_t->isa_klassptr();
+  assert(sub_t != Type::TOP && !TypePtr::NULL_PTR->higher_equal(sub_t), "should be not null");
+  const TypeKlassPtr* sub_klass_type = sub_t->isa_klassptr() ? sub_t->is_klassptr() : sub_t->is_oopptr()->as_klass_type();
 
   // Oop can't be a subtype of abstract type that has no subclass.
-  if (sub_t->isa_oopptr() && superk->is_instance_klass() &&
-      !superk->is_interface() && superk->is_abstract() &&
-      !superk->as_instance_klass()->has_subklass()) {
-    Compile::current()->dependencies()->assert_leaf_type(superk);
-    return TypeInt::CC_GT;
+  if (sub_t->isa_oopptr() && super_klass_type->isa_instklassptr() && super_klass_type->klass_is_exact()) {
+    ciKlass* superklass = super_klass_type->exact_klass();
+    if (!superklass->is_interface() && superklass->is_abstract() &&
+        !superklass->as_instance_klass()->has_subklass()) {
+      Compile::current()->dependencies()->assert_leaf_type(superklass);
+      return TypeInt::CC_GT;
+    }
   }
 
   // Similar to logic in CmpPNode::sub()
+  bool unrelated_classes = false;
 
-  // Interfaces can't be trusted unless the subclass is an exact
-  // interface (it can then only be a constant) or the subclass is an
-  // exact array of interfaces (a newly allocated array of interfaces
-  // for instance)
-  if (superk && subk &&
-      superk->is_loaded() && !superk->is_interface() &&
-      subk->is_loaded() && (!subk->is_interface() || xsubk) &&
-      (!superk->is_obj_array_klass() ||
-       !superk->as_obj_array_klass()->base_element_klass()->is_interface()) &&
-      (!subk->is_obj_array_klass() ||
-       !subk->as_obj_array_klass()->base_element_klass()->is_interface() ||
-       xsubk)) {
-    bool unrelated_classes = false;
-    if (superk->equals(subk)) {
-      // skip
-    } else if (superk->is_subtype_of(subk)) {
-      // If the subclass is exact then the superclass is a subtype of
-      // the subclass. Given they're no equals, that subtype check can
-      // only fail.
-      unrelated_classes = xsubk;
-    } else if (subk->is_subtype_of(superk)) {
-      // skip
-    } else {
-      // Neither class subtypes the other: they are unrelated and this
-      // type check is known to fail.
-      unrelated_classes = true;
-    }
-    if (unrelated_classes) {
-      TypePtr::PTR jp = sub_t->is_ptr()->join_ptr(super_t->is_ptr()->_ptr);
-      if (jp != TypePtr::Null && jp != TypePtr::BotPTR) {
-        return TypeInt::CC_GT;
-      }
+  // Handle value type arrays
+  //
+  // The super klass can be an exact non-array klass constant which is known to be not flat in array (e.g. Object)
+  // while the sub klass could very well be flat in array:
+  //
+  //           MyValue       <:       Object:exact
+  //        flat in array          not flat in array
+  //
+  // We therefore first cast the super klass to inexact (if the class is not final itself) and recompute the flat in
+  // array property for the super klass (all done in cast_to_exactness()) in order to check whether the sub klass is
+  // flat in array and the super klass is not flat in array. If that's the case, the classes must be unrelated.
+  const TypeKlassPtr* super_klass_type_for_flat_in_array = super_klass_type;
+  if (super_klass_type->isa_instklassptr()) {
+    // Only relevant for TypeInstKlassPtr. TypeAryKlassPtr will always be not flat in array.
+    super_klass_type_for_flat_in_array = super_klass_type->cast_to_exactness(false);
+  }
+
+  if ((sub_klass_type->is_flat_in_array() && super_klass_type_for_flat_in_array->is_not_flat_in_array()) ||
+      (super_klass_type_for_flat_in_array->is_flat_in_array() && sub_klass_type->is_not_flat_in_array())) {
+    // The subtype is flat in array and the supertype is not in flat array or vice versa. Cannot subtype and thus unrelated.
+    unrelated_classes = true;
+  } else if (sub_klass_type->is_not_flat() && super_klass_type->is_flat()) {
+    // The subtype is a non-flat array and the supertype is a flat array. Must be unrelated.
+    unrelated_classes = true;
+  } else if (sub_klass_type->is_not_null_free() && super_klass_type->is_null_free()) {
+    // The subtype is a nullable array and the supertype is null-free array. Must be unrelated.
+    unrelated_classes = true;
+  }
+  if (unrelated_classes) {
+    TypePtr::PTR jp = sub_t->is_ptr()->join_ptr(super_t->is_ptr()->_ptr);
+    if (jp != TypePtr::Null && jp != TypePtr::BotPTR) {
+      return TypeInt::CC_GT;
     }
   }
 
-  if (super_t->singleton()) {
-    if (subk != NULL) {
-      switch (Compile::current()->static_subtype_check(superk, subk)) {
-      case Compile::SSC_always_false:
-        return TypeInt::CC_GT;
-      case Compile::SSC_always_true:
-        return TypeInt::CC_EQ;
-      case Compile::SSC_easy_test:
-      case Compile::SSC_full_test:
-        break;
-      default:
-        ShouldNotReachHere();
-      }
-    }
+  switch (Compile::current()->static_subtype_check(super_klass_type, sub_klass_type, false)) {
+    case Compile::SSC_always_false:
+      return TypeInt::CC_GT;
+    case Compile::SSC_always_true:
+      return TypeInt::CC_EQ;
+    case Compile::SSC_easy_test:
+    case Compile::SSC_full_test:
+      break;
+    default:
+      ShouldNotReachHere();
   }
 
   return bottom_type();
@@ -107,9 +104,9 @@ Node *SubTypeCheckNode::Ideal(PhaseGVN* phase, bool can_reshape) {
   Node* obj_or_subklass = in(ObjOrSubKlass);
   Node* superklass = in(SuperKlass);
 
-  if (obj_or_subklass == NULL ||
-      superklass == NULL) {
-    return NULL;
+  if (obj_or_subklass == nullptr ||
+      superklass == nullptr) {
+    return nullptr;
   }
 
   const Type* sub_t = phase->type(obj_or_subklass);
@@ -117,12 +114,12 @@ Node *SubTypeCheckNode::Ideal(PhaseGVN* phase, bool can_reshape) {
 
   if (!super_t->isa_klassptr() ||
       (!sub_t->isa_klassptr() && !sub_t->isa_oopptr())) {
-    return NULL;
+    return nullptr;
   }
 
-  Node* addr = NULL;
+  Node* addr = nullptr;
   if (obj_or_subklass->is_DecodeNKlass()) {
-    if (obj_or_subklass->in(1) != NULL &&
+    if (obj_or_subklass->in(1) != nullptr &&
         obj_or_subklass->in(1)->Opcode() == Op_LoadNKlass) {
       addr = obj_or_subklass->in(1)->in(MemNode::Address);
     }
@@ -130,21 +127,21 @@ Node *SubTypeCheckNode::Ideal(PhaseGVN* phase, bool can_reshape) {
     addr = obj_or_subklass->in(MemNode::Address);
   }
 
-  if (addr != NULL) {
+  if (addr != nullptr) {
     intptr_t con = 0;
     Node* obj = AddPNode::Ideal_base_and_offset(addr, phase, con);
-    if (con == oopDesc::klass_offset_in_bytes() && obj != NULL) {
+    if (con == oopDesc::klass_offset_in_bytes() && obj != nullptr) {
       assert(is_oop(phase, obj), "only for oop input");
-      set_req(ObjOrSubKlass, obj);
+      set_req_X(ObjOrSubKlass, obj, phase);
       return this;
     }
   }
 
   // AllocateNode might have more accurate klass input
   Node* allocated_klass = AllocateNode::Ideal_klass(obj_or_subklass, phase);
-  if (allocated_klass != NULL) {
+  if (allocated_klass != nullptr) {
     assert(is_oop(phase, obj_or_subklass), "only for oop input");
-    set_req(ObjOrSubKlass, allocated_klass);
+    set_req_X(ObjOrSubKlass, allocated_klass, phase);
     return this;
   }
 
@@ -152,7 +149,7 @@ Node *SubTypeCheckNode::Ideal(PhaseGVN* phase, bool can_reshape) {
   // when possible would not constant fold better
   assert(verify(phase), "missing Value() optimization");
 
-  return NULL;
+  return nullptr;
 }
 
 #ifdef ASSERT
@@ -173,7 +170,8 @@ static Node* record_for_cleanup(Node* n, PhaseGVN* phase) {
   return n;
 }
 bool SubTypeCheckNode::verify_helper(PhaseGVN* phase, Node* subklass, const Type* cached_t) {
-  Node* cmp = phase->transform(new CmpPNode(subklass, in(SuperKlass)));
+  Node* cmp_orig = new CmpPNode(subklass, in(SuperKlass));
+  Node* cmp = phase->transform(cmp_orig);
   record_for_cleanup(cmp, phase);
 
   const Type* cmp_t = phase->type(cmp);
@@ -186,9 +184,10 @@ bool SubTypeCheckNode::verify_helper(PhaseGVN* phase, Node* subklass, const Type
   } else {
     t->dump(); tty->cr();
     this->dump(2); tty->cr();
+    tty->print_cr("VS.\n");
     cmp_t->dump(); tty->cr();
-    subklass->dump(2); tty->cr();
-    tty->print_cr("==============================");
+    cmp_orig->dump(2); tty->cr();
+    tty->print_cr("==============================\n");
     phase->C->root()->dump(9999);
     return false;
   }
@@ -203,38 +202,39 @@ bool SubTypeCheckNode::verify(PhaseGVN* phase) {
   const Type* sub_t = phase->type(obj_or_subklass);
   const Type* super_t = phase->type(superklass);
 
-  ciKlass* subk = sub_t->isa_klassptr() ? sub_t->is_klassptr()->klass() : sub_t->is_oopptr()->klass(); // can be NULL for bottom[]
-  ciKlass* superk = super_t->is_klassptr()->klass();
+  const TypeKlassPtr* superk = super_t->isa_klassptr();
+  const TypeKlassPtr* subk = sub_t->isa_klassptr() ? sub_t->is_klassptr() : sub_t->is_oopptr()->as_klass_type();
 
-  if (super_t->singleton() && subk != NULL) {
-    Node* subklass = NULL;
-    if (sub_t->isa_oopptr()) {
-      Node* adr = phase->transform(new AddPNode(obj_or_subklass, obj_or_subklass, phase->MakeConX(oopDesc::klass_offset_in_bytes())));
-      subklass  = phase->transform(LoadKlassNode::make(*phase, NULL, C->immutable_memory(), adr, TypeInstPtr::KLASS));
-      record_for_cleanup(subklass, phase);
-    } else {
-      subklass = obj_or_subklass;
+  if (super_t->singleton() && subk != nullptr) {
+    if (obj_or_subklass->bottom_type() == Type::TOP) {
+      // The bottom type of obj_or_subklass is TOP, despite its recorded type
+      // being an OOP or a klass pointer. This can happen for example in
+      // transient scenarios where obj_or_subklass is a projection of the TOP
+      // node. In such cases, skip verification to avoid violating the contract
+      // of LoadKlassNode::make(). This does not weaken the effect of verify(),
+      // as SubTypeCheck nodes with TOP obj_or_subklass inputs are dead anyway.
+      return true;
     }
-
     const Type* cached_t = Value(phase); // cache the type to validate consistency
-    switch (C->static_subtype_check(superk, subk)) {
+    switch (C->static_subtype_check(superk, subk, false)) {
       case Compile::SSC_easy_test: {
-        return verify_helper(phase, subklass, cached_t);
+        return verify_helper(phase, load_klass(phase), cached_t);
       }
       case Compile::SSC_full_test: {
-        Node* p1 = phase->transform(new AddPNode(superklass, superklass, phase->MakeConX(in_bytes(Klass::super_check_offset_offset()))));
-        Node* chk_off = phase->transform(new LoadINode(NULL, C->immutable_memory(), p1, phase->type(p1)->is_ptr(), TypeInt::INT, MemNode::unordered));
+        Node* p1 = phase->transform(AddPNode::make_off_heap(superklass, phase->MakeConX(in_bytes(Klass::super_check_offset_offset()))));
+        Node* chk_off = phase->transform(new LoadINode(nullptr, C->immutable_memory(), p1, phase->type(p1)->is_ptr(), TypeInt::INT, MemNode::unordered));
         record_for_cleanup(chk_off, phase);
 
         int cacheoff_con = in_bytes(Klass::secondary_super_cache_offset());
-        bool might_be_cache = (phase->find_int_con(chk_off, cacheoff_con) == cacheoff_con);
+        bool might_be_cache = phase->find_int_con(chk_off, cacheoff_con) == cacheoff_con;
         if (!might_be_cache) {
+          Node* subklass = load_klass(phase);
           Node* chk_off_X = chk_off;
 #ifdef _LP64
           chk_off_X = phase->transform(new ConvI2LNode(chk_off_X));
 #endif
-          Node* p2 = phase->transform(new AddPNode(subklass, subklass, chk_off_X));
-          Node* nkls = phase->transform(LoadKlassNode::make(*phase, NULL, C->immutable_memory(), p2, phase->type(p2)->is_ptr(), TypeInstKlassPtr::OBJECT_OR_NULL));
+          Node* p2 = phase->transform(AddPNode::make_off_heap(subklass, chk_off_X));
+          Node* nkls = phase->transform(LoadKlassNode::make(*phase, C->immutable_memory(), p2, phase->type(p2)->is_ptr(), TypeInstKlassPtr::OBJECT_OR_NULL));
 
           return verify_helper(phase, nkls, cached_t);
         }
@@ -249,5 +249,37 @@ bool SubTypeCheckNode::verify(PhaseGVN* phase) {
   }
 
   return true;
+}
+
+Node* SubTypeCheckNode::load_klass(PhaseGVN* phase) const {
+  Node* obj_or_subklass = in(ObjOrSubKlass);
+  const Type* sub_t = phase->type(obj_or_subklass);
+  Node* subklass = nullptr;
+  if (sub_t->isa_oopptr()) {
+    Node* adr = phase->transform(AddPNode::make_with_base(obj_or_subklass, phase->MakeConX(oopDesc::klass_offset_in_bytes())));
+    subklass  = phase->transform(LoadKlassNode::make(*phase, phase->C->immutable_memory(), adr, TypeInstPtr::KLASS));
+    record_for_cleanup(subklass, phase);
+  } else {
+    subklass = obj_or_subklass;
+  }
+  return subklass;
+}
+#endif
+
+uint SubTypeCheckNode::size_of() const {
+  return sizeof(*this);
+}
+
+uint SubTypeCheckNode::hash() const {
+  return NO_HASH;
+}
+
+#ifndef PRODUCT
+void SubTypeCheckNode::dump_spec(outputStream* st) const {
+  if (_method != nullptr) {
+    st->print(" profiled at:");
+    _method->print_short_name(st);
+    st->print(":%d", _bci);
+  }
 }
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package com.sun.imageio.plugins.tiff;
 import java.io.IOException;
 import javax.imageio.IIOException;
 import javax.imageio.plugins.tiff.BaselineTIFFTagSet;
+import com.sun.imageio.plugins.common.ReaderUtil;
 
 class TIFFLZWDecompressor extends TIFFDecompressor {
 
@@ -75,6 +76,7 @@ class TIFFLZWDecompressor extends TIFFDecompressor {
         flipBits = fillOrder == BaselineTIFFTagSet.FILL_ORDER_RIGHT_TO_LEFT;
     }
 
+    @Override
     public void decodeRaw(byte[] b,
                           int dstOffset,
                           int bitsPerPixel,
@@ -95,9 +97,8 @@ class TIFFLZWDecompressor extends TIFFDecompressor {
         }
 
         stream.seek(offset);
-
-        byte[] sdata = new byte[byteCount];
-        stream.readFully(sdata);
+        byte[] sdata = ReaderUtil.
+            staggeredReadByteStream(stream, byteCount);
 
         if (flipBits) {
             for (int i = 0; i < byteCount; i++) {
@@ -131,6 +132,11 @@ class TIFFLZWDecompressor extends TIFFDecompressor {
     public int decode(byte[] sdata, int srcOffset,
                       byte[] ddata, int dstOffset)
         throws IOException {
+        // TIFF spec requires at least 9 bit ClearCode & 9 bit EOI code
+        // in a LZW strip.
+        if (sdata.length < 3) {
+            throw new IIOException("Invalid LZW compressed strip/tile data");
+        }
         if (sdata[0] == (byte)0x00 && sdata[1] == (byte)0x01) {
             throw new IIOException
                 ("TIFF 5.0-style LZW compression is not supported!");

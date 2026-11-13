@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -26,39 +26,29 @@
 AC_DEFUN([BPERF_CHECK_CORES],
 [
   AC_MSG_CHECKING([for number of cores])
-  NUM_CORES=1
-  FOUND_CORES=no
 
   if test -f /proc/cpuinfo; then
     # Looks like a Linux (or cygwin) system
-    NUM_CORES=`cat /proc/cpuinfo  | grep -c processor`
+    NUM_CORES=`cat /proc/cpuinfo  | grep -cw processor`
     if test "$NUM_CORES" -eq "0"; then
       NUM_CORES=`cat /proc/cpuinfo  | grep -c ^CPU`
-    fi
-    if test "$NUM_CORES" -ne "0"; then
-      FOUND_CORES=yes
     fi
   elif test -x /usr/sbin/sysctl; then
     # Looks like a MacOSX system
     NUM_CORES=`/usr/sbin/sysctl -n hw.ncpu`
-    FOUND_CORES=yes
   elif test "x$OPENJDK_BUILD_OS" = xaix ; then
-    NUM_LCPU=`lparstat -m 2> /dev/null | $GREP -o "lcpu=[[0-9]]*" | $CUT -d "=" -f 2`
-    if test -n "$NUM_LCPU"; then
-      NUM_CORES=$NUM_LCPU
-      FOUND_CORES=yes
-    fi
+    NUM_CORES=`lparstat -m 2> /dev/null | $GREP -o "lcpu=[[0-9]]*" | $CUT -d "=" -f 2`
   elif test -n "$NUMBER_OF_PROCESSORS"; then
     # On windows, look in the env
     NUM_CORES=$NUMBER_OF_PROCESSORS
-    FOUND_CORES=yes
   fi
 
-  if test "x$FOUND_CORES" = xyes; then
-    AC_MSG_RESULT([$NUM_CORES])
-  else
+  if test "$NUM_CORES" -eq "0"; then
+    NUM_CORES=1
     AC_MSG_RESULT([could not detect number of cores, defaulting to 1])
     AC_MSG_WARN([This will disable all parallelism from build!])
+  else
+    AC_MSG_RESULT([$NUM_CORES])
   fi
 ])
 
@@ -85,7 +75,8 @@ AC_DEFUN([BPERF_CHECK_MEMORY_SIZE],
     FOUND_MEM=yes
   elif test "x$OPENJDK_BUILD_OS" = xwindows; then
     # Windows, but without cygwin
-    MEMORY_SIZE=`wmic computersystem get totalphysicalmemory -value | grep = | cut -d "=" -f 2-`
+    MEMORY_SIZE=`powershell -Command \
+        "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory" | $SED 's/\\r//g' `
     MEMORY_SIZE=`expr $MEMORY_SIZE / 1024 / 1024`
     FOUND_MEM=yes
   fi
@@ -171,12 +162,7 @@ AC_DEFUN([BPERF_SETUP_CCACHE],
   # Check if ccache is available
   CCACHE_AVAILABLE=true
 
-  OLD_PATH="$PATH"
-  if test "x$TOOLCHAIN_PATH" != x; then
-    PATH=$TOOLCHAIN_PATH:$PATH
-  fi
-  UTIL_LOOKUP_PROGS(CCACHE, ccache)
-  PATH="$OLD_PATH"
+  UTIL_LOOKUP_TOOLCHAIN_PROGS(CCACHE, ccache)
 
   AC_MSG_CHECKING([if ccache is available])
   if test "x$TOOLCHAIN_TYPE" != "xgcc" && test "x$TOOLCHAIN_TYPE" != "xclang"; then
@@ -253,12 +239,118 @@ AC_DEFUN([BPERF_SETUP_CCACHE_USAGE],
       fi
     fi
 
+    # The CCACHE_BASEDIR needs to end with '/' as ccache will otherwise think
+    # directories next to it, that have the base dir name as a prefix, are sub
+    # directories of CCACHE_BASEDIR.
     CCACHE="CCACHE_COMPRESS=1 $SET_CCACHE_DIR \
-        CCACHE_SLOPPINESS=$CCACHE_SLOPPINESS CCACHE_BASEDIR=$TOPDIR $CCACHE"
+        CCACHE_SLOPPINESS=$CCACHE_SLOPPINESS CCACHE_BASEDIR=$WORKSPACE_ROOT/ $CCACHE"
 
     if test "x$SET_CCACHE_DIR" != x; then
       mkdir -p $CCACHE_DIR > /dev/null 2>&1
       chmod a+rwxs $CCACHE_DIR > /dev/null 2>&1
+    fi
+  fi
+])
+
+AC_DEFUN([BPERF_SETUP_SCCACHE],
+[
+  # Check if sccache is available
+  SCCACHE_AVAILABLE=true
+
+  UTIL_LOOKUP_TOOLCHAIN_PROGS(SCCACHE, sccache)
+
+  AC_MSG_CHECKING([if sccache is available])
+  if test "x$TOOLCHAIN_TYPE" != "xgcc" && test "x$TOOLCHAIN_TYPE" != "xclang" && \
+      test "x$TOOLCHAIN_TYPE" != "xmicrosoft"; then
+    AC_MSG_RESULT([no, not supported for toolchain type $TOOLCHAIN_TYPE])
+    SCCACHE_AVAILABLE=false
+  elif test "x$SCCACHE" = "x"; then
+    AC_MSG_RESULT([no, sccache binary missing or not executable])
+    SCCACHE_AVAILABLE=false
+  else
+    AC_MSG_RESULT([yes])
+  fi
+
+  SCCACHE_STATUS=""
+  UTIL_ARG_ENABLE(NAME: sccache, DEFAULT: false, AVAILABLE: $SCCACHE_AVAILABLE,
+      DESC: [enable using sccache to speed up recompilations],
+      CHECKING_MSG: [if sccache is enabled],
+      IF_ENABLED: [
+        if test "x$CCACHE" != x; then
+          AC_MSG_ERROR([Cannot enable both ccache and sccache])
+        fi
+        # Versions of sccache before 0.10.0 can restore stale or incorrect
+        # dependency files for cached C/C++ compilations, breaking our build.
+        SCCACHE_VERSION=[`$SCCACHE --version | head -n1 | $CUT -d " " -f 2 | $TR -d '\r'`]
+        if test "x$SCCACHE_VERSION" = x; then
+          AC_MSG_ERROR([Could not determine sccache version])
+        fi
+        HAS_BAD_SCCACHE=[`$ECHO $SCCACHE_VERSION | \
+            $GREP -e '^0\.[0-9]\.' -e '^0\.[0-9]$'`]
+        if test "x$HAS_BAD_SCCACHE" != "x"; then
+          AC_MSG_ERROR([[sccache 0.10.0 or later is required, found $SCCACHE_VERSION]])
+        fi
+        SCCACHE_STATUS="Active ($SCCACHE_VERSION)"
+      ],
+      IF_DISABLED: [
+        SCCACHE=""
+      ])
+  AC_SUBST(SCCACHE)
+
+  AC_ARG_WITH([sccache-dir],
+      [AS_HELP_STRING([--with-sccache-dir],
+      [where to store sccache files @<:@~/.cache/sccache@:>@])])
+
+  if test "x$with_sccache_dir" != x; then
+    SCCACHE_DIR="$with_sccache_dir"
+    SCCACHE_DIR_FOR_SCCACHE="$SCCACHE_DIR"
+
+    # Ideally, we'd use `UTIL_FIXUP_PATH()`, but it expects the supplied path to
+    # already exist, which might not be true for the sccache directory during
+    # the configure step.  As a workaround, we manually invoke fixpath.sh.
+    if test "x$OPENJDK_BUILD_OS" = "xwindows"; then
+      SCCACHE_DIR_FOR_SCCACHE=`$FIXPATH_BASE -m print "$SCCACHE_DIR_FOR_SCCACHE"`
+    fi
+
+    SET_SCCACHE_DIR="SCCACHE_DIR=$SCCACHE_DIR_FOR_SCCACHE"
+    if test "x$SCCACHE" = x; then
+      AC_MSG_WARN([--with-sccache-dir has no meaning when sccache is not enabled])
+    fi
+  fi
+
+  if test "x$SCCACHE" != x; then
+    BPERF_SETUP_SCCACHE_USAGE
+  fi
+])
+
+AC_DEFUN([BPERF_SETUP_SCCACHE_USAGE],
+[
+  if test "x$SCCACHE" != x; then
+    if test "x$USE_PRECOMPILED_HEADER" = "xtrue"; then
+      if test "x$PRECOMPILED_HEADERS_EXPLICITLY_SET" = "xtrue"; then
+        AC_MSG_ERROR([Cannot use sccache with precompiled headers. Use --disable-precompiled-headers.])
+      else
+        AC_MSG_NOTICE([Disabling precompiled headers because sccache is enabled])
+        USE_PRECOMPILED_HEADER=false
+      fi
+    fi
+
+    # On Windows, the sccache binary must be launched through fixpath and the
+    # compiler argument passed to sccache must be the actual compiler
+    # (gcc/clang/cl) and not another fixpath invocation, otherwise sccache will
+    # try to execute fixpath as the compiler.
+    [ if [[ "$OPENJDK_BUILD_OS" = "windows" && "$SCCACHE" =~ ^"$FIXPATH " ]]; then ]
+      [ if [[ "$CC" =~ ^"$FIXPATH " ]]; then ]
+        CC="${CC#"$FIXPATH "}"
+      [ fi ]
+      [ if [[ "$CXX" =~ ^"$FIXPATH " ]]; then ]
+        CXX="${CXX#"$FIXPATH "}"
+      [ fi ]
+    [ fi ]
+
+    if test "x$SET_SCCACHE_DIR" != x; then
+      SCCACHE="$SET_SCCACHE_DIR $SCCACHE"
+      mkdir -p "$SCCACHE_DIR" > /dev/null 2>&1
     fi
   fi
 ])
@@ -366,9 +458,6 @@ AC_DEFUN_ONCE([BPERF_SETUP_PRECOMPILED_HEADERS],
   if test "x$ICECC" != "x"; then
     AC_MSG_RESULT([no, does not work effectively with icecc])
     PRECOMPILED_HEADERS_AVAILABLE=false
-  elif test "x$TOOLCHAIN_TYPE" = xxlc; then
-    AC_MSG_RESULT([no, does not work with xlc])
-    PRECOMPILED_HEADERS_AVAILABLE=false
   elif test "x$TOOLCHAIN_TYPE" = xgcc; then
     # Check that the compiler actually supports precomp headers.
     echo "int alfa();" > conftest.h
@@ -386,7 +475,13 @@ AC_DEFUN_ONCE([BPERF_SETUP_PRECOMPILED_HEADERS],
 
   UTIL_ARG_ENABLE(NAME: precompiled-headers, DEFAULT: auto,
       RESULT: USE_PRECOMPILED_HEADER, AVAILABLE: $PRECOMPILED_HEADERS_AVAILABLE,
-      DESC: [enable using precompiled headers when compiling C++])
+      DESC: [enable using precompiled headers when compiling C++],
+      IF_GIVEN: [
+        PRECOMPILED_HEADERS_EXPLICITLY_SET=true
+      ],
+      IF_NOT_GIVEN: [
+        PRECOMPILED_HEADERS_EXPLICITLY_SET=false
+      ])
   AC_SUBST(USE_PRECOMPILED_HEADER)
 ])
 

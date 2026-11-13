@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  */
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -41,8 +41,6 @@ import com.sun.org.apache.xerces.internal.util.Status;
 import com.sun.org.apache.xerces.internal.util.SymbolTable;
 import com.sun.org.apache.xerces.internal.util.URI.MalformedURIException;
 import com.sun.org.apache.xerces.internal.util.XMLSymbols;
-import com.sun.org.apache.xerces.internal.utils.XMLSecurityManager;
-import com.sun.org.apache.xerces.internal.utils.XMLSecurityPropertyManager;
 import com.sun.org.apache.xerces.internal.xni.QName;
 import com.sun.org.apache.xerces.internal.xni.XNIException;
 import com.sun.org.apache.xerces.internal.xni.grammars.Grammar;
@@ -76,8 +74,10 @@ import java.util.StringTokenizer;
 import java.util.WeakHashMap;
 import javax.xml.XMLConstants;
 import jdk.xml.internal.JdkConstants;
-import jdk.xml.internal.JdkXmlFeatures;
+import jdk.xml.internal.JdkXmlConfig;
 import jdk.xml.internal.JdkXmlUtils;
+import jdk.xml.internal.XMLSecurityManager;
+import jdk.xml.internal.XMLSecurityPropertyManager;
 import jdk.xml.internal.SecuritySupport;
 import org.w3c.dom.DOMConfiguration;
 import org.w3c.dom.DOMError;
@@ -103,7 +103,7 @@ import org.xml.sax.InputSource;
  * @xerces.internal
  *
  * @author Neil Graham, IBM
- * @LastModified: May 2021
+ * @LastModified: July 2026
  */
 
 public class XMLSchemaLoader implements XMLGrammarLoader, XMLComponent, XSElementDeclHelper,
@@ -285,6 +285,7 @@ XSLoader, DOMConfiguration {
     private CMBuilder fCMBuilder;
     private XSDDescription fXSDDescription = new XSDDescription();
     private String faccessExternalSchema = JdkConstants.EXTERNAL_ACCESS_DEFAULT;
+    private XMLSecurityManager fXMLScurityManager = null;
 
     private WeakHashMap<Object, SchemaGrammar> fJAXPCache;
     private Locale fLocale = Locale.getDefault();
@@ -476,6 +477,9 @@ XSLoader, DOMConfiguration {
             XMLSecurityPropertyManager spm = (XMLSecurityPropertyManager)state;
             faccessExternalSchema = spm.getValue(XMLSecurityPropertyManager.Property.ACCESS_EXTERNAL_SCHEMA);
         }
+        else if (propertyId.equals(SECURITY_MANAGER)) {
+            fXMLScurityManager = (XMLSecurityManager)state;
+        }
     } // setProperty(String, Object)
 
     /**
@@ -567,6 +571,7 @@ XSLoader, DOMConfiguration {
         desc.fContextType = XSDDescription.CONTEXT_PREPARSE;
         desc.setBaseSystemId(source.getBaseSystemId());
         desc.setLiteralSystemId( source.getSystemId());
+        fXSDDescription = desc;
         // none of the other fields make sense for preparsing
         Map<String, LocationArray> locationPairs = new HashMap<>();
         // Process external schema location properties.
@@ -607,8 +612,9 @@ XSLoader, DOMConfiguration {
             processJAXPSchemaSource(locationPairs);
         }
 
-        if (desc.isExternal() && !source.isCreatedByResolver()) {
-            String accessError = SecuritySupport.checkAccess(desc.getExpandedSystemId(), faccessExternalSchema, JdkConstants.ACCESS_EXTERNAL_ALL);
+        if (fXSDDescription.isExternal() && !source.isCreatedByResolver()) {
+            String accessError = SecuritySupport.checkAccess(desc.getExpandedSystemId(),
+                fXMLScurityManager, XMLConstants.ACCESS_EXTERNAL_SCHEMA, faccessExternalSchema);
             if (accessError != null) {
                 throw new XNIException(fErrorReporter.reportError(XSMessageFormatter.SCHEMA_DOMAIN,
                         "schema_reference.access",
@@ -1002,13 +1008,14 @@ XSLoader, DOMConfiguration {
 
         XMLSecurityPropertyManager spm = (XMLSecurityPropertyManager)componentManager.getProperty(XML_SECURITY_PROPERTY_MANAGER);
         if (spm == null) {
-            spm = new XMLSecurityPropertyManager();
+            spm = JdkXmlConfig.getInstance(false).getXMLSecurityPropertyManager(false);
             setProperty(XML_SECURITY_PROPERTY_MANAGER, spm);
         }
 
-        XMLSecurityManager sm = (XMLSecurityManager)componentManager.getProperty(SECURITY_MANAGER);
-        if (sm == null)
-            setProperty(SECURITY_MANAGER,new XMLSecurityManager(true));
+        fXMLScurityManager = (XMLSecurityManager)componentManager.getProperty(SECURITY_MANAGER);
+        if (fXMLScurityManager == null)
+            fXMLScurityManager = JdkXmlConfig.getInstance(false).getXMLSecurityManager(false);
+            setProperty(SECURITY_MANAGER, fXMLScurityManager);
 
         faccessExternalSchema = spm.getValue(XMLSecurityPropertyManager.Property.ACCESS_EXTERNAL_SCHEMA);
 

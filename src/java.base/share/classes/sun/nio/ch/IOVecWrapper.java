@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@
 package sun.nio.ch;
 
 import java.nio.ByteBuffer;
-import jdk.internal.ref.CleanerFactory;
-
+import jdk.internal.misc.TerminatingThreadLocal;
+import jdk.internal.vm.ContinuationSupport;
 
 /**
  * Manipulates a native array of iovec structs on Solaris:
@@ -68,21 +68,23 @@ class IOVecWrapper {
     final long address;
 
     // Address size in bytes
-    static int addressSize;
+    static final int addressSize;
 
-    private static class Deallocator implements Runnable {
-        private final AllocatedNativeObject obj;
-        Deallocator(AllocatedNativeObject obj) {
-            this.obj = obj;
+    // per carrier-thread IOVecWrapper
+    private static final TerminatingThreadLocal<IOVecWrapper[]> IOV_CACHE = new TerminatingThreadLocal<>() {
+        @Override
+        protected IOVecWrapper[] initialValue() {
+            return new IOVecWrapper[1];  // one slot cache
         }
-        public void run() {
-            obj.free();
+        @Override
+        protected void threadTerminated(IOVecWrapper[] cache) {
+            IOVecWrapper wrapper = cache[0];
+            if (wrapper != null) {
+                cache[0] = null;
+                wrapper.vecArray.free();
+            }
         }
-    }
-
-    // per thread IOVecWrapper
-    private static final ThreadLocal<IOVecWrapper> cached =
-        new ThreadLocal<IOVecWrapper>();
+    };
 
     private IOVecWrapper(int size) {
         this.size      = size;
@@ -95,18 +97,38 @@ class IOVecWrapper {
     }
 
     static IOVecWrapper get(int size) {
-        IOVecWrapper wrapper = cached.get();
-        if (wrapper != null && wrapper.size < size) {
-            // not big enough; eagerly release memory
-            wrapper.vecArray.free();
-            wrapper = null;
+        ContinuationSupport.pinIfSupported();
+        try {
+            IOVecWrapper[] cache = IOV_CACHE.get();
+            IOVecWrapper wrapper = cache[0];
+            if (wrapper != null) {
+                cache[0] = null;
+                if (wrapper.size < size) {
+                    // not big enough; eagerly release memory
+                    wrapper.vecArray.free();
+                    wrapper = null;
+                }
+            }
+            return (wrapper != null) ? wrapper : new IOVecWrapper(size);
+        } finally {
+            ContinuationSupport.unpinIfSupported();
         }
-        if (wrapper == null) {
-            wrapper = new IOVecWrapper(size);
-            CleanerFactory.cleaner().register(wrapper, new Deallocator(wrapper.vecArray));
-            cached.set(wrapper);
+    }
+
+    void release() {
+        ContinuationSupport.pinIfSupported();
+        try {
+            IOVecWrapper[] cache = IOV_CACHE.get();
+            IOVecWrapper wrapper = cache[0];
+            if (wrapper == null) {
+                cache[0] = this;
+            } else {
+                // slot already used
+                vecArray.free();
+            }
+        } finally {
+            ContinuationSupport.unpinIfSupported();
         }
-        return wrapper;
     }
 
     void setBuffer(int i, ByteBuffer buf, int pos, int rem) {

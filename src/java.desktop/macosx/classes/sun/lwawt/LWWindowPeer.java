@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package sun.lwawt;
 
+import java.lang.ref.WeakReference;
 import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Component;
@@ -59,11 +60,11 @@ import java.awt.peer.KeyboardFocusManagerPeer;
 import java.awt.peer.WindowPeer;
 import java.util.List;
 
+import java.util.Objects;
 import javax.swing.JComponent;
 
 import sun.awt.AWTAccessor;
 import sun.awt.AWTAccessor.ComponentAccessor;
-import sun.awt.AppContext;
 import sun.awt.CGraphicsDevice;
 import sun.awt.DisplayChangedListener;
 import sun.awt.ExtendedKeyCodes;
@@ -139,13 +140,19 @@ public class LWWindowPeer
 
     private volatile boolean skipNextFocusChange;
 
+    /*
+     * Per-peer state for restoring Java focus to a simple Window after the
+     * native Frame or Dialog that took focus from it is hidden.
+     */
+    private final Object focusRestoreLock = new Object();
+    private WeakReference<LWWindowPeer> focusRestoreTarget;
+    private FocusRestoreRequest pendingFocusRestore;
+
     private static final Color nonOpaqueBackground = new Color(0, 0, 0, 0);
 
     private volatile boolean textured;
 
     private final PeerType peerType;
-
-    private final SecurityWarningWindow warningWindow;
 
     private volatile boolean targetFocusable;
 
@@ -196,18 +203,6 @@ public class LWWindowPeer
         }
 
         platformWindow.initialize(target, this, ownerDelegate);
-        // Init warning window(for applets)
-        SecurityWarningWindow warn = null;
-        if (target.getWarningString() != null) {
-            // accessSystemTray permission allows to display TrayIcon, TrayIcon tooltip
-            // and TrayIcon balloon windows without a warning window.
-            if (!AWTAccessor.getWindowAccessor().isTrayIconWindow(target)) {
-                LWToolkit toolkit = (LWToolkit)Toolkit.getDefaultToolkit();
-                warn = toolkit.createSecurityWarning(target, this);
-            }
-        }
-
-        warningWindow = warn;
     }
 
     @Override
@@ -262,6 +257,7 @@ public class LWWindowPeer
 
     @Override
     protected void disposeImpl() {
+        registerFocusRestoreOnHide();
         deactivateDisplayListener();
         SurfaceData oldData = getSurfaceData();
         synchronized (surfaceDataLock){
@@ -273,18 +269,25 @@ public class LWWindowPeer
         if (isGrabbing()) {
             ungrab();
         }
-        if (warningWindow != null) {
-            warningWindow.dispose();
-        }
 
         platformWindow.dispose();
         super.disposeImpl();
     }
 
     @Override
+    public void setBackground(final Color c) {
+        Color oldBg = getBackground();
+        if (Objects.equals(oldBg, c)) {
+            return;
+        }
+        super.setBackground(c);
+        updateOpaque();
+    }
+
+    @Override
     protected void setVisibleImpl(final boolean visible) {
-        if (!visible && warningWindow != null) {
-            warningWindow.setVisible(false, false);
+        if (!visible) {
+            registerFocusRestoreOnHide();
         }
         updateFocusableWindowState();
         super.setVisibleImpl(visible);
@@ -406,7 +409,7 @@ public class LWWindowPeer
     /**
      * Overridden from LWContainerPeer to return the correct insets.
      * Insets are queried from the delegate and are kept up to date by
-     * requiering when needed (i.e. when the window geometry is changed).
+     * requerying when needed (i.e. when the window geometry is changed).
      */
     @Override
     public Insets getInsets() {
@@ -542,19 +545,6 @@ public class LWWindowPeer
     final void applyShapeImpl(final Region shape) {
         super.applyShapeImpl(shape);
         updateOpaque();
-    }
-
-    @Override
-    public void repositionSecurityWarning() {
-        if (warningWindow != null) {
-            ComponentAccessor compAccessor = AWTAccessor.getComponentAccessor();
-            Window target = getTarget();
-            int x = compAccessor.getX(target);
-            int y = compAccessor.getY(target);
-            int width = compAccessor.getWidth(target);
-            int height = compAccessor.getHeight(target);
-            warningWindow.reposition(x, y, width, height);
-        }
     }
 
     // ---- FRAME PEER METHODS ---- //
@@ -742,7 +732,6 @@ public class LWWindowPeer
             repaintPeer();
         }
 
-        repositionSecurityWarning();
     }
 
     private void clearBackground(final int w, final int h) {
@@ -778,6 +767,12 @@ public class LWWindowPeer
     @Override
     public void notifyActivation(boolean activation, LWWindowPeer opposite) {
         Window oppositeWindow = (opposite == null)? null : opposite.getTarget();
+        if (activation) {
+            if (restoreFocusAfterHide()) {
+                return;
+            }
+            rememberFocusRestoreTarget();
+        }
         changeFocusedWindow(activation, oppositeWindow);
     }
 
@@ -848,7 +843,7 @@ public class LWWindowPeer
                     topmostPlatformWindow != null ? topmostPlatformWindow.getPeer() : null;
 
             // topmostWindowPeer == null condition is added for the backward
-            // compatibility with applets. It can be removed when the
+            // compatibility. It can be removed when the
             // getTopmostPlatformWindowUnderMouse() method will be properly
             // implemented in CPlatformEmbeddedFrame class
             if (topmostWindowPeer == this || topmostWindowPeer == null) {
@@ -980,8 +975,6 @@ public class LWWindowPeer
                                        Point loc, int xAbs, int yAbs,
                                        int clickCount, boolean popupTrigger, int button) {
 
-        updateSecurityWarningVisibility();
-
         postEvent(new MouseEvent(target,
                 MouseEvent.MOUSE_ENTERED,
                 when, modifiers,
@@ -992,8 +985,6 @@ public class LWWindowPeer
     private void postMouseExitedEvent(Component target, long when, int modifiers,
                                       Point loc, int xAbs, int yAbs,
                                       int clickCount, boolean popupTrigger, int button) {
-
-        updateSecurityWarningVisibility();
 
         postEvent(new MouseEvent(target,
                 MouseEvent.MOUSE_EXITED,
@@ -1033,7 +1024,7 @@ public class LWWindowPeer
      */
     @Override
     public void notifyKeyEvent(int id, long when, int modifiers,
-                               int keyCode, char keyChar, int keyLocation)
+                               int keyCode, char keyChar, int keyLocation, int extendedKeyCode)
     {
         LWKeyboardFocusManagerPeer kfmPeer = LWKeyboardFocusManagerPeer.getInstance();
         Component focusOwner = kfmPeer.getCurrentFocusOwner();
@@ -1047,9 +1038,13 @@ public class LWWindowPeer
 
         KeyEvent keyEvent = new KeyEvent(focusOwner, id, when, modifiers,
             keyCode, keyChar, keyLocation);
-        AWTAccessor.getKeyEventAccessor().setExtendedKeyCode(keyEvent,
-                (keyChar == KeyEvent.CHAR_UNDEFINED) ? keyCode
-                : ExtendedKeyCodes.getExtendedKeyCodeForChar(keyChar));
+        if (extendedKeyCode >= 0) {
+            AWTAccessor.getKeyEventAccessor().setExtendedKeyCode(keyEvent, extendedKeyCode);
+        } else {
+            AWTAccessor.getKeyEventAccessor().setExtendedKeyCode(keyEvent,
+                    (keyChar == KeyEvent.CHAR_UNDEFINED) ? keyCode
+                            : ExtendedKeyCodes.getExtendedKeyCodeForChar(keyChar));
+        }
         postEvent(keyEvent);
     }
 
@@ -1079,7 +1074,6 @@ public class LWWindowPeer
         postEvent(stateChangedEvent);
         windowState = newWindowState;
 
-        updateSecurityWarningVisibility();
     }
 
     private static int getGraphicsConfigScreen(GraphicsConfiguration gc) {
@@ -1260,9 +1254,7 @@ public class LWWindowPeer
             return false;
         }
 
-        AppContext targetAppContext = AWTAccessor.getComponentAccessor().getAppContext(getTarget());
-        KeyboardFocusManager kfm = AWTAccessor.getKeyboardFocusManagerAccessor()
-                .getCurrentKeyboardFocusManager(targetAppContext);
+        KeyboardFocusManager kfm = KeyboardFocusManager.getCurrentKeyboardFocusManager();
         Window currentActive = kfm.getActiveWindow();
 
 
@@ -1338,7 +1330,6 @@ public class LWWindowPeer
         changeFocusedWindow(activate, null);
     }
 
-    @SuppressWarnings("deprecation")
     private boolean isOneOfOwnersOf(LWWindowPeer peer) {
         Window owner = (peer != null ? peer.getTarget().getOwner() : null);
         while (owner != null) {
@@ -1356,7 +1347,7 @@ public class LWWindowPeer
      */
     protected void changeFocusedWindow(boolean becomesFocused, Window opposite) {
         if (focusLog.isLoggable(PlatformLogger.Level.FINE)) {
-            focusLog.fine((becomesFocused?"gaining":"loosing") + " focus window: " + this);
+            focusLog.fine((becomesFocused?"gaining":"losing") + " focus window: " + this);
         }
         if (skipNextFocusChange) {
             focusLog.fine("skipping focus change");
@@ -1387,14 +1378,14 @@ public class LWWindowPeer
             if (focusLog.isLoggable(PlatformLogger.Level.FINE)) {
                 focusLog.fine("ungrabbing on " + grabbingWindow);
             }
-            // ungrab a simple window if its owner looses activation.
+            // ungrab a simple window if its owner loses activation.
             grabbingWindow.ungrab();
         }
 
         KeyboardFocusManagerPeer kfmPeer = LWKeyboardFocusManagerPeer.getInstance();
 
         if (!becomesFocused && kfmPeer.getCurrentFocusedWindow() != getTarget()) {
-            // late window focus lost event - ingoring
+            // late window focus lost event - ignoring
             return;
         }
 
@@ -1437,16 +1428,101 @@ public class LWWindowPeer
         }
     }
 
+    // Saves the currently focused simple Window as this native top-level's
+    // Java focus restore target when it becomes active.
+    private void rememberFocusRestoreTarget() {
+        Window focusedWindow = LWKeyboardFocusManagerPeer.getInstance()
+                .getCurrentFocusedWindow();
+        LWWindowPeer focusedPeer = focusedWindow == null ? null
+                : (LWWindowPeer) AWTAccessor.getComponentAccessor()
+                        .getPeer(focusedWindow);
+
+        if (focusedPeer == null || focusedPeer == this) {
+            return;
+        }
+        synchronized (focusRestoreLock) {
+            focusRestoreTarget = focusedPeer.isSimpleWindow()
+                    ? new WeakReference<>(focusedPeer) : null;
+        }
+    }
+
+    // Registers this peer's saved Java focus restore target for later restoration
+    // before this native top-level is hidden or disposed.
+    private void registerFocusRestoreOnHide() {
+        LWWindowPeer target;
+        synchronized (focusRestoreLock) {
+            KeyboardFocusManagerPeer kfmPeer =
+                    LWKeyboardFocusManagerPeer.getInstance();
+            if (kfmPeer.getCurrentFocusedWindow() != getTarget()) {
+                return;
+            }
+
+            target = focusRestoreTarget == null ? null
+                    : focusRestoreTarget.get();
+            focusRestoreTarget = null;
+        }
+
+        if (target == null) {
+            return;
+        }
+
+        LWWindowPeer owner = getOwnerFrameDialog(target);
+        if (owner != null && owner != this) {
+            owner.registerFocusRestore(this, target);
+        }
+    }
+
+    private void registerFocusRestore(LWWindowPeer source, LWWindowPeer target) {
+        synchronized (focusRestoreLock) {
+            pendingFocusRestore = new FocusRestoreRequest(source, target);
+        }
+    }
+
+    // Restores the pending Java focus target when its nearest owning Frame or Dialog
+    // becomes active after the source peer was hidden, including by disposal.
+    private boolean restoreFocusAfterHide() {
+        FocusRestoreRequest request;
+        synchronized (focusRestoreLock) {
+            request = pendingFocusRestore;
+            pendingFocusRestore = null;
+        }
+
+        if (request == null) {
+            return false;
+        }
+
+        LWWindowPeer source = request.source.get();
+        LWWindowPeer target = request.target.get();
+        if (source == null || target == null
+                || source.getTarget().isVisible()
+                || getOwnerFrameDialog(target) != this
+                || !target.focusAllowedFor()
+                || target.getBlocker() != null) {
+            return false;
+        }
+
+        target.changeFocusedWindow(true, source.getTarget());
+        return true;
+    }
+
+    private static final class FocusRestoreRequest {
+        final WeakReference<LWWindowPeer> source;
+        final WeakReference<LWWindowPeer> target;
+
+        FocusRestoreRequest(LWWindowPeer source, LWWindowPeer target) {
+            this.source = new WeakReference<>(source);
+            this.target = new WeakReference<>(target);
+        }
+    }
+
     @Override
     public void enterFullScreenMode() {
         platformWindow.enterFullScreenMode();
-        updateSecurityWarningVisibility();
     }
 
     @Override
     public void exitFullScreenMode() {
         platformWindow.exitFullScreenMode();
-        updateSecurityWarningVisibility();
     }
 
     public long getLayerPtr() {
@@ -1479,33 +1555,6 @@ public class LWWindowPeer
 
     public PeerType getPeerType() {
         return peerType;
-    }
-
-    public void updateSecurityWarningVisibility() {
-        if (warningWindow == null) {
-            return;
-        }
-
-        if (!isVisible()) {
-            return; // The warning window should already be hidden.
-        }
-
-        boolean show = false;
-
-        if (!platformWindow.isFullScreenMode()) {
-            if (isVisible()) {
-                if (LWKeyboardFocusManagerPeer.getInstance().getCurrentFocusedWindow() ==
-                        getTarget()) {
-                    show = true;
-                }
-
-                if (platformWindow.isUnderMouse() || warningWindow.isUnderMouse()) {
-                    show = true;
-                }
-            }
-        }
-
-        warningWindow.setVisible(show, true);
     }
 
     @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -330,7 +330,7 @@ public abstract class View implements SwingConstants {
      *          being removed from a parent
      */
     public void setParent(View parent) {
-        // if the parent is null then propogate down the view tree
+        // if the parent is null then propagate down the view tree
         if (parent == null) {
             for (int i = 0; i < getViewCount(); i++) {
                 if (getView(i).getParent() == this) {
@@ -349,7 +349,6 @@ public abstract class View implements SwingConstants {
      * returns 0.
      *
      * @return the number of views &gt;= 0
-     * @see View#getViewCount
      */
     public int getViewCount() {
         return 0;
@@ -495,9 +494,9 @@ public abstract class View implements SwingConstants {
      * @param biasRet the returned bias
      * @return the location within the model that best represents the next
      *  location visual position
-     * @exception BadLocationException the given position is not a valid
+     * @throws BadLocationException the given position is not a valid
      *                                 position within the document
-     * @exception IllegalArgumentException if <code>direction</code>
+     * @throws IllegalArgumentException if <code>direction</code>
      *          doesn't have one of the legal values above
      */
     @SuppressWarnings("deprecation")
@@ -519,8 +518,11 @@ public abstract class View implements SwingConstants {
                     getStartOffset();
                 break;
             }
-            JTextComponent target = (JTextComponent) getContainer();
-            Caret c = (target != null) ? target.getCaret() : null;
+            Container container = getContainer();
+            if (!(container instanceof JTextComponent target)) {
+                return -1;
+            }
+            Caret c = target.getCaret();
             // YECK! Ideally, the x location from the magic caret position
             // would be passed in.
             Point mcp;
@@ -585,9 +587,9 @@ public abstract class View implements SwingConstants {
      * </ul>
      * @return the bounding box, in view coordinate space,
      *          of the character at the specified position
-     * @exception BadLocationException  if the specified position does
+     * @throws BadLocationException  if the specified position does
      *   not represent a valid location in the associated document
-     * @exception IllegalArgumentException if <code>b</code> is not one of the
+     * @throws IllegalArgumentException if <code>b</code> is not one of the
      *          legal <code>Position.Bias</code> values listed above
      * @see View#viewToModel
      */
@@ -615,9 +617,9 @@ public abstract class View implements SwingConstants {
      * @param a the area of the view, which encompasses the requested region
      * @return the bounding box which is a union of the region specified
      *          by the first and last character positions
-     * @exception BadLocationException  if the given position does
+     * @throws BadLocationException  if the given position does
      *   not represent a valid location in the associated document
-     * @exception IllegalArgumentException if <code>b0</code> or
+     * @throws IllegalArgumentException if <code>b0</code> or
      *          <code>b1</code> are not one of the
      *          legal <code>Position.Bias</code> values listed above
      * @see View#viewToModel
@@ -698,7 +700,8 @@ public abstract class View implements SwingConstants {
      * @param e the change information from the associated document
      * @param a the current allocation of the view
      * @param f the factory to use to rebuild if the view has children
-     * @see View#insertUpdate
+     * @see View#removeUpdate
+     * @see View#changedUpdate
      */
     public void insertUpdate(DocumentEvent e, Shape a, ViewFactory f) {
         if (getViewCount() > 0) {
@@ -739,7 +742,8 @@ public abstract class View implements SwingConstants {
      * @param e the change information from the associated document
      * @param a the current allocation of the view
      * @param f the factory to use to rebuild if the view has children
-     * @see View#removeUpdate
+     * @see View#insertUpdate
+     * @see View#changedUpdate
      */
     public void removeUpdate(DocumentEvent e, Shape a, ViewFactory f) {
         if (getViewCount() > 0) {
@@ -780,7 +784,8 @@ public abstract class View implements SwingConstants {
      * @param e the change information from the associated document
      * @param a the current allocation of the view
      * @param f the factory to use to rebuild if the view has children
-     * @see View#changedUpdate
+     * @see View#insertUpdate
+     * @see View#removeUpdate
      */
     public void changedUpdate(DocumentEvent e, Shape a, ViewFactory f) {
         if (getViewCount() > 0) {
@@ -802,7 +807,6 @@ public abstract class View implements SwingConstants {
      * Fetches the model associated with the view.
      *
      * @return the view model, <code>null</code> if none
-     * @see View#getDocument
      */
     public Document getDocument() {
         return elem.getDocument();
@@ -813,7 +817,7 @@ public abstract class View implements SwingConstants {
      * responsible.
      *
      * @return the starting offset into the model &gt;= 0
-     * @see View#getStartOffset
+     * @see View#getEndOffset
      */
     public int getStartOffset() {
         return elem.getStartOffset();
@@ -824,7 +828,7 @@ public abstract class View implements SwingConstants {
      * responsible.
      *
      * @return the ending offset into the model &gt;= 0
-     * @see View#getEndOffset
+     * @see View#getStartOffset
      */
     public int getEndOffset() {
         return elem.getEndOffset();
@@ -836,7 +840,6 @@ public abstract class View implements SwingConstants {
      * entire portion of the element.
      *
      * @return the subject
-     * @see View#getElement
      */
     public Element getElement() {
         return elem;
@@ -1337,9 +1340,9 @@ public abstract class View implements SwingConstants {
      * @param pos the position to convert &gt;= 0
      * @param a the allocated region in which to render
      * @return the bounding box of the given position is returned
-     * @exception BadLocationException  if the given position does
+     * @throws BadLocationException  if the given position does
      *   not represent a valid location in the associated document
-     * @see View#modelToView
+     * @see View#viewToModel
      * @deprecated
      */
     @Deprecated
@@ -1357,7 +1360,7 @@ public abstract class View implements SwingConstants {
      * @param a the allocated region in which to render
      * @return the location within the model that best represents the
      *  given point in the view &gt;= 0
-     * @see View#viewToModel
+     * @see View#modelToView
      * @deprecated
      */
     @Deprecated
@@ -1383,4 +1386,4 @@ public abstract class View implements SwingConstants {
      */
     int lastUpdateIndex;
 
-};
+}

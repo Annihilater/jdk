@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package java.lang;
 
+import jdk.internal.vm.annotation.AOTSafeClassInitializer;
 import jdk.internal.vm.annotation.IntrinsicCandidate;
 
 /**
@@ -32,9 +33,33 @@ import jdk.internal.vm.annotation.IntrinsicCandidate;
  * Every class has {@code Object} as a superclass. All objects,
  * including arrays, implement the methods of this class.
  *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ *          When preview features are enabled, subclasses of {@code java.lang.Object}
+ *          are either {@linkplain Class#isValue value classes} or identity classes.
+ *          A <em>value object</em> is an instance of a non-abstract value class. All
+ *          other objects, including arrays, are <em>identity objects</em>. See
+ *          The Java Language Specification {@jls value-objects-8.1.1.5 Value Classes}.
+ *          <p>
+ *          When preview features are disabled, all classes are identity classes and
+ *          all objects are identity objects.
+ *          <p>
+ *          It is not possible to synchronize on a value object. An attempt to {@code
+ *          synchronize} on a value object causes {@link IdentityException} to be thrown.
+ *          <p>
+ *          Value objects are never finalized, and it is an error to declare a
+ *          {@code finalize} method in a value class.
+ *          <p>
+ *          A {@linkplain java.lang.ref.Reference Reference object} can only refer to an
+ *          object with identity. Creating a Reference object with a value object as
+ *          the referent throws {@code IdentityException}.
+ *      </div>
+ * </div>
+ *
  * @see     java.lang.Class
  * @since   1.0
  */
+@AOTSafeClassInitializer // for hierarchy checks
 public class Object {
 
     /**
@@ -66,7 +91,7 @@ public class Object {
     public final native Class<?> getClass();
 
     /**
-     * Returns a hash code value for the object. This method is
+     * {@return a hash code value for this object} This method is
      * supported for the benefit of hash tables such as those provided by
      * {@link java.util.HashMap}.
      * <p>
@@ -79,11 +104,11 @@ public class Object {
      *     This integer need not remain consistent from one execution of an
      *     application to another execution of the same application.
      * <li>If two objects are equal according to the {@link
-     *     equals(Object) equals} method, then calling the {@code
+     *     #equals(Object) equals} method, then calling the {@code
      *     hashCode} method on each of the two objects must produce the
      *     same integer result.
      * <li>It is <em>not</em> required that if two objects are unequal
-     *     according to the {@link equals(Object) equals} method, then
+     *     according to the {@link #equals(Object) equals} method, then
      *     calling the {@code hashCode} method on each of the two objects
      *     must produce distinct integer results.  However, the programmer
      *     should be aware that producing distinct integer results for
@@ -94,7 +119,11 @@ public class Object {
      * As far as is reasonably practical, the {@code hashCode} method defined
      * by class {@code Object} returns distinct integers for distinct objects.
      *
-     * @return  a hash code value for this object.
+     * @apiNote
+     * The {@link java.util.Objects#hash(Object...) hash} and {@link
+     * java.util.Objects#hashCode(Object) hashCode} methods of {@link
+     * java.util.Objects} can be used to help construct simple hash codes.
+     *
      * @see     java.lang.Object#equals(java.lang.Object)
      * @see     java.lang.System#identityHashCode
      */
@@ -104,7 +133,7 @@ public class Object {
     /**
      * Indicates whether some other object is "equal to" this one.
      * <p>
-     * The {@code equals} method implements an equivalence relation
+     * The {@code equals} method implements an <dfn>{@index "equivalence relation"}</dfn>
      * on non-null object references:
      * <ul>
      * <li>It is <i>reflexive</i>: for any non-null reference value
@@ -141,17 +170,21 @@ public class Object {
      * the most discriminating possible equivalence relation on objects;
      * that is, for any non-null reference values {@code x} and
      * {@code y}, this method returns {@code true} if and only
-     * if {@code x} and {@code y} refer to the same object
-     * ({@code x == y} has the value {@code true}).
-     *
-     * In other words, under the reference equality equivalence
+     * if {@code x} and {@code y} refer to the same identity object or
+     * <a id=equalsIndistinguishable>indistinguishable value objects ({@code x == y} has the value
+     * {@code true})</a>.
+     * <p>
+     * In other words, under the object equality equivalence
      * relation, each equivalence class only has a single element.
      *
      * @apiNote
-     * It is generally necessary to override the {@link hashCode hashCode}
+     * It is generally necessary to override the {@link #hashCode() hashCode}
      * method whenever this method is overridden, so as to maintain the
      * general contract for the {@code hashCode} method, which states
      * that equal objects must have equal hash codes.
+     * <p>The two-argument {@link java.util.Objects#equals(Object,
+     * Object) Objects.equals} method implements an equivalence relation
+     * on two possibly-null object references.
      *
      * @param   obj   the reference object with which to compare.
      * @return  {@code true} if this object is the same as the obj
@@ -174,17 +207,20 @@ public class Object {
      * <blockquote>
      * <pre>
      * x.clone().getClass() == x.getClass()</pre></blockquote>
-     * will be {@code true}, but these are not absolute requirements.
+     * will also be {@code true}, but these are not absolute requirements.
+     * The clone of a value object, in particular, may be indistinguishable from
+     * the original.
+     * <p>
      * While it is typically the case that:
      * <blockquote>
      * <pre>
      * x.clone().equals(x)</pre></blockquote>
      * will be {@code true}, this is not an absolute requirement.
      * <p>
-     * By convention, the returned object should be obtained by calling
-     * {@code super.clone}.  If a class and all of its superclasses (except
-     * {@code Object}) obey this convention, it will be the case that
-     * {@code x.clone().getClass() == x.getClass()}.
+     * By convention, the {@code clone} method of an identity class should return an
+     * object obtained by calling {@code super.clone}. If a class and all of its
+     * superclasses (except {@code Object}) obey this convention, it will be the
+     * case that {@code x.clone().getClass() == x.getClass()}.
      * <p>
      * By convention, the object returned by this method should be independent
      * of this object (which is being cloned).  To achieve this independence,
@@ -196,6 +232,16 @@ public class Object {
      * primitive fields or references to immutable objects, then it is usually
      * the case that no fields in the object returned by {@code super.clone}
      * need to be modified.
+     * <p>
+     * Value classes may similarly perform deep copies of any mutable field
+     * values before constructing a new class instance with those copies.
+     *
+     * @apiNote
+     * It should be rare for new classes to implement the {@link Cloneable} interface.
+     * Copy constructors and static factory methods provide a more explicit and flexible
+     * means of creating copies, allowing classes to define and document their copying
+     * semantics without the constraints imposed by {@code Cloneable} interface and
+     * the {@code clone} method.
      *
      * @implSpec
      * The method {@code clone} for class {@code Object} performs a
@@ -205,11 +251,15 @@ public class Object {
      * are considered to implement the interface {@code Cloneable} and that
      * the return type of the {@code clone} method of an array type {@code T[]}
      * is {@code T[]} where T is any reference or primitive type.
-     * Otherwise, this method creates a new instance of the class of this
-     * object and initializes all its fields with exactly the contents of
+     * <p>
+     * For an identity object, this method creates a new instance of the class of
+     * this object and initializes all its fields with exactly the contents of
      * the corresponding fields of this object, as if by assignment; the
      * contents of the fields are not themselves cloned. Thus, this method
      * performs a "shallow copy" of this object, not a "deep copy" operation.
+     * <p>
+     * For a value object, this method returns an object that is indistinguishable
+     * from this object.
      * <p>
      * The class {@code Object} does not itself implement the interface
      * {@code Cloneable}, so calling the {@code clone} method on an object
@@ -228,7 +278,11 @@ public class Object {
     protected native Object clone() throws CloneNotSupportedException;
 
     /**
-     * Returns a string representation of the object.
+     * {@return a string representation of the object}
+     *
+     * Satisfying this method's contract implies a non-{@code null}
+     * result must be returned.
+     *
      * @apiNote
      * In general, the
      * {@code toString} method returns a string that
@@ -245,12 +299,14 @@ public class Object {
      * the unsigned hexadecimal representation of the hash code of the
      * object. In other words, this method returns a string equal to the
      * value of:
-     * <blockquote>
-     * <pre>
+     * {@snippet lang=java :
      * getClass().getName() + '@' + Integer.toHexString(hashCode())
-     * </pre></blockquote>
-     *
-     * @return  a string representation of the object.
+     * }
+     * The {@link java.util.Objects#toIdentityString(Object)
+     * Objects.toIdentityString} method returns the string for an
+     * object equal to the string that would be returned if neither
+     * the {@code toString} nor {@code hashCode} methods were
+     * overridden by the object's class.
      */
     public String toString() {
         return getClass().getName() + "@" + Integer.toHexString(hashCode());
@@ -282,6 +338,14 @@ public class Object {
      * </ul>
      * <p>
      * Only one thread at a time can own an object's monitor.
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          The {@code notify} method requires that the current thread be the owner
+     *          of the object's monitor. Since it is not possible to synchronize on a
+     *          value object, an attempt to call this method on a value object will
+     *          always fail with {@code IllegalMonitorStateException}.
+     *      </div>
+     * </div>
      *
      * @throws  IllegalMonitorStateException  if the current thread is not
      *               the owner of this object's monitor.
@@ -308,6 +372,15 @@ public class Object {
      * description of the ways in which a thread can become the owner of
      * a monitor.
      *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          The {@code notifyAll} method requires that the current thread be the owner
+     *          of the object's monitor. Since it is not possible to synchronize on a
+     *          value object, an attempt to call this method on a value object will
+     *          always fail with {@code IllegalMonitorStateException}.
+     *      </div>
+     * </div>
+     *
      * @throws  IllegalMonitorStateException  if the current thread is not
      *               the owner of this object's monitor.
      * @see        java.lang.Object#notify()
@@ -323,6 +396,15 @@ public class Object {
      * In all respects, this method behaves as if {@code wait(0L, 0)}
      * had been called. See the specification of the {@link #wait(long, int)} method
      * for details.
+     *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          The {@code wait} method requires that the current thread be the owner
+     *          of the object's monitor. Since it is not possible to synchronize on a
+     *          value object, an attempt to call this method on a value object will
+     *          always fail with {@code IllegalMonitorStateException}.
+     *      </div>
+     * </div>
      *
      * @throws IllegalMonitorStateException if the current thread is not
      *         the owner of the object's monitor
@@ -347,6 +429,15 @@ public class Object {
      * had been called. See the specification of the {@link #wait(long, int)} method
      * for details.
      *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          The {@code wait} method requires that the current thread be the owner
+     *          of the object's monitor. Since it is not possible to synchronize on a
+     *          value object, an attempt to call this method on a value object will
+     *          always fail with {@code IllegalMonitorStateException}.
+     *      </div>
+     * </div>
+     *
      * @param  timeoutMillis the maximum time to wait, in milliseconds
      * @throws IllegalArgumentException if {@code timeoutMillis} is negative
      * @throws IllegalMonitorStateException if the current thread is not
@@ -359,7 +450,26 @@ public class Object {
      * @see    #wait()
      * @see    #wait(long, int)
      */
-    public final native void wait(long timeoutMillis) throws InterruptedException;
+    public final void wait(long timeoutMillis) throws InterruptedException {
+        if (timeoutMillis < 0) {
+            throw new IllegalArgumentException("timeout value is negative");
+        }
+
+        if (Thread.currentThread() instanceof VirtualThread vthread) {
+            try {
+                wait0(timeoutMillis);
+            } catch (InterruptedException e) {
+                // virtual thread's interrupted status needs to be cleared
+                vthread.getAndClearInterrupt();
+                throw e;
+            }
+        } else {
+            wait0(timeoutMillis);
+        }
+    }
+
+    // final modifier so method not in vtable
+    private final native void wait0(long timeoutMillis) throws InterruptedException;
 
     /**
      * Causes the current thread to wait until it is awakened, typically
@@ -413,10 +523,10 @@ public class Object {
      * is not satisfied. See the example below.
      * <p>
      * For more information on this topic, see section 14.2,
-     * "Condition Queues," in Brian Goetz and others' <em>Java Concurrency
-     * in Practice</em> (Addison-Wesley, 2006) or Item 69 in Joshua
-     * Bloch's <em>Effective Java, Second Edition</em> (Addison-Wesley,
-     * 2008).
+     * "Condition Queues," in Brian Goetz and others' <cite>Java Concurrency
+     * in Practice</cite> (Addison-Wesley, 2006) or Item 81 in Joshua
+     * Bloch's <cite>Effective Java, Third Edition</cite> (Addison-Wesley,
+     * 2018).
      * <p>
      * If the current thread is {@linkplain java.lang.Thread#interrupt() interrupted}
      * by any thread before or while it is waiting, then an {@code InterruptedException}
@@ -424,22 +534,31 @@ public class Object {
      * this exception is thrown. This exception is not thrown until the lock status of
      * this object has been restored as described above.
      *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          The {@code wait} method requires that the current thread be the owner
+     *          of the object's monitor. Since it is not possible to synchronize on a
+     *          value object, an attempt to call this method on a value object will
+     *          always fail with {@code IllegalMonitorStateException}.
+     *      </div>
+     * </div>
+     *
      * @apiNote
      * The recommended approach to waiting is to check the condition being awaited in
      * a {@code while} loop around the call to {@code wait}, as shown in the example
      * below. Among other things, this approach avoids problems that can be caused
      * by spurious wakeups.
      *
-     * <pre>{@code
+     * {@snippet lang=java :
      *     synchronized (obj) {
-     *         while (<condition does not hold> and <timeout not exceeded>) {
+     *         while ( <condition does not hold and timeout not exceeded> ) {
      *             long timeoutMillis = ... ; // recompute timeout values
      *             int nanos = ... ;
      *             obj.wait(timeoutMillis, nanos);
      *         }
      *         ... // Perform action appropriate to condition or timeout
      *     }
-     * }</pre>
+     * }
      *
      * @param  timeoutMillis the maximum time to wait, in milliseconds
      * @param  nanos   additional time, in nanoseconds, in the range 0-999999 inclusive
@@ -473,21 +592,28 @@ public class Object {
     }
 
     /**
-     * Called by the garbage collector on an object when garbage collection
+     * Called by the garbage collector on an identity object when garbage collection
      * determines that there are no more references to the object.
-     * A subclass overrides the {@code finalize} method to dispose of
+     * An identity class may override the {@code finalize} method to dispose of
      * system resources or to perform other cleanup.
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          A value class cannot override the {@code finalize} method, and
+     *          the garbage collector never invokes {@code finalize} on a value
+     *          object.
+     *      </div>
+     * </div>
      * <p>
      * <b>When running in a Java virtual machine in which finalization has been
-     * disabled or removed, the garbage collector will never call
-     * {@code finalize()}. In a Java virtual machine in which finalization is
+     * disabled or removed, the garbage collector will never call {@code finalize()}
+     * for any object. In a Java virtual machine in which finalization is
      * enabled, the garbage collector might call {@code finalize} only after an
      * indefinite delay.</b>
      * <p>
      * The general contract of {@code finalize} is that it is invoked
      * if and when the Java virtual
      * machine has determined that there is no longer any
-     * means by which this object can be accessed by any thread that has
+     * means by which this identity object can be accessed by any thread that has
      * not yet died, except as a result of an action taken by the
      * finalization of some other object or class which is ready to be
      * finalized. The {@code finalize} method may take any action, including
@@ -539,7 +665,8 @@ public class Object {
      * To guard against exceptions prematurely terminating the finalize chain,
      * the subclass should use a {@code try-finally} block to ensure
      * {@code super.finalize()} is always invoked. For example,
-     * <pre>{@code      @Override
+     * {@snippet lang="java":
+     *     @Override
      *     protected void finalize() throws Throwable {
      *         try {
      *             ... // cleanup subclass state
@@ -547,12 +674,12 @@ public class Object {
      *             super.finalize();
      *         }
      *     }
-     * }</pre>
+     * }
      *
      * @deprecated Finalization is deprecated and subject to removal in a future
      * release. The use of finalization can lead to problems with security,
      * performance, and reliability.
-     * See <a href="https://openjdk.java.net/jeps/421">JEP 421</a> for
+     * See <a href="https://openjdk.org/jeps/421">JEP 421</a> for
      * discussion and alternatives.
      * <p>
      * Subclasses that override {@code finalize} to perform cleanup should use

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,10 @@
  * questions.
  */
 #include <malloc.h>
+#include <winternl.h>
+#include <winsock2.h>
+#include <iphlpapi.h>
+#include <icmpapi.h>
 
 #include "net_util.h"
 
@@ -71,20 +75,23 @@ Java_java_net_Inet6AddressImpl_lookupAllHostAddr(JNIEnv *env, jobject this,
         JNU_ThrowNullPointerException(env, "host argument is null");
         return NULL;
     }
-    hostname = JNU_GetStringPlatformChars(env, host, JNI_FALSE);
+    hostname = JNU_GetStringPlatformCharsStrict(env, host, NULL);
     CHECK_NULL_RETURN(hostname, NULL);
 
     // try once, with our static buffer
     memset(&hints, 0, sizeof(hints));
-    hints.ai_flags = AI_CANONNAME;
     hints.ai_family = lookupCharacteristicsToAddressFamily(characteristics);
 
     error = getaddrinfo(hostname, NULL, &hints, &res);
 
     if (error) {
         // report error
-        NET_ThrowByNameWithLastError(env, "java/net/UnknownHostException",
-                                     hostname);
+        int enh = getEnhancedExceptionsAllowed(env);
+        if (enh == ENH_INIT_ERROR && (*env)->ExceptionCheck(env)) {
+            goto cleanupAndReturn;
+        }
+        const char *hmsg = (enh == ENH_ENABLED) ? hostname : "";
+        NET_ThrowByNameWithLastError(env, "java/net/UnknownHostException", hmsg);
         goto cleanupAndReturn;
     } else {
         int i = 0, inetCount = 0, inet6Count = 0, inetIndex = 0,
@@ -310,7 +317,11 @@ tcp_ping6(JNIEnv *env, SOCKETADDRESS *sa, SOCKETADDRESS *netif, jint timeout,
 
     // set TTL
     if (ttl > 0) {
-        setsockopt(fd, IPPROTO_IPV6, IPV6_UNICAST_HOPS, (const char *)&ttl, sizeof(ttl));
+        if (setsockopt(fd, IPPROTO_IPV6, IPV6_UNICAST_HOPS, (const char *)&ttl, sizeof(ttl)) == SOCKET_ERROR) {
+            NET_ThrowNew(env, WSAGetLastError(), "setsockopt IPV6_UNICAST_HOPS failed");
+            closesocket(fd);
+            return JNI_FALSE;
+        }
     }
 
     // A network interface was specified, so let's bind to it.
@@ -392,7 +403,9 @@ ping6(JNIEnv *env, HANDLE hIcmpFile, SOCKETADDRESS *sa,
     IP_OPTION_INFORMATION ipInfo = {255, 0, 0, 0, NULL};
     SOCKETADDRESS dftNetif;
 
-    ReplySize = sizeof(ICMPV6_ECHO_REPLY) + sizeof(SendData);
+    // According to MS docu: size of ICMPV6_ECHO_REPLY structure + RequestSize bytes of data +
+    // 8 more bytes of data (the size of an ICMP error message) + size of an IO_STATUS_BLOCK structure
+    ReplySize = sizeof(ICMPV6_ECHO_REPLY) + sizeof(SendData) + 8 + sizeof(IO_STATUS_BLOCK);
     ReplyBuffer = (VOID *)malloc(ReplySize);
     if (ReplyBuffer == NULL) {
         IcmpCloseHandle(hIcmpFile);

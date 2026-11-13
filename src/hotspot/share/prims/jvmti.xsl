@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
- Copyright (c) 2002, 2019, Oracle and/or its affiliates. All rights reserved.
+ Copyright (c) 2002, 2026, Oracle and/or its affiliates. All rights reserved.
  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 
  This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
 
 <xsl:import href="jvmtiLib.xsl"/>
 
-<xsl:output method="html" indent="yes"
+<xsl:output method="html" indent="no"
   doctype-system="about:legacy-compat"/>
 
 <xsl:param name="development"></xsl:param>
@@ -40,48 +40,63 @@
           <xsl:text> </xsl:text>
           <xsl:call-template name="showversion"/>
         </title>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
         <style>
+          :root { --border-color: light-dark(#000000, #919191); }
           .centered { text-align: center; }
           .leftAligned { text-align: left; }
           .rightAligned { text-align: right; }
-          .bgLight { background-color: #EEEEFF; }
-          .bgDark { background-color: #CCCCFF}
+          tr:nth-child(even), tr:nth-child(even) th[scope=row], tr:nth-child(odd), tr:nth-child(odd) th[scope=row] {
+            background: unset;
+          }
+          .bgLight, tr.bgLight > th { background-color: light-dark(#EEEEFF, #3A3A4E); }
+          .bgDark, tr.bgDark > th { background-color: light-dark(#CCCCFF, #5e5e80); }
           th { font-weight: normal; text-align: left; }
-          div.sep { height: 10px; }
+          div.sep { height: 0.6em; }
           div.callbackCtnr { margin: 0 5%; }
-          hr { border-width:0; color:gray; background-color:gray; }
-          hr.thick { height:3px; }
+          hr { border-width:0; color:gray; background-color:gray; margin-block: 25px; }
+          hr.thick { height:3px; margin-block: 30px; }
           hr.thin { height:1px; }
-          table.bordered, div.bordered { border: 2px solid black; border-spacing: 0; border-collapse: collapse; }
+          table.bordered, div.bordered {
+            border: 2px solid var(--border-color);
+            border-spacing: 0;
+            border-collapse: collapse;
+            margin: 20px 0;
+          }
           table.bordered td, table.bordered th, div.bordered div.divTableHead, div.bordered .divTableCell {
             padding: 3px;
-            border: 2px solid black;
+            border: 2px solid var(--border-color);
           }
           .wide { width: 100%; }
           table.bordered caption, divCaption {
-            border: 2px solid black;
+            border: 2px solid var(--border-color);
             border-bottom-width: 0;
+            margin-bottom: 0;
           }
           .captionTitle {
-            background-color: #CCCCFF;
+            background-color: light-dark(#CCCCFF, #5e5e80);
+            color: light-dark(#181818, #F0F0F0);
             font-size: larger;
+            font-style: normal;
             text-align:center;
             padding: 3px;
           }
           .captionDescr {
-            border-top: 2px solid black;
+            border-top: 2px solid var(--border-color);
             padding: 3px;
             text-align: left;
           }
+          .toc { }
+          span.bold { font-weight: bold; }
           div.divTable { display: table; }
           <!-- workaround for <div> with border, display: table & width: 100% -->
-          div.wideDivTableCtnr { padding-right: 2px; }
+          div.wideDivTableCtnr { padding-right: 2px; margin-block: 20px; }
           div.divTableRow { display: table-row; }
           div.divTableHead, div.divTableCell { display: table-cell; vertical-align: middle; }
           div.divTableHead { font-weight: bold; text-align: center; }
-          table.bordered td.noPadding { padding: 0; }
+          table.bordered td.noPadding { padding: 0; margin-block: 20px; }
           div.withPadding { padding: 3px; }
-          div.topBorder { border-top: 2px solid black; }
+          div.topBorder { border-top: 2px solid var(--border-color); }
         </style>
   </head>
   <body>
@@ -89,100 +104,98 @@
       <xsl:apply-templates select="title"/>
     </header>
     <nav>
-      <ul>
+      <ul class="toc">
         <li>
-          <a href="#SpecificationIntro"><b>Introduction</b></a>
+          <a href="#SpecificationIntro">Introduction</a>
           <ul>
             <xsl:for-each select="intro">
               <li>
                 <a>
                   <xsl:attribute name="href">#<xsl:value-of select="@id"/>
                   </xsl:attribute>
-                  <b><xsl:value-of select="@label"/></b>
+                  <xsl:value-of select="@label"/>
                 </a>
               </li>
             </xsl:for-each>
           </ul>
         </li>
         <li>
-          <a href="#FunctionSection"><b>Functions</b></a>
+          <a href="#FunctionSection">Functions</a>
           <ul>
             <xsl:for-each select="functionsection/intro">
               <li>
                 <a>
                   <xsl:attribute name="href">#<xsl:value-of select="@id"/>
                   </xsl:attribute>
-                  <b><xsl:value-of select="@label"/></b>
+                  <xsl:value-of select="@label"/>
                 </a>
               </li>
             </xsl:for-each>
             <li>
-              <a href="#FunctionIndex"><b>Function Index</b></a>
+              <a href="#FunctionIndex">Function Index</a>
               <ul>
                 <xsl:for-each select="functionsection/category">
                   <li>
                     <a>
                       <xsl:attribute name="href">#<xsl:value-of select="@id"/>
                       </xsl:attribute>
-                      <b><xsl:value-of select="@label"/></b>
+                      <xsl:value-of select="@label"/>
                     </a>
                   </li>
                 </xsl:for-each>
               </ul>
             </li>
             <li>
-              <a href="#ErrorSection"><b>Error Codes</b></a>
+              <a href="#ErrorSection">Error Codes</a>
             </li>
           </ul>
         </li>
         <li>
-          <a href="#EventSection"><b>Events</b></a>
+          <a href="#EventSection">Events</a>
           <ul>
             <li>
-              <a href="#EventIndex"><b>Event Index</b></a>
+              <a href="#EventIndex">Event Index</a>
             </li>
           </ul>
         </li>
         <li>
-          <a href="#DataSection"><b>Data Types</b></a>
+          <a href="#DataSection">Data Types</a>
           <ul>
             <xsl:for-each select="//basetypes">
             <li>
               <a>
                 <xsl:attribute name="href">#<xsl:value-of select="@id"/></xsl:attribute>
-                <b>
-                  <xsl:value-of select="@label"/>
-                </b>
+                <xsl:value-of select="@label"/>
               </a>
             </li>
             </xsl:for-each>
             <li>
-              <a href="#StructureTypeDefinitions"><b>Structure Type Definitions</b></a>
+              <a href="#StructureTypeDefinitions">Structure Type Definitions</a>
             </li>
             <li>
-              <a href="#FunctionTypeDefinitions"><b>Function Type Definitions</b></a>
+              <a href="#FunctionTypeDefinitions">Function Type Definitions</a>
             </li>
             <li>
-              <a href="#EnumerationDefinitions"><b>Enumeration Definitions</b></a>
+              <a href="#EnumerationDefinitions">Enumeration Definitions</a>
             </li>
             <li>
-              <a href="#FunctionTable"><b>Function Table</b></a>
+              <a href="#FunctionTable">Function Table</a>
             </li>
           </ul>
         </li>
         <li>
-          <a href="#ConstantIndex"><b>Constant Index</b></a>
+          <a href="#ConstantIndex">Constant Index</a>
         </li>
         <xsl:if test="$development = 'Show'">
           <li>
-            <a href="#SpecificationIssues"><b>Issues</b></a>
+            <a href="#SpecificationIssues">Issues</a>
             <ul>
               <xsl:for-each select="issuessection/intro">
                 <li>
                   <a>
                     <xsl:attribute name="href">#<xsl:value-of select="@id"/>
                     </xsl:attribute>
-                    <b><xsl:value-of select="@label"/></b>
+                    <xsl:value-of select="@label"/>
                   </a>
                 </li>
               </xsl:for-each>
@@ -190,28 +203,36 @@
           </li>
         </xsl:if>
         <li>
-          <a href="#ChangeHistory"><b>Change History</b></a>
+          <a href="#ChangeHistory">Change History</a>
         </li>
       </ul>
     </nav>
     <!-- end table of contents, begin body -->
     <main>
-    <div class="sep"/>
+
     <hr class="thick"/>
-    <div class="sep"/>
-    <p id="SpecificationIntro"/>
+
+    <section id="SpecificationIntro">
       <xsl:apply-templates select="intro"/>
-    <p id="FunctionSection"/>
+    </section>
+    <hr class="thick"/>
+    <section id="FunctionSection">
       <xsl:apply-templates select="functionsection"/>
-    <p id="ErrorSection"/>
+    </section>
+    <hr class="thick"/>
+    <section id="ErrorSection">
       <xsl:apply-templates select="errorsection"/>
-    <p id="DataSection"/>
+    </section>
+    <hr class="thick"/>
+    <section id="DataSection">
       <xsl:apply-templates select="datasection"/>
-    <p id="EventSection"/>
+    </section>
+    <hr class="thick"/>
+    <section id="EventSection">
       <xsl:apply-templates select="eventsection"/>
-    <p id="ConstantIndex"/>
-      <div class="sep"/>
-      <hr class="thick"/>
+    </section>
+    <hr class="thick"/>
+    <section id="ConstantIndex">
       <h2>
         Constant Index
       </h2>
@@ -220,17 +241,20 @@
           <xsl:sort select="@id"/>
         </xsl:apply-templates>
       </blockquote>
+    </section>
     <xsl:if test="$development = 'Show'">
-      <p id="SpecificationIssues"/>
-      <div class="sep"/>
       <hr class="thick"/>
-      <h2>
-        <xsl:value-of select="issuessection/@label"/>
-      </h2>
-      <xsl:apply-templates select="issuessection/intro"/>
+      <section id="SpecificationIssues">
+        <h2>
+          <xsl:value-of select="issuessection/@label"/>
+        </h2>
+        <xsl:apply-templates select="issuessection/intro"/>
+      </section>
     </xsl:if>
-    <p id="ChangeHistory"/>
+    <hr class="thick"/>
+    <section id="ChangeHistory">
       <xsl:apply-templates select="changehistory"/>
+    </section>
     </main>
   </body>
 </html>
@@ -248,8 +272,6 @@
 </xsl:template>
 
 <xsl:template match="functionsection">
-  <div class="sep"/>
-  <hr class="thick"/>
   <h2>
     <xsl:value-of select="@label"/>
   </h2>
@@ -265,9 +287,7 @@
   <li>
     <a>
       <xsl:attribute name="href">#<xsl:value-of select="@id"/></xsl:attribute>
-      <b>
-        <xsl:value-of select="@label"/>
-      </b>
+      <xsl:value-of select="@label"/>
     </a>
     <ul>
       <xsl:apply-templates select="function[count(@hide)=0]" mode="index"/>
@@ -289,89 +309,88 @@
 </xsl:template>
 
 <xsl:template match="category" mode="body">
-  <p>
+  <hr class="thick"/>
+  <section>
     <xsl:attribute name="id">
       <xsl:value-of select="@id"/>
     </xsl:attribute>
-  </p>
-  <hr class="thick"/>
-  <h2 class="centered"><xsl:value-of select="@label"/></h2>
-  <xsl:value-of select="@label"/> functions:
-  <ul>
-    <xsl:apply-templates select="function[count(@hide)=0]" mode="index"/>
-  </ul>
-  <xsl:variable name="calltypes" select="callback"/>
-  <xsl:if test="count($calltypes)!=0">
-    <xsl:value-of select="@label"/> function types:
+    <h2 class="centered"><xsl:value-of select="@label"/></h2>
+    <xsl:value-of select="@label"/> functions:
     <ul>
-      <xsl:apply-templates select="$calltypes" mode="index"/>
+      <xsl:apply-templates select="function[count(@hide)=0]" mode="index"/>
     </ul>
-  </xsl:if>
-  <xsl:variable name="cattypes"
-    select="(descendant::typedef|descendant::uniontypedef|descendant::capabilitiestypedef|descendant::constants[@kind='enum'])"/>
-  <xsl:if test="count($cattypes)!=0">
-    <xsl:value-of select="@label"/> types:
-    <ul>
-      <xsl:for-each select="$cattypes">
-        <li>
-          <a>
-            <xsl:attribute name="href">
-              <xsl:text>#</xsl:text>
-              <xsl:value-of select="@id"/>
-            </xsl:attribute>
-            <code><xsl:value-of select="@id"/></code>
-          </a>
-          <xsl:text> - </xsl:text>
-          <xsl:value-of select="@label"/>
-        </li>
-      </xsl:for-each>
-    </ul>
-  </xsl:if>
-  <xsl:variable name="catconst"
-    select="(descendant::constants[@kind!='enum'])"/>
-  <xsl:if test="count($catconst)!=0">
-    <xsl:value-of select="@label"/> flags and constants:
-    <ul>
-      <xsl:for-each select="$catconst">
-        <li>
-          <a>
-            <xsl:attribute name="href">
-              <xsl:text>#</xsl:text>
-              <xsl:value-of select="@id"/>
-            </xsl:attribute>
+    <xsl:variable name="calltypes" select="callback"/>
+    <xsl:if test="count($calltypes)!=0">
+      <xsl:value-of select="@label"/> function types:
+      <ul>
+        <xsl:apply-templates select="$calltypes" mode="index"/>
+      </ul>
+    </xsl:if>
+    <xsl:variable name="cattypes"
+      select="(descendant::typedef|descendant::uniontypedef|descendant::capabilitiestypedef|descendant::constants[@kind='enum'])"/>
+    <xsl:if test="count($cattypes)!=0">
+      <xsl:value-of select="@label"/> types:
+      <ul>
+        <xsl:for-each select="$cattypes">
+          <li>
+            <a>
+              <xsl:attribute name="href">
+                <xsl:text>#</xsl:text>
+                <xsl:value-of select="@id"/>
+              </xsl:attribute>
+              <code><xsl:value-of select="@id"/></code>
+            </a>
+            <xsl:text> - </xsl:text>
             <xsl:value-of select="@label"/>
-          </a>
-        </li>
-      </xsl:for-each>
-    </ul>
-  </xsl:if>
-  <xsl:apply-templates select="intro|typedef|uniontypedef|capabilitiestypedef"/>
-  <div class="sep"/>
-  <xsl:apply-templates select="function[count(@hide)=0]|callback" mode="body"/>
+          </li>
+        </xsl:for-each>
+      </ul>
+    </xsl:if>
+    <xsl:variable name="catconst"
+      select="(descendant::constants[@kind!='enum'])"/>
+    <xsl:if test="count($catconst)!=0">
+      <xsl:value-of select="@label"/> flags and constants:
+      <ul>
+        <xsl:for-each select="$catconst">
+          <li>
+            <a>
+              <xsl:attribute name="href">
+                <xsl:text>#</xsl:text>
+                <xsl:value-of select="@id"/>
+              </xsl:attribute>
+              <xsl:value-of select="@label"/>
+            </a>
+          </li>
+        </xsl:for-each>
+      </ul>
+    </xsl:if>
+    <xsl:apply-templates select="intro|typedef|uniontypedef|capabilitiestypedef"/>
+    <xsl:apply-templates select="function[count(@hide)=0]|callback" mode="body"/>
+  </section>
 </xsl:template>
 
 <xsl:template match="function" mode="body">
-  <hr class="thin">
+  <hr class="thin" />
+  <section>
     <xsl:attribute name="id">
       <xsl:value-of select="@id"/>
     </xsl:attribute>
-
-  </hr>
-  <xsl:apply-templates select="synopsis" mode="body"/>
-  <blockquote>
-    <xsl:apply-templates select="typedef" mode="code"/>
-    <xsl:apply-templates select="descendant::constants[@kind='enum']" mode="signature"/>
-    <pre>
-      <xsl:text>jvmtiError
+    <xsl:apply-templates select="synopsis" mode="body"/>
+    <blockquote>
+      <xsl:apply-templates select="typedef" mode="code"/>
+      <xsl:apply-templates select="descendant::constants[@kind='enum']" mode="signature"/>
+      <pre>
+        <xsl:text>jvmtiError
 </xsl:text>
-      <xsl:value-of select="@id"/>(jvmtiEnv* env<xsl:apply-templates select="parameters" mode="signature"/>)</pre>
-  </blockquote>
-  <xsl:apply-templates select="description"/>
-  <xsl:apply-templates select="." mode="generalinfo"/>
-  <xsl:apply-templates select="capabilities|eventcapabilities"/>
-  <xsl:apply-templates select="typedef" mode="body"/>
-  <xsl:apply-templates select="parameters" mode="body"/>
-  <xsl:apply-templates select="." mode="errors"/>
+        <xsl:value-of select="@id"/>(jvmtiEnv* env<xsl:apply-templates select="parameters" mode="signature"/>)</pre>
+    </blockquote>
+    <xsl:apply-templates select="description"/>
+    <xsl:apply-templates select="." mode="generalinfo"/>
+    <xsl:apply-templates select="capabilities|eventcapabilities"/>
+    <xsl:apply-templates select="typedef" mode="body"/>
+    <xsl:apply-templates select="parameters" mode="body"/>
+    <xsl:apply-templates select="." mode="errors"/>
+  </section>
 </xsl:template>
 
 <xsl:template match="function" mode="generalinfo">
@@ -422,7 +441,7 @@
         <xsl:value-of select="@num"/>
       </div>
       <div class="divTableCell">
-        <code><a href="#SetEventNotificationMode">SetEventNotificationMode</a>(JVMTI_ENABLE, 
+        <code><a href="#SetEventNotificationMode">SetEventNotificationMode</a>(JVMTI_ENABLE,
         <xsl:value-of select="@const"/>, NULL)</code>
       </div>
       <div class="divTableCell">
@@ -525,35 +544,36 @@
 
 
 <xsl:template match="callback" mode="body">
-  <hr class="thin">
+  <hr class="thin" />
+  <section>
     <xsl:attribute name="id">
       <xsl:value-of select="@id"/>
     </xsl:attribute>
-  </hr>
-  <xsl:apply-templates select="synopsis" mode="body"/>
-  <div class="callbackCtnr">
-  <blockquote>
-    <pre>
-      <xsl:text>typedef </xsl:text>
-      <xsl:apply-templates select="child::*[position()=1]" mode="signature"/>
-      <xsl:text> (JNICALL *</xsl:text>
-      <xsl:value-of select="@id"/>
-      <xsl:text>)
+    <xsl:apply-templates select="synopsis" mode="body"/>
+    <div class="callbackCtnr">
+    <blockquote>
+      <pre>
+        <xsl:text>typedef </xsl:text>
+        <xsl:apply-templates select="child::*[position()=1]" mode="signature"/>
+        <xsl:text> (JNICALL *</xsl:text>
+        <xsl:value-of select="@id"/>
+        <xsl:text>)
     (</xsl:text>
-      <xsl:for-each select="parameters">
-        <xsl:apply-templates select="param[position()=1]" mode="signature"/>
-        <xsl:for-each select="param[position()>1]">
+        <xsl:for-each select="parameters">
+          <xsl:apply-templates select="param[position()=1]" mode="signature"/>
+          <xsl:for-each select="param[position()>1]">
           <xsl:text>,
      </xsl:text>
-          <xsl:apply-templates select="." mode="signature"/>
+            <xsl:apply-templates select="." mode="signature"/>
+          </xsl:for-each>
         </xsl:for-each>
-      </xsl:for-each>
-      <xsl:text>);</xsl:text>
-    </pre>
-  </blockquote>
-  <xsl:apply-templates select="description"/>
-  <xsl:apply-templates select="parameters" mode="body"/>
-  </div>
+        <xsl:text>);</xsl:text>
+      </pre>
+    </blockquote>
+    <xsl:apply-templates select="description"/>
+    <xsl:apply-templates select="parameters" mode="body"/>
+    </div>
+  </section>
 </xsl:template>
 
 <xsl:template match="synopsis" mode="body">
@@ -561,8 +581,6 @@
 </xsl:template>
 
 <xsl:template match="eventsection">
-  <div class="sep"/>
-  <hr class="thick"/>
   <h2>
     <xsl:value-of select="@label"/>
   </h2>
@@ -582,7 +600,6 @@ typedef struct {
 </xsl:text>
   </pre>
   </blockquote>
-  <div class="sep"/>
   <hr class="thin"/>
   <h3 id="EventIndex">Event Index</h3>
   <ul>
@@ -597,34 +614,31 @@ typedef struct {
   <li>
     <a>
       <xsl:attribute name="href">#<xsl:value-of select="@id"/></xsl:attribute>
-      <b>
-        <xsl:value-of select="@label"/>
-      </b>
+      <xsl:value-of select="@label"/>
     </a>
   </li>
 </xsl:template>
 
 <xsl:template match="event" mode="body">
-  <p>
+  <hr class="thick"/>
+  <section>
     <xsl:attribute name="id">
       <xsl:value-of select="@id"/>
     </xsl:attribute>
-  </p>
-  <hr class="thick"/>
-  <h2><xsl:value-of select="@label"/></h2>
-  <div class="sep"/>
-  <blockquote>
-    <xsl:apply-templates select="typedef" mode="code"/>
-    <pre>
+    <h2><xsl:value-of select="@label"/></h2>
+    <blockquote>
+      <xsl:apply-templates select="typedef" mode="code"/>
+      <pre>
 <xsl:text>void JNICALL
 </xsl:text>
       <xsl:value-of select="@id"/>(jvmtiEnv *jvmti_env<xsl:apply-templates select="parameters" mode="signature"/>)</pre>
-  </blockquote>
-  <xsl:apply-templates select="description"/>
-  <xsl:apply-templates select="." mode="generalinfo"/>
-  <xsl:apply-templates select="typedef" mode="body"/>
-  <xsl:apply-templates select="capabilities"/>
-  <xsl:apply-templates select="parameters" mode="body"/>
+    </blockquote>
+    <xsl:apply-templates select="description"/>
+    <xsl:apply-templates select="." mode="generalinfo"/>
+    <xsl:apply-templates select="typedef" mode="body"/>
+    <xsl:apply-templates select="capabilities"/>
+    <xsl:apply-templates select="parameters" mode="body"/>
+  </section>
 </xsl:template>
 
 <xsl:template match="capabilitiestypedef" mode="code">
@@ -918,7 +932,6 @@ typedef struct {
 
 <xsl:template match="description">
   <xsl:apply-templates/>
-  <div class="sep"/>
 </xsl:template>
 
 <xsl:template match="description" mode="brief">
@@ -977,13 +990,11 @@ typedef struct {
 <xsl:template match="functionphaselist">
   <xsl:variable name="phase" select="@phase"/>
   <ul>
-    <xsl:for-each select="/specification/functionsection/category/function[@phase=$phase and count(@hide)=0]">   
+    <xsl:for-each select="/specification/functionsection/category/function[@phase=$phase and count(@hide)=0]">
       <li>
         <a>
           <xsl:attribute name="href">#<xsl:value-of select="@id"/></xsl:attribute>
-          <b>
-            <xsl:value-of select="@id"/>
-          </b>
+          <xsl:value-of select="@id"/>
         </a>
       </li>
     </xsl:for-each>
@@ -997,9 +1008,7 @@ typedef struct {
       <li>
         <a>
           <xsl:attribute name="href">#<xsl:value-of select="@id"/></xsl:attribute>
-          <b>
-            <xsl:value-of select="@id"/>
-          </b>
+          <xsl:value-of select="@id"/>
         </a>
       </li>
     </xsl:for-each>
@@ -1011,7 +1020,7 @@ typedef struct {
     <xsl:attribute name="href">
       <xsl:value-of select="@id"/>
     </xsl:attribute>
-    <xsl:value-of select="."/>
+    <xsl:apply-templates/>
   </a>
 </xsl:template>
 
@@ -1033,7 +1042,7 @@ typedef struct {
 </xsl:template>
 
 <xsl:template match="parameters" mode="body">
-  <div class="sep"/>
+
   <!--
   docchecker complains if a table has only one row.
   -->
@@ -1083,7 +1092,6 @@ typedef struct {
 </xsl:template>
 
 <xsl:template match="capabilities">
-  <div class="sep"/>
   <!--
   docchecker complains if a table has only one column.
   -->
@@ -1094,17 +1102,17 @@ typedef struct {
           <div class="captionTitle">Capabilities</div>
           <xsl:choose>
             <xsl:when test="count(required)=0">
-              <div class="captionDescr"><b>Required Functionality</b></div>
+              <div class="captionDescr"><span class="bold">Required Functionality</span></div>
             </xsl:when>
             <xsl:otherwise>
               <div class="captionDescr">
-                <b>Optional Functionality:</b> might not be implemented for all virtual machines.
+                <span class="bold">Optional Functionality:</span> might not be implemented for all virtual machines.
                 <xsl:choose>
                   <xsl:when test="count(required)=1">
                     The following capability
                   </xsl:when>
                   <xsl:otherwise>
-                    One of the following capabilities
+                    The following capabilities
                   </xsl:otherwise>
                 </xsl:choose>
                 (as returned by <a href="#GetCapabilities"><code>GetCapabilities</code></a>)
@@ -1148,18 +1156,17 @@ typedef struct {
     <xsl:otherwise>
       <div class="bordered">
         <div class="captionTitle">Capabilities</div>
-        <div class="captionDescr"><b>Required Functionality</b></div>
+        <div class="captionDescr"><span class="bold">Required Functionality</span></div>
       </div>
     </xsl:otherwise>
   </xsl:choose>
 </xsl:template>
 
 <xsl:template match="eventcapabilities">
-  <div class="sep"/>
   <table class="bordered wide">
     <caption>
       <div class="captionTitle">Capabilities</div>
-      <div class="captionDescr"><b>Required Functionality</b></div>
+      <div class="captionDescr"><span class="bold">Required Functionality</span></div>
     </caption>
     <tr class="bgDark">
       <th colspan="2" scope="rowgroup" class="centered">
@@ -1172,7 +1179,7 @@ typedef struct {
     </tr>
     <xsl:for-each select="//capabilityfield">
       <xsl:variable name="capa" select="@id"/>
-      <xsl:variable name="events" select="//event[capabilities/required/@id=$capa]"/>
+      <xsl:variable name="events" select="//event[capabilities/required/@id=$capa and not(ancestor::elide)]"/>
       <xsl:if test="count($events)">
         <tr>
           <th scope="row">
@@ -1235,7 +1242,6 @@ typedef struct {
     <xsl:apply-templates select="errors/error" mode="haserrors"/>
     <xsl:apply-templates select="parameters/param" mode="haserrors"/>
   </xsl:variable>
-  <div class="sep"/>
   <!--
   docchecker complains if a table has only one column.
   -->
@@ -1495,7 +1501,7 @@ typedef struct {
 <xsl:template match="jthread" mode="errordesc2">
   <xsl:param name="id"/>
   <xsl:apply-templates select="." mode="paramlink"/>
-  <xsl:text> is not live (has not been started or is now dead).</xsl:text>
+  <xsl:text> is not alive (has not been started or has terminated).</xsl:text>
 </xsl:template>
 
 <xsl:template match="jthreadGroup" mode="errorid">
@@ -1594,7 +1600,7 @@ typedef struct {
   </xsl:if>
   <xsl:apply-templates select="." mode="paramlink"/>
   <xsl:text> is </xsl:text>
-  <code>NULL</code>
+  a null pointer
   <xsl:text>.</xsl:text>
 </xsl:template>
 
@@ -1629,28 +1635,19 @@ typedef struct {
 </xsl:template>
 
 <xsl:template match="errorsection">
-  <div class="sep"/>
-  <hr class="thick"/>
   <h2>
     Errors
   </h2>
-  <div class="sep"/>
   <xsl:apply-templates select="intro"/>
-  <div class="sep"/>
   <xsl:apply-templates select="errorcategory"/>
-  <div class="sep"/>
 </xsl:template>
 
 <xsl:template match="datasection">
-  <div class="sep"/>
-  <hr class="thick"/>
   <h2>
     Data Types
   </h2>
-  <div class="sep"/>
   <xsl:apply-templates select="intro"/>
   <xsl:apply-templates select="basetypes"/>
-  <div class="sep"/>
   <table id="StructureTypeDefinitions" class="bordered wide">
     <caption class="captionTitle">Structure Type Definitions</caption>
     <tr class="bgLight">
@@ -1661,7 +1658,6 @@ typedef struct {
       <xsl:sort select="@id"/>
     </xsl:apply-templates>
   </table>
-  <div class="sep"/>
   <table id="FunctionTypeDefinitions" class="bordered wide">
     <caption class="captionTitle">Function Type Definitions</caption>
     <tr class="bgLight">
@@ -1672,7 +1668,6 @@ typedef struct {
       <xsl:sort select="@id"/>
     </xsl:apply-templates>
   </table>
-  <div class="sep"/>
   <table id="EnumerationDefinitions" class="bordered wide">
     <caption class="captionTitle">Enumeration Definitions</caption>
     <tr class="bgLight">
@@ -1683,7 +1678,6 @@ typedef struct {
       <xsl:sort select="@id"/>
     </xsl:apply-templates>
   </table>
-  <div class="sep"/>
   <table id="FunctionTable" class="bordered wide">
     <caption class="captionTitle">Function Table Layout</caption>
     <tr class="bgLight">
@@ -1696,7 +1690,6 @@ typedef struct {
       <xsl:with-param name="index" select="1"/>
     </xsl:call-template>
   </table>
-  <div class="sep"/>
 </xsl:template>
 
 
@@ -1770,11 +1763,9 @@ typedef struct {
     <xsl:value-of select="@label"/>
   </h3>
   <xsl:apply-templates select="intro"/>
-  <div class="sep"/>
   <dl>
     <xsl:apply-templates select="errorid"/>
   </dl>
-  <div class="sep"/>
 </xsl:template>
 
 <xsl:template match="errorid">
@@ -1788,7 +1779,6 @@ typedef struct {
   </dt>
   <dd>
     <xsl:apply-templates/>
-    <div class="sep"/>
   </dd>
 </xsl:template>
 
@@ -1801,22 +1791,18 @@ typedef struct {
 </xsl:template>
 
 <xsl:template match="changehistory">
-    <div class="sep"/>
-    <hr class="thick"/>
     <h2>Change History</h2>
     Last update: <xsl:value-of select="@update"/><br/>
     Version: <xsl:call-template name="lastchangeversion"/>
-    <div class="sep"/>
     <xsl:apply-templates select="intro"/>
-    <div class="sep"/>
     <table class="bordered wide">
       <tr class="bgLight">
         <th scope="col">
-          <b>Version</b><br/>
-          <b>Date</b>
+          <span class="bold">Version</span><br/>
+          <span class="bold">Date</span>
         </th>
         <th scope="col">
-          <b>Changes</b>
+          <span class="bold">Changes</span>
         </th>
       </tr>
       <xsl:apply-templates select="change"/>
@@ -1827,9 +1813,9 @@ typedef struct {
   <tr>
     <th scope="row">
       <xsl:if test="count(@version)">
-        <b>
+        <span class="bold">
           <xsl:value-of select="@version"/>
-        </b>
+        </span>
         <br/>
       </xsl:if>
       <xsl:value-of select="@date"/>
@@ -1873,7 +1859,7 @@ typedef struct {
 </xsl:template>
 
 <xsl:template match="rationale">
-  <p style="color: purple">
+  <p style="color: light-dark(purple, #c78fc7)">
   Rationale:
       <xsl:apply-templates/>
   </p>
@@ -1881,7 +1867,7 @@ typedef struct {
 
 <xsl:template match="todo">
   <xsl:if test="$development = 'Show'">
-    <p style="color: green">
+    <p style="color: light-dark(green, lightgreen)">
     To do:
       <xsl:apply-templates/>
     </p>
@@ -1891,12 +1877,6 @@ typedef struct {
 <xsl:template match="elide">
 </xsl:template>
 
-<xsl:template match="b">
-  <b>
-  <xsl:apply-templates/>
-  </b>
-</xsl:template>
-
 <xsl:template match="example">
   <blockquote>
     <pre>
@@ -1904,7 +1884,6 @@ typedef struct {
     </pre>
   </blockquote>
 </xsl:template>
-
 
 <xsl:template match="table">
   <table class="bordered wide">
@@ -1974,14 +1953,13 @@ typedef struct {
   </blockquote>
 </xsl:template>
 
+<!-- TODO: Workaround for empty <p/> tags in jvmti.xml -->
 <xsl:template match="p">
-  <div class="sep"/>
+  <div class="sep" aria-hidden="true"></div>
 </xsl:template>
 
 <xsl:template match="br">
-  <br>
-    <xsl:apply-templates/>
-  </br>
+  <br/>
 </xsl:template>
 
 <xsl:template match="ul">
@@ -2012,9 +1990,9 @@ typedef struct {
 </xsl:template>
 
 <xsl:template match="b">
-  <b>
+  <span class="bold">
     <xsl:apply-templates/>
-  </b>
+  </span>
 </xsl:template>
 
 <xsl:template match="i">
@@ -2027,9 +2005,15 @@ typedef struct {
   <xsl:text>&#032;</xsl:text>
 </xsl:template>
 
+<xsl:template match="sup">
+  <sup>
+    <xsl:copy-of select="@*"/>
+    <xsl:apply-templates/>
+  </sup>
+</xsl:template>
+
 <xsl:template match="jvmti">
   <xsl:text>JVM</xsl:text><small style="font-size: xx-small">&#160;</small><xsl:text>TI</xsl:text>
 </xsl:template>
-
 
 </xsl:stylesheet>

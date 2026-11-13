@@ -1,8 +1,7 @@
 /*
- * Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
- */
-
-/* Copyright  (c) 2002 Graz University of Technology. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2026, IBM Corporation. All rights reserved.
+ * Copyright (c) 2002 Graz University of Technology. All rights reserved.
  *
  * Redistribution and use in  source and binary forms, with or without
  * modification, are permitted  provided that the following conditions are met:
@@ -56,69 +55,78 @@
 
 #ifdef P11_ENABLE_GETNATIVEKEYINFO
 
-#define CK_ATTRIBUTES_TEMPLATE_LENGTH (CK_ULONG)61U
+#define CK_ATTRIBUTES_TEMPLATE_LENGTH (CK_ULONG)60U
 
+// Group attributes based on their value types; put attributes whose values
+// requiring address alignments, e.g. CK_ULONG, first
 static CK_ATTRIBUTE ckpAttributesTemplate[CK_ATTRIBUTES_TEMPLATE_LENGTH] = {
-        {CKA_CLASS, 0, 0},
-        {CKA_TOKEN, 0, 0},
-        {CKA_PRIVATE, 0, 0},
-        {CKA_LABEL, 0, 0},
-        {CKA_APPLICATION, 0, 0},
-        {CKA_VALUE, 0, 0},
-        {CKA_OBJECT_ID, 0, 0},
+        // CK_ULONG
         {CKA_CERTIFICATE_TYPE, 0, 0},
-        {CKA_ISSUER, 0, 0},
-        {CKA_SERIAL_NUMBER, 0, 0},
-        {CKA_AC_ISSUER, 0, 0},
-        {CKA_OWNER, 0, 0},
-        {CKA_ATTR_TYPES, 0, 0},
-        {CKA_TRUSTED, 0, 0},
+        {CKA_CLASS, 0, 0},
+        {CKA_HW_FEATURE_TYPE, 0, 0},
+        {CKA_KEY_GEN_MECHANISM, 0, 0},
         {CKA_KEY_TYPE, 0, 0},
-        {CKA_SUBJECT, 0, 0},
-        {CKA_ID, 0, 0},
-        {CKA_SENSITIVE, 0, 0},
-        {CKA_ENCRYPT, 0, 0},
-        {CKA_DECRYPT, 0, 0},
-        {CKA_WRAP, 0, 0},
-        {CKA_UNWRAP, 0, 0},
-        {CKA_SIGN, 0, 0},
-        {CKA_SIGN_RECOVER, 0, 0},
-        {CKA_VERIFY, 0, 0},
-        {CKA_VERIFY_RECOVER, 0, 0},
-        {CKA_DERIVE, 0, 0},
-        {CKA_START_DATE, 0, 0},
-        {CKA_END_DATE, 0, 0},
-        {CKA_MODULUS, 0, 0},
         {CKA_MODULUS_BITS, 0, 0},
-        {CKA_PUBLIC_EXPONENT, 0, 0},
-        {CKA_PRIVATE_EXPONENT, 0, 0},
-        {CKA_PRIME_1, 0, 0},
-        {CKA_PRIME_2, 0, 0},
-        {CKA_EXPONENT_1, 0, 0},
-        {CKA_EXPONENT_2, 0, 0},
-        {CKA_COEFFICIENT, 0, 0},
-        {CKA_PRIME, 0, 0},
-        {CKA_SUBPRIME, 0, 0},
-        {CKA_BASE, 0, 0},
         {CKA_PRIME_BITS, 0, 0},
         {CKA_SUB_PRIME_BITS, 0, 0},
         {CKA_VALUE_BITS, 0, 0},
         {CKA_VALUE_LEN, 0, 0},
-        {CKA_EXTRACTABLE, 0, 0},
-        {CKA_LOCAL, 0, 0},
-        {CKA_NEVER_EXTRACTABLE, 0, 0},
+        // CK_BBOOL
         {CKA_ALWAYS_SENSITIVE, 0, 0},
-        {CKA_KEY_GEN_MECHANISM, 0, 0},
+        {CKA_DECRYPT, 0, 0},
+        {CKA_DERIVE, 0, 0},
+        {CKA_ENCRYPT, 0, 0},
+        {CKA_EXTRACTABLE, 0, 0},
+        {CKA_HAS_RESET, 0, 0},
+        {CKA_LOCAL, 0, 0},
         {CKA_MODIFIABLE, 0, 0},
-        {CKA_ECDSA_PARAMS, 0, 0},
+        {CKA_NEVER_EXTRACTABLE, 0, 0},
+        {CKA_PRIVATE, 0, 0},
+        {CKA_RESET_ON_INIT, 0, 0},
+        {CKA_SENSITIVE, 0, 0},
+        {CKA_SIGN, 0, 0},
+        {CKA_SIGN_RECOVER, 0, 0},
+        {CKA_TOKEN, 0, 0},
+        {CKA_TRUSTED, 0, 0},
+        {CKA_UNWRAP, 0, 0},
+        {CKA_VERIFY, 0, 0},
+        {CKA_VERIFY_RECOVER, 0, 0},
+        {CKA_WRAP, 0, 0},
+        // PTR: byte[]
+        {CKA_AC_ISSUER, 0, 0},
+        {CKA_ATTR_TYPES, 0, 0},
+        {CKA_BASE, 0, 0},
+        {CKA_COEFFICIENT, 0, 0},
         {CKA_EC_PARAMS, 0, 0},
         {CKA_EC_POINT, 0, 0},
+        {CKA_EXPONENT_1, 0, 0},
+        {CKA_EXPONENT_2, 0, 0},
+        {CKA_ID, 0, 0},
+        {CKA_ISSUER, 0, 0},
+        {CKA_MODULUS, 0, 0},
+        {CKA_OBJECT_ID, 0, 0},
+        {CKA_OWNER, 0, 0},
+        {CKA_PRIME, 0, 0},
+        {CKA_PRIME_1, 0, 0},
+        {CKA_PRIME_2, 0, 0},
+        {CKA_PRIVATE_EXPONENT, 0, 0},
+        {CKA_PUBLIC_EXPONENT, 0, 0},
+        {CKA_SERIAL_NUMBER, 0, 0},
+        {CKA_SUBJECT, 0, 0},
+        {CKA_SUBPRIME, 0, 0},
+        {CKA_VALUE, 0, 0},
+        // PTR: CK_UTF8CHAR[]
+        {CKA_APPLICATION, 0, 0},
+        {CKA_LABEL, 0, 0},
+        // PTR: CK_DATE
+        {CKA_START_DATE, 0, 0},
+        {CKA_END_DATE, 0, 0},
+        // deprecated
         {CKA_SECONDARY_AUTH, 0, 0},
         {CKA_AUTH_PIN_FLAGS, 0, 0},
-        {CKA_HW_FEATURE_TYPE, 0, 0},
-        {CKA_RESET_ON_INIT, 0, 0},
-        {CKA_HAS_RESET, 0, 0},
+        // misc
         {CKA_VENDOR_DEFINED, 0, 0},
+        // keep this at the end to match the impl in getNativeKeyInfo(...)
         {CKA_NETSCAPE_DB, 0, 0},
 };
 
@@ -148,6 +156,7 @@ Java_sun_security_pkcs11_wrapper_PKCS11_getNativeKeyInfo
     jbyte* nativeKeyInfoArrayRaw = NULL;
     jbyte* nativeKeyInfoWrappedKeyArrayRaw = NULL;
     unsigned int sensitiveAttributePosition = (unsigned int)-1;
+    unsigned int valueLenAttributePosition = (unsigned int)-1;
     unsigned int i = 0U;
     unsigned long totalDataSize = 0UL, attributesCount = 0UL;
     unsigned long totalCkAttributesSize = 0UL, totalNativeKeyInfoArraySize = 0UL;
@@ -156,7 +165,6 @@ Java_sun_security_pkcs11_wrapper_PKCS11_getNativeKeyInfo
     jbyte* nativeKeyInfoArrayRawCkAttributesPtr = NULL;
     jbyte* nativeKeyInfoArrayRawDataPtr = NULL;
     CK_MECHANISM_PTR ckpMechanism = NULL;
-    char iv[16] = {0x0};
     CK_ULONG ckWrappedKeyLength = 0U;
     jbyte* wrappedKeySizeWrappedKeyArrayPtr = NULL;
     CK_BYTE_PTR wrappedKeyBufferPtr = NULL;
@@ -201,7 +209,7 @@ Java_sun_security_pkcs11_wrapper_PKCS11_getNativeKeyInfo
     ckpAttributes = (CK_ATTRIBUTE_PTR) calloc(
             CK_ATTRIBUTES_TEMPLATE_LENGTH, sizeof(CK_ATTRIBUTE));
     if (ckpAttributes == NULL) {
-        throwOutOfMemoryError(env, 0);
+        p11ThrowOutOfMemoryError(env, 0);
         goto cleanup;
     }
     memcpy(ckpAttributes, ckpAttributesTemplate,
@@ -218,6 +226,8 @@ Java_sun_security_pkcs11_wrapper_PKCS11_getNativeKeyInfo
             if ((ckpAttributes+i)->type == CKA_SENSITIVE) {
                  sensitiveAttributePosition = attributesCount;
                  TRACE0("DEBUG: GetNativeKeyInfo key is sensitive");
+            } else if ((ckpAttributes+i)->type == CKA_VALUE_LEN) {
+                valueLenAttributePosition = attributesCount;
             }
             attributesCount++;
         }
@@ -294,6 +304,14 @@ Java_sun_security_pkcs11_wrapper_PKCS11_getNativeKeyInfo
             (CK_ATTRIBUTE_PTR)nativeKeyInfoArrayRawCkAttributes,
             attributesCount);
     if (ckAssertReturnValueOK(env, rv) != CK_ASSERT_OK) {
+        goto cleanup;
+    }
+
+    if (class == CKO_SECRET_KEY && (valueLenAttributePosition != (unsigned int)-1) &&
+            *(CK_ULONG*)(((CK_ATTRIBUTE_PTR)(((CK_ATTRIBUTE_PTR)nativeKeyInfoArrayRawCkAttributes)
+                    +valueLenAttributePosition))->pValue) > 256UL) {
+        // NSS' NSC_UnwrapKey does not accept CKO_SECRET_KEY keys with length greater
+        // than 256 (MAX_KEY_LEN - pkcs11i.h). Handle these keys as non-extractable.
         goto cleanup;
     }
 
@@ -419,7 +437,6 @@ Java_sun_security_pkcs11_wrapper_PKCS11_createNativeKey
     jbyte* wrappedKeySizePtr = NULL;
     unsigned int i = 0U;
     CK_MECHANISM_PTR ckpMechanism = NULL;
-    char iv[16] = {0x0};
     CK_ULONG ckWrappedKeyLength = 0UL;
     CK_FUNCTION_LIST_PTR ckpFunctions = getFunctionList(env, obj);
 
@@ -601,7 +618,7 @@ JNIEXPORT jlongArray JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_C_1Generate
 
     ckpKeyHandles = (CK_OBJECT_HANDLE_PTR) calloc(2, sizeof(CK_OBJECT_HANDLE));
     if (ckpKeyHandles == NULL) {
-        throwOutOfMemoryError(env, 0);
+        p11ThrowOutOfMemoryError(env, 0);
         goto cleanup;
     }
     ckpPublicKeyHandle = ckpKeyHandles;   /* first element of array is Public Key */
@@ -701,7 +718,7 @@ JNIEXPORT jbyteArray JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_C_1WrapKey
         ckpWrappedKey = (CK_BYTE_PTR)
                 calloc(ckWrappedKeyLength, sizeof(CK_BYTE));
         if (ckpWrappedKey == NULL) {
-            throwOutOfMemoryError(env, 0);
+            p11ThrowOutOfMemoryError(env, 0);
             goto cleanup;
         }
 
@@ -819,7 +836,7 @@ void copyBackTLSPrfParams(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism, jobject jM
     jMechanismType = (*env)->GetLongField(env, jMechanism, fieldID);
     ckMechanismType = jLongToCKULong(jMechanismType);
     if (ckMechanismType != ckpMechanism->mechanism) {
-        /* we do not have maching types, this should not occur */
+        /* we do not have matching types, this should not occur */
         return;
     }
 
@@ -911,6 +928,11 @@ JNIEXPORT jlong JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_C_1DeriveKey
     rv = (*ckpFunctions->C_DeriveKey)(ckSessionHandle, ckpMechanism, ckBaseKeyHandle,
                  ckpAttributes, ckAttributesLength, phKey);
 
+    /* If derivation failed, do not attempt copy-back */
+    if (ckAssertReturnValueOK(env, rv) != CK_ASSERT_OK) {
+        goto cleanup;
+    }
+
     jKeyHandle = ckLongToJLong(ckKeyHandle);
 
     switch (ckpMechanism->mechanism) {
@@ -919,9 +941,22 @@ JNIEXPORT jlong JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_C_1DeriveKey
         /* we must copy back the client version */
         ssl3CopyBackClientVersion(env, ckpMechanism, jMechanism);
         break;
-    case CKM_TLS12_MASTER_KEY_DERIVE:
-        tls12CopyBackClientVersion(env, ckpMechanism, jMechanism);
+    case CKM_TLS12_MASTER_KEY_DERIVE: {
+        CK_TLS12_MASTER_KEY_DERIVE_PARAMS *p =
+            (CK_TLS12_MASTER_KEY_DERIVE_PARAMS *)ckpMechanism->pParameter;
+
+        copyBackClientVersion(env, ckpMechanism, jMechanism,
+                p->pVersion, CLASS_TLS12_MASTER_KEY_DERIVE_PARAMS);
         break;
+    }
+    case CKM_TLS12_EXTENDED_MASTER_KEY_DERIVE: {
+        CK_TLS12_EXTENDED_MASTER_KEY_DERIVE_PARAMS *p =
+            (CK_TLS12_EXTENDED_MASTER_KEY_DERIVE_PARAMS *)ckpMechanism->pParameter;
+
+        copyBackClientVersion(env, ckpMechanism, jMechanism,
+                p->pVersion, CLASS_TLS12_EXTENDED_MASTER_KEY_DERIVE_PARAMS);
+        break;
+    }
     case CKM_SSL3_KEY_AND_MAC_DERIVE:
     case CKM_TLS_KEY_AND_MAC_DERIVE:
         /* we must copy back the unwrapped key info to the jMechanism object */
@@ -938,8 +973,9 @@ JNIEXPORT jlong JNICALL Java_sun_security_pkcs11_wrapper_PKCS11_C_1DeriveKey
         // empty
         break;
     }
-    if (ckAssertReturnValueOK(env, rv) != CK_ASSERT_OK) {
-        jKeyHandle =0L;
+    /* Do not continue if any copy-back operation raised an exception */
+    if ((*env)->ExceptionCheck(env)) {
+        goto cleanup;
     }
 
 cleanup:
@@ -949,7 +985,7 @@ cleanup:
     return jKeyHandle ;
 }
 
-static void copyBackClientVersion(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism, jobject jMechanism,
+void copyBackClientVersion(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism, jobject jMechanism,
         CK_VERSION *ckVersion, const char *class_master_key_derive_params)
 {
     jclass jMasterKeyDeriveParamsClass, jMechanismClass, jVersionClass;
@@ -967,7 +1003,7 @@ static void copyBackClientVersion(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism, jo
     jMechanismType = (*env)->GetLongField(env, jMechanism, fieldID);
     ckMechanismType = jLongToCKULong(jMechanismType);
     if (ckMechanismType != ckpMechanism->mechanism) {
-        /* we do not have maching types, this should not occur */
+        /* we do not have matching types, this should not occur */
         return;
     }
 
@@ -1022,25 +1058,6 @@ void ssl3CopyBackClientVersion(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism,
     }
 }
 
-/*
- * Copy back the client version information from the native
- * structure to the Java object. This is only used for
- * CKM_TLS12_MASTER_KEY_DERIVE mechanism when used for deriving a key.
- *
- */
-void tls12CopyBackClientVersion(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism,
-        jobject jMechanism)
-{
-    CK_TLS12_MASTER_KEY_DERIVE_PARAMS *ckTLS12MasterKeyDeriveParams;
-    ckTLS12MasterKeyDeriveParams =
-            (CK_TLS12_MASTER_KEY_DERIVE_PARAMS *)ckpMechanism->pParameter;
-    if (ckTLS12MasterKeyDeriveParams != NULL_PTR) {
-        copyBackClientVersion(env, ckpMechanism, jMechanism,
-                ckTLS12MasterKeyDeriveParams->pVersion,
-                CLASS_TLS12_MASTER_KEY_DERIVE_PARAMS);
-    }
-}
-
 static void copyBackKeyMatParams(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism,
         jobject jMechanism, CK_SSL3_RANDOM_DATA *RandomInfo,
         CK_SSL3_KEY_MAT_OUT_PTR ckSSL3KeyMatOut, const char *class_key_mat_params)
@@ -1065,7 +1082,7 @@ static void copyBackKeyMatParams(JNIEnv *env, CK_MECHANISM_PTR ckpMechanism,
     jMechanismType = (*env)->GetLongField(env, jMechanism, fieldID);
     ckMechanismType = jLongToCKULong(jMechanismType);
     if (ckMechanismType != ckpMechanism->mechanism) {
-        /* we do not have maching types, this should not occur */
+        /* we do not have matching types, this should not occur */
         return;
     }
 

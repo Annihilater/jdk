@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,12 +55,9 @@ class ServiceNotifier extends Thread {
         super(null, null, service.getName() + " notifier", 0, false);
         this.service = service;
         listeners = new Vector<>();
-        try {
-              setPriority(Thread.NORM_PRIORITY-1);
-              setDaemon(true);
-              start();
-        } catch (SecurityException e) {
-        }
+        setPriority(Thread.NORM_PRIORITY-1);
+        setDaemon(true);
+        start();
     }
 
     void addListener(PrintServiceAttributeListener listener) {
@@ -93,10 +90,7 @@ class ServiceNotifier extends Thread {
      * immediate notification of listeners.
      */
     void wake() {
-        try {
-            interrupt();
-        } catch (SecurityException e) {
-        }
+        interrupt();
     }
 
    /* A heuristic is used to calculate sleep time.
@@ -104,6 +98,7 @@ class ServiceNotifier extends Thread {
      * a minimum of 15 seconds. Ensures this won't take more than 10%
      * of available time.
      */
+    @Override
     public void run() {
 
        long minSleepTime = 15000;

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2016 SAP SE. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "interpreter/interp_masm.hpp"
 #include "interpreter/interpreter.hpp"
@@ -73,7 +72,7 @@ InterpreterRuntime::SignatureHandlerGenerator::SignatureHandlerGenerator(
 void InterpreterRuntime::SignatureHandlerGenerator::pass_int() {
   int int_arg_nr = jni_offset() - _fp_arg_nr;
   Register r = (int_arg_nr < 5 /*max_int_register_arguments*/) ?
-                 as_Register(int_arg_nr) + Z_ARG1->encoding() : Z_R0;
+                 as_Register(int_arg_nr + Z_ARG1->encoding()) : Z_R0;
 
   __ z_lgf(r, locals_j_arg_at(offset()));
   if (DEBUG_ONLY(true ||) int_arg_nr >= 5) {
@@ -84,7 +83,7 @@ void InterpreterRuntime::SignatureHandlerGenerator::pass_int() {
 void InterpreterRuntime::SignatureHandlerGenerator::pass_long() {
   int int_arg_nr = jni_offset() - _fp_arg_nr;
   Register r = (int_arg_nr < 5 /*max_int_register_arguments*/) ?
-                 as_Register(int_arg_nr) + Z_ARG1->encoding() : Z_R0;
+                 as_Register(int_arg_nr + Z_ARG1->encoding()) : Z_R0;
 
   __ z_lg(r, locals_j_arg_at(offset() + 1)); // Long resides in upper slot.
   if (DEBUG_ONLY(true ||) int_arg_nr >= 5) {
@@ -115,13 +114,13 @@ void InterpreterRuntime::SignatureHandlerGenerator::pass_double() {
 void InterpreterRuntime::SignatureHandlerGenerator::pass_object() {
   int int_arg_nr = jni_offset() - _fp_arg_nr;
   Register  r = (int_arg_nr < 5 /*max_int_register_arguments*/) ?
-                  as_Register(int_arg_nr) + Z_ARG1->encoding() : Z_R0;
+                  as_Register(int_arg_nr + Z_ARG1->encoding()) : Z_R0;
 
   // The handle for a receiver will never be null.
-  bool do_NULL_check = offset() != 0 || is_static();
+  bool do_nullptr_check = offset() != 0 || is_static();
 
   Label do_null;
-  if (do_NULL_check) {
+  if (do_nullptr_check) {
     __ clear_reg(r, true, false);
     __ load_and_test_long(Z_R0, locals_j_arg_at(offset()));
     __ z_bre(do_null);
@@ -133,7 +132,6 @@ void InterpreterRuntime::SignatureHandlerGenerator::pass_object() {
   }
 }
 
-
 void InterpreterRuntime::SignatureHandlerGenerator::generate(uint64_t fingerprint) {
   __ z_lgr(Z_R1, Z_ARG1); // Z_R1 is used in locals_j_arg_at(index) macro.
 
@@ -141,7 +139,7 @@ void InterpreterRuntime::SignatureHandlerGenerator::generate(uint64_t fingerprin
   iterate(fingerprint);
   __ load_const_optimized(Z_RET, AbstractInterpreter::result_handler(method()->result_type()));
   __ z_br(Z_R14);
-  __ flush();
+  __ invalidate_icache();
 }
 
 #undef  __

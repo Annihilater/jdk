@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,22 +25,22 @@ package jdk.test.lib.security;
 
 import java.io.*;
 
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
 
-
 public final class TestTLSHandshake extends SSLSocketTest {
 
-    public static final String CIPHER_SUITE =
-        "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384";
-    public static final long HASHCODE = -1057291798L;
-    public static final long ANCHOR_HASHCODE = 1688661792L;
-    public static final String CERT_SERIAL = "edbec8f705af2514";
-    public static final String ANCHOR_CERT_SERIAL = "8e191778b2f331be";
+    public static final long CERT_ID = Integer.toUnsignedLong(-1057291798);
+    public static final long ANCHOR_CERT_ID = Integer.toUnsignedLong(1688661792);
+    public static final String CERT_SERIAL = "00:ed:be:c8:f7:05:af:25:14";
+    public static final String ANCHOR_CERT_SERIAL = "8e:19:17:78:b2:f3:31:be";
 
     public String protocolVersion;
     public String peerHost;
     public int peerPort;
+    public String cipherSuite;
+    public String namedGroup;
 
     @Override
     protected void runServerApplication(SSLSocket socket) throws Exception {
@@ -54,7 +54,17 @@ public final class TestTLSHandshake extends SSLSocketTest {
 
     @Override
     protected void runClientApplication(SSLSocket socket) throws Exception {
-        socket.setEnabledCipherSuites(new String[] { CIPHER_SUITE });
+        SSLParameters params = socket.getSSLParameters();
+        if (protocolVersion != null) {
+            params.setProtocols(new String [] { protocolVersion });
+        }
+        if (cipherSuite != null) {
+            params.setCipherSuites(new String[] { cipherSuite });
+        }
+        if (namedGroup != null) {
+            params.setNamedGroups(new String[] { namedGroup });
+        }
+        socket.setSSLParameters(params);
         InputStream sslIS = socket.getInputStream();
         OutputStream sslOS = socket.getOutputStream();
 
@@ -66,5 +76,6 @@ public final class TestTLSHandshake extends SSLSocketTest {
         protocolVersion =  sslSession.getProtocol();
         peerHost = sslSession.getPeerHost();
         peerPort = sslSession.getPeerPort();
+        cipherSuite = sslSession.getCipherSuite();
     }
 }

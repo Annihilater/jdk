@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,17 +22,11 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "gc/shared/partialArrayTaskStepper.hpp"
 #include "oops/arrayOop.hpp"
+#include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/powerOfTwo.hpp"
-
-static uint compute_task_limit(uint n_workers) {
-  // Don't need more than n_workers tasks at a time.  But allowing up to
-  // that maximizes available parallelism.
-  return n_workers;
-}
 
 static uint compute_task_fanout(uint task_limit) {
   assert(task_limit > 0, "precondition");
@@ -48,7 +42,11 @@ static uint compute_task_fanout(uint task_limit) {
   return result;
 }
 
-PartialArrayTaskStepper::PartialArrayTaskStepper(uint n_workers) :
-  _task_limit(compute_task_limit(n_workers)),
+PartialArrayTaskStepper::PartialArrayTaskStepper(uint num_workers) :
+  _task_limit(num_workers),
   _task_fanout(compute_task_fanout(_task_limit))
-{}
+{
+  // Current stepper code only supports up to 2^31 elements in the array.
+  // arrayOopDesc::max_array_length() is not constexpr, so we workaround using the return type's maximum value.
+  static_assert(std::numeric_limits<decltype(arrayOopDesc::max_array_length(T_OBJECT))>::max() <= INT32_MAX);
+}

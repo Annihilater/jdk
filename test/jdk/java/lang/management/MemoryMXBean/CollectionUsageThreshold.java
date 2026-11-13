@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,9 +33,9 @@
  * @library /test/lib
  * @modules jdk.management
  * @build CollectionUsageThreshold MemoryUtil RunUtil
- * @requires vm.opt.ExplicitGCInvokesConcurrent == "false" | vm.opt.ExplicitGCInvokesConcurrent == "null"
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @requires (vm.opt.ExplicitGCInvokesConcurrent == "false" | vm.opt.ExplicitGCInvokesConcurrent == "null") & vm.compMode != "Xcomp"
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/timeout=300 -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:. CollectionUsageThreshold
  */
 
@@ -45,10 +45,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.management.*;
 import javax.management.openmbean.CompositeData;
 import java.lang.management.*;
-import static java.lang.management.MemoryNotificationInfo.*;;
+import static java.lang.management.MemoryNotificationInfo.*;
 import static java.lang.management.ManagementFactory.*;
 
-import sun.hotspot.code.Compiler;
+import jdk.test.whitebox.code.Compiler;
 
 public class CollectionUsageThreshold {
     private static final MemoryMXBean mm = getMemoryMXBean();
@@ -72,7 +72,11 @@ public class CollectionUsageThreshold {
      */
     public static void main(String a[]) throws Throwable {
         final String main = "CollectionUsageThreshold$TestMain";
-        RunUtil.runTestKeepGcOpts(main);
+        // CollectionUsageThreshold$TestMain expects only System.gc() triggered
+        // GCs. ZGC's Adaptive Heap Sizing thus requires some buffer to not
+        // trigger heuristic GCs. Similarly this test is incompatible with any
+        // period GC heuristics / options like ZCollectionInterval.
+        RunUtil.runTestKeepGcOpts(main, "-Xms128m", "-Xmx512m");
         RunUtil.runTestClearGcOpts(main, "-XX:+UseSerialGC");
         RunUtil.runTestClearGcOpts(main, "-XX:+UseParallelGC");
         RunUtil.runTestClearGcOpts(main, "-XX:+UseG1GC");
@@ -259,9 +263,11 @@ public class CollectionUsageThreshold {
         }
 
         private void fail(String msg) {
-            // reset the barrier to cause BrokenBarrierException to avoid hanging
-            barrier.reset();
-            throw new RuntimeException(msg);
+            System.out.println("Checker failed: " + msg);
+            // We cannot simply do a barrier.reset() here as the main thread may
+            // not yet have reached the barrier yet. For example in the case we
+            // got an unexpected GC.
+            System.exit(-1);
         }
     }
 }

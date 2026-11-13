@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@
  * @compile -XDignore.symbol.file=true TranslucentShapedFrameTest.java
  * @compile -XDignore.symbol.file=true TSFrame.java
  * @run main/manual/othervm TranslucentShapedFrameTest
- * @run main/manual/othervm -Dsun.java2d.noddraw=true TranslucentShapedFrameTest
+ * @run main/manual/othervm -Dsun.java2d.d3d=false TranslucentShapedFrameTest
  */
 
 import java.awt.Color;
@@ -122,7 +122,7 @@ public class TranslucentShapedFrameTest extends javax.swing.JFrame {
 
         jTextArea1.setColumns(20);
         jTextArea1.setRows(5);
-        jTextArea1.setText("Create translucent and/or shaped, or\nnon-opaque frame. Make sure it behaves\ncorrectly (no artifacts left on the screen\nwhen dragging - if dragging is possible).\nClick \"Passed\" if the test behaves correctly,\n\"Falied\" otherwise.");
+        jTextArea1.setText("Create translucent and/or shaped, or\nnon-opaque frame. Make sure it behaves\ncorrectly (no artifacts left on the screen\nwhen dragging - if dragging is possible).\nClick \"Passed\" if the test behaves correctly,\n\"Failed\" otherwise.");
         jScrollPane1.setViewportView(jTextArea1);
 
         jLabel2.setText("Instructions:");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,8 +22,8 @@
  *
  */
 
-#ifndef SHARE_VM_GC_G1_NODE_TIMES_HPP
-#define SHARE_VM_GC_G1_NODE_TIMES_HPP
+#ifndef SHARE_GC_G1_G1NUMASTATS_HPP
+#define SHARE_GC_G1_G1NUMASTATS_HPP
 
 #include "memory/allocation.hpp"
 
@@ -91,7 +91,7 @@ public:
   };
 
 private:
-  const int* _node_ids;
+  const uint* _node_ids;
   uint _num_node_ids;
 
   NodeDataArray* _node_data[NodeDataItemsSentinel];
@@ -101,7 +101,7 @@ private:
   void print_mutator_alloc_stat_debug();
 
 public:
-  G1NUMAStats(const int* node_ids, uint num_node_ids);
+  G1NUMAStats(const uint* node_ids, uint num_node_ids);
   ~G1NUMAStats();
 
   void clear(G1NUMAStats::NodeDataItems phase);
@@ -116,4 +116,4 @@ public:
   void print_statistics();
 };
 
-#endif // SHARE_VM_GC_G1_NODE_TIMES_HPP
+#endif // SHARE_GC_G1_G1NUMASTATS_HPP

@@ -99,7 +99,6 @@
 class ciReplay {
   CI_PACKAGE_ACCESS
 
-#ifndef PRODUCT
  private:
   static int replay_impl(TRAPS);
 
@@ -123,7 +122,6 @@ class ciReplay {
   static bool should_not_inline(ciMethod* method);
   static bool should_inline(void* data, ciMethod* method, int bci, int inline_depth, bool& should_delay);
   static bool should_not_inline(void* data, ciMethod* method, int bci, int inline_depth);
-#endif
 
  public:
   static oop obj_field(oop obj, Symbol* name);
@@ -136,6 +134,7 @@ class ciReplay {
 // 1: first instanceKlass sets protection domain (8275868)
 //    replace current_mileage with invocation_count (8276095)
 // 2: incremental inlining support (8254108)
-#define REPLAY_VERSION 2 // current version, bump up for incompatible changes
+// 3: value class array support (8375548 & 8388709)
+#define REPLAY_VERSION 3 // current version, bump up for incompatible changes
 
 #endif // SHARE_CI_CIREPLAY_HPP

@@ -30,7 +30,7 @@
 #include "gc/shared/weakProcessor.inline.hpp"
 #include "gc/shenandoah/shenandoahHeap.hpp"
 #include "gc/shenandoah/shenandoahUtils.hpp"
-#include "runtime/thread.hpp"
+#include "runtime/javaThread.hpp"
 #include "runtime/safepoint.hpp"
 
 template<typename IsAlive, typename KeepAlive>
@@ -54,7 +54,7 @@ ShenandoahParallelWeakRootsCleaningTask<IsAlive, KeepAlive>::~ShenandoahParallel
 template<typename IsAlive, typename KeepAlive>
 void ShenandoahParallelWeakRootsCleaningTask<IsAlive, KeepAlive>::work(uint worker_id) {
   {
-    ShenandoahWorkerTimingsTracker x(_phase, ShenandoahPhaseTimings::VMWeakRoots, worker_id);
+    ShenandoahWorkerTimingsTracker x(_phase, ShenandoahPhaseTimings::VMWeaks, worker_id);
     _weak_processing_task.work<IsAlive, KeepAlive>(worker_id, _is_alive, _keep_alive);
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,81 +22,216 @@
  *
  */
 
-#ifndef SHARE_VM_PRIMS_TAGMAPTABLE_HPP
-#define SHARE_VM_PRIMS_TAGMAPTABLE_HPP
+#ifndef SHARE_PRIMS_JVMTITAGMAPTABLE_HPP
+#define SHARE_PRIMS_JVMTITAGMAPTABLE_HPP
 
+#include "gc/shared/collectedHeap.hpp"
+#include "memory/allocation.hpp"
+#include "oops/klass.hpp"
+#include "oops/layoutKind.hpp"
+#include "oops/valueKlass.hpp"
 #include "oops/weakHandle.hpp"
-#include "utilities/hashtable.hpp"
+#include "utilities/resizableHashTable.hpp"
 
 class JvmtiEnv;
 
-// Hashtable to record oops used for JvmtiTagMap
-class JvmtiTagMapEntryClosure;
+// Describes an object which can be tagged during heap walk operation.
+// - generic heap object: _obj: oop, offset == 0, _value_klass == nullptr;
+// - value heap object: _obj: oop, offset == 0, _value_klass == _obj.klass();
+// - flat value object: _obj: holder object, offset == offset in the holder, _value_klass == klass of the flattened object;
+class JvmtiHeapwalkObject {
+  oop _obj;                                 // for flattened value object this is holder object
+  int _offset;                              // == 0 for heap objects
+  ValueKlass* _value_klass;                 // for value object, nullptr otherwise
+  OptionalFlatLayout _optional_flat_layout; // layout in holder object, used only for flat->heap conversion
 
-class JvmtiTagMapEntry : public HashtableEntry<WeakHandle, mtServiceability> {
-  jlong _tag;                           // the tag
- public:
-  JvmtiTagMapEntry* next() const {
-    return (JvmtiTagMapEntry*)HashtableEntry<WeakHandle, mtServiceability>::next();
+  static ValueKlass* value_klass_or_null(oop obj) {
+    Klass* k = obj->klass();
+    return k->is_value_klass() ? ValueKlass::cast(k) : nullptr;
   }
+public:
+  JvmtiHeapwalkObject(): _obj(nullptr), _offset(0), _value_klass(nullptr), _optional_flat_layout() {}
+  JvmtiHeapwalkObject(oop obj): _obj(obj), _offset(0), _value_klass(value_klass_or_null(obj)), _optional_flat_layout(OptionalFlatLayout::non_flat()) {}
+  JvmtiHeapwalkObject(oop obj, int offset, ValueKlass* vk, OptionalFlatLayout ofl): _obj(obj), _offset(offset), _value_klass(vk), _optional_flat_layout(ofl) {}
 
-  JvmtiTagMapEntry** next_addr() {
-    return (JvmtiTagMapEntry**)HashtableEntry<WeakHandle, mtServiceability>::next_addr();
+  inline bool is_empty() const { return _obj == nullptr; }
+  inline bool is_value() const { return _value_klass != nullptr; }
+  inline bool is_flat() const { return _offset != 0; }
+
+  inline oop obj() const { return _obj; }
+  inline int offset() const { return _offset; }
+  inline ValueKlass* value_klass() const { return _value_klass; }
+  inline OptionalFlatLayout optional_flat_layout() const { return _optional_flat_layout; }
+
+  inline Klass* klass() const { return is_value() ? _value_klass : obj()->klass(); }
+
+  static bool equals(const JvmtiHeapwalkObject& obj1, const JvmtiHeapwalkObject& obj2);
+
+  bool operator==(const JvmtiHeapwalkObject& other) const {
+    // need to compare value_klass too to handle the case when flat object has flat field at offset 0
+    return _obj == other._obj && _offset == other._offset && _value_klass == other._value_klass;
   }
-
-  oop object();
-  oop object_no_keepalive();
-  jlong tag() const       { return _tag; }
-  void set_tag(jlong tag) { _tag = tag; }
+  bool operator!=(const JvmtiHeapwalkObject& other) const {
+    return !(*this == other);
+  }
 };
 
-class JvmtiTagMapTable : public Hashtable<WeakHandle, mtServiceability> {
-  enum Constants {
-    _table_size  = 1007
+// The oop is needed for lookup rather than creating a WeakHandle during
+// lookup because the HeapWalker may walk soon to be dead objects and
+// creating a WeakHandle for an otherwise dead object makes G1 unhappy.
+//
+// This class is the Key type for inserting in ResizeableHashTable
+// Its get_hash() and equals() methods are also used for getting the hash
+// value of a Key and comparing two Keys, respectively.
+//
+// Value objects: keep just one tag for all equal value objects including heap allocated value objects.
+// We have to keep a strong reference to each unique value object with a non-zero tag.
+// During heap walking flattened value object tags stored in separate JvmtiFlatTagMapTable,
+// converted to standard strong entries in JvmtiTagMapTable outside of safepoint.
+// All equal value objects should have the same tag.
+// Keep value objects alive (1 copy for each "value") until their tags are removed.
+
+class JvmtiTagMapKey : public CHeapObj<mtServiceability> {
+  union {
+    WeakHandle _wh;
+    OopHandle _h; // for value objects (_is_weak == false)
   };
+  bool _is_weak;
+  // temporarily hold obj while searching
+  const JvmtiHeapwalkObject* _obj;
 
-private:
-  JvmtiTagMapEntry* bucket(int i) {
-    return (JvmtiTagMapEntry*) Hashtable<WeakHandle, mtServiceability>::bucket(i);
-  }
+ public:
+  JvmtiTagMapKey(const JvmtiHeapwalkObject* obj);
+  // Copy ctor is called when we put entry to the hash table.
+  JvmtiTagMapKey(const JvmtiTagMapKey& src);
+  JvmtiTagMapKey& operator=(const JvmtiTagMapKey&) = delete;
 
-  JvmtiTagMapEntry** bucket_addr(int i) {
-    return (JvmtiTagMapEntry**) Hashtable<WeakHandle, mtServiceability>::bucket_addr(i);
-  }
+  JvmtiHeapwalkObject heapwalk_object() const;
 
-  JvmtiTagMapEntry* new_entry(unsigned int hash, WeakHandle w, jlong tag);
-  void free_entry(JvmtiTagMapEntry* entry);
+  oop object() const;
+  oop object_no_keepalive() const;
+  void release_handle();
 
-  unsigned int compute_hash(oop obj);
+  static unsigned get_hash(const JvmtiTagMapKey& entry);
+  static bool equals(const JvmtiTagMapKey& lhs, const JvmtiTagMapKey& rhs);
+};
 
-  JvmtiTagMapEntry* find(int index, unsigned int hash, oop obj);
+typedef
+ResizeableHashTable <JvmtiTagMapKey, jlong,
+                              AnyObj::C_HEAP, mtServiceability,
+                              JvmtiTagMapKey::get_hash,
+                              JvmtiTagMapKey::equals,
+                              5, /*load-factor*/
+                              true /*large table */> ResizableHT;
 
-  void resize_if_needed();
-
+// A supporting class for iterating over all entries in Hashmap
+class JvmtiTagMapKeyClosure {
 public:
+  virtual bool do_entry(JvmtiTagMapKey& key, jlong& value) = 0;
+};
+
+class JvmtiTagMapTable : public CHeapObj<mtServiceability> {
+ private:
+  ResizableHT _table;
+
+  jlong* lookup(const JvmtiHeapwalkObject& obj) const;
+
+ public:
   JvmtiTagMapTable();
   ~JvmtiTagMapTable();
 
-  JvmtiTagMapEntry* find(oop obj);
-  JvmtiTagMapEntry* add(oop obj, jlong tag);
+  int number_of_entries() const { return _table.number_of_entries(); }
 
-  void remove(oop obj);
+  jlong find(const JvmtiHeapwalkObject& obj) const;
+  // obj cannot be flat
+  void add(const JvmtiHeapwalkObject& obj, jlong tag);
+  // update the tag if the entry exists, returns false otherwise
+  bool update(const JvmtiHeapwalkObject& obj, jlong tag);
+
+  bool remove(const JvmtiHeapwalkObject& obj);
 
   // iterate over all entries in the hashmap
-  void entry_iterate(JvmtiTagMapEntryClosure* closure);
+  void entry_iterate(JvmtiTagMapKeyClosure* closure);
 
-  bool is_empty() const { return number_of_entries() == 0; }
+  bool is_empty() const { return _table.number_of_entries() == 0; }
 
-  // Cleanup cleared entries and post
-  void remove_dead_entries(JvmtiEnv* env, bool post_object_free);
-  void rehash();
+  // Cleanup cleared entries and store dead object tags in objects array
+  void remove_dead_entries(GrowableArray<jlong>* objects);
   void clear();
 };
 
-// A supporting class for iterating over all entries in Hashmap
-class JvmtiTagMapEntryClosure {
- public:
-  virtual void do_entry(JvmtiTagMapEntry* entry) = 0;
+
+// This class is the Key type for hash table to keep flattened value objects during heap walk operations.
+// When used for lookups it contains a buffered (non-flattened) value.
+// The objects needs to be moved to JvmtiTagMapTable outside of safepoint.
+class JvmtiValueTagMapKey: public CHeapObj<mtServiceability> {
+private:
+  // holder object
+  OopHandle _h;
+  // temporarily holds holder object while searching
+  oop _holder;
+  int _offset;
+  ValueKlass* _value_klass;
+  OptionalFlatLayout _optional_flat_layout;
+
+  OopHandle create_holder_oop_handle() const;
+
+public:
+  JvmtiValueTagMapKey(const JvmtiHeapwalkObject& obj);
+  // Copy ctor is called when we put entry to the hash table.
+  JvmtiValueTagMapKey(const JvmtiValueTagMapKey& src);
+
+  JvmtiValueTagMapKey& operator=(const JvmtiValueTagMapKey&) = delete;
+
+  JvmtiHeapwalkObject heapwalk_object() const;
+
+  oop holder() const;
+  oop holder_no_keepalive() const;
+  int offset() const { return _offset; }
+  ValueKlass* value_klass() const { return _value_klass; }
+  FlatLayout flat_layout() const { return _optional_flat_layout.get(); }
+
+  void release_handle();
+
+  static unsigned get_hash(const JvmtiValueTagMapKey& entry);
+  static bool equals(const JvmtiValueTagMapKey& lhs, const JvmtiValueTagMapKey& rhs);
 };
 
-#endif // SHARE_VM_PRIMS_TAGMAPTABLE_HPP
+typedef
+ResizeableHashTable <JvmtiValueTagMapKey, jlong,
+                     AnyObj::C_HEAP, mtServiceability,
+                     JvmtiValueTagMapKey::get_hash,
+                     JvmtiValueTagMapKey::equals> FlatObjectHashtable;
+
+// A supporting class for iterating over all entries in JvmtiFlatTagMapTable.
+class JvmtiValueTagMapKeyClosure {
+public:
+  virtual bool do_entry(JvmtiValueTagMapKey& key, jlong& value) = 0;
+};
+
+class JvmtiFlatTagMapTable: public CHeapObj<mtServiceability> {
+private:
+  FlatObjectHashtable _table;
+
+public:
+  JvmtiFlatTagMapTable();
+  ~JvmtiFlatTagMapTable();
+
+  int number_of_entries() const { return _table.number_of_entries(); }
+
+  jlong find(const JvmtiHeapwalkObject& obj) const;
+  // obj must be flat
+  void add(const JvmtiHeapwalkObject& obj, jlong tag);
+
+  // returns tag for the entry, 0 is not found
+  jlong remove(const JvmtiHeapwalkObject& obj);
+
+  // iterate over entries in the hashmap
+  void entry_iterate(JvmtiValueTagMapKeyClosure* closure);
+
+  bool is_empty() const { return _table.number_of_entries() == 0; }
+
+  void clear();
+};
+
+#endif // SHARE_PRIMS_JVMTITAGMAPTABLE_HPP

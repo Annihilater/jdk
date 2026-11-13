@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,9 +44,8 @@ public class ObjectMonitor extends VMObject {
   private static synchronized void initialize(TypeDataBase db) throws WrongTypeException {
     heap = VM.getVM().getObjectHeap();
     Type type  = db.lookupType("ObjectMonitor");
-    sun.jvm.hotspot.types.Field f = type.getField("_header");
-    headerFieldOffset = f.getOffset();
-    f = type.getField("_object");
+
+    sun.jvm.hotspot.types.Field f = type.getField("_object");
     objectFieldOffset = f.getOffset();
     f = type.getField("_owner");
     ownerFieldOffset = f.getOffset();
@@ -55,18 +54,13 @@ public class ObjectMonitor extends VMObject {
     contentionsField  = new CIntField(type.getCIntegerField("_contentions"), 0);
     waitersField      = new CIntField(type.getCIntegerField("_waiters"), 0);
     recursionsField   = type.getCIntegerField("_recursions");
+
+    ANONYMOUS_OWNER = db.lookupLongConstant("ObjectMonitor::ANONYMOUS_OWNER").longValue();
   }
 
   public ObjectMonitor(Address addr) {
     super(addr);
   }
-
-  public Mark header() {
-    return new Mark(addr.addOffsetTo(headerFieldOffset));
-  }
-
-  // FIXME
-  //  void      set_header(markWord hdr);
 
   // FIXME: must implement and delegate to platform-dependent implementation
   //  public boolean isBusy();
@@ -77,6 +71,10 @@ public class ObjectMonitor extends VMObject {
       return true;
     }
     return false;
+  }
+
+  public boolean isOwnedAnonymous() {
+    return addr.getAddressAt(ownerFieldOffset).asLongValue() == ANONYMOUS_OWNER;
   }
 
   public Address owner() { return addr.getAddressAt(ownerFieldOffset); }
@@ -103,16 +101,19 @@ public class ObjectMonitor extends VMObject {
       return (int)contentionsField.getValue(this);
   }
 
-  // The following four either aren't expressed as typed fields in
+  private static ObjectHeap    heap;
+
+  // The following three either aren't expressed as typed fields in
   // vmStructs.cpp because they aren't strongly typed in the VM, or
   // would confuse the SA's type system.
-  private static ObjectHeap    heap;
-  private static long          headerFieldOffset;
   private static long          objectFieldOffset;
   private static long          ownerFieldOffset;
   private static long          nextOMFieldOffset;
+
   private static CIntField     contentionsField;
   private static CIntField     waitersField;
   private static CIntegerField recursionsField;
+  private static long          ANONYMOUS_OWNER;
+
   // FIXME: expose platform-dependent stuff
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 package nsk.jdb.interrupt.interrupt001;
 
+import jdk.test.lib.thread.ThreadWrapper;
 import nsk.share.*;
 import nsk.share.jdb.*;
 
@@ -32,18 +33,26 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /* This is debuggee aplication */
 public class interrupt001a {
-    private class MyThread extends Thread {
+    private class MyThread extends ThreadWrapper {
         final Object lock;
         int ind;
         String name;
 
         public MyThread (Object l, int i, String n) {
+            super(n);
             lock = l;
             ind = i;
             name = n;
         }
 
+        // Each tested thread calls this once at startup. The debugger sets a
+        // breakpoint here: receiving the event is what makes a virtual thread
+        // visible to jdb with the default debug agent behavior, so the test
+        // does not need the -trackallthreads option.
+        static void threadStarted() {}
+
         public void run() {
+            threadStarted();
             synchronized (lock) {
                 synchronized (waitnotify) {
                     threadRunning = true;
@@ -56,8 +65,8 @@ public class interrupt001a {
                         lock.wait();
                     }
                 } catch (InterruptedException e) {
-                    notInterrupted.decrementAndGet();
                     synchronized (waitnotify) {
+                        notInterrupted--;
                         waitnotify.notify();
                     }
                 }
@@ -83,7 +92,7 @@ public class interrupt001a {
     private JdbArgumentHandler argumentHandler;
     private Log log;
 
-    public static final AtomicInteger notInterrupted = new AtomicInteger(numThreads);
+    public static volatile int notInterrupted = numThreads;
 
     public int runIt(String args[], PrintStream out) {
 
@@ -96,7 +105,7 @@ public class interrupt001a {
 
         for (i = 0; i < numThreads ; i++) {
             locks[i] = new Object();
-            holder[i] = new MyThread(locks[i], i, MYTHREAD + "-" + i);
+            holder[i] = new MyThread(locks[i], i, MYTHREAD + "-" + i).getThread();
         }
 
         synchronized (waitnotify) {
@@ -122,8 +131,8 @@ public class interrupt001a {
 
         long waitTime = argumentHandler.getWaitTime() * 60 * 1000;
         long startTime = System.currentTimeMillis();
-        while (notInterrupted.get() > 0 && System.currentTimeMillis() - startTime <= waitTime) {
-            synchronized (waitnotify) {
+        synchronized (waitnotify) {
+            while (notInterrupted > 0 && System.currentTimeMillis() - startTime <= waitTime) {
                 try {
                     waitnotify.wait(waitTime);
                 } catch (InterruptedException e) {

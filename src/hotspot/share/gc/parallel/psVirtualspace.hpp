@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 #define SHARE_GC_PARALLEL_PSVIRTUALSPACE_HPP
 
 #include "memory/allocation.hpp"
+#include "memory/reservedSpace.hpp"
 #include "memory/virtualspace.hpp"
 
 // VirtualSpace for the parallel scavenge collector.
@@ -35,10 +36,13 @@
 
 class PSVirtualSpace : public CHeapObj<mtGC> {
   friend class VMStructs;
- protected:
+
   // The space is committed/uncommitted in chunks of size _alignment.  The
   // ReservedSpace passed to initialize() must be aligned to this value.
   const size_t _alignment;
+
+  // OS page size used. If using Transparent Huge Pages, it's the desired large page-size.
+  const size_t _page_size;
 
   // Reserved area
   char* _reserved_low_addr;
@@ -52,16 +56,10 @@ class PSVirtualSpace : public CHeapObj<mtGC> {
   // os::commit_memory() or os::uncommit_memory().
   bool _special;
 
-  // Convenience wrapper.
-  inline static size_t pointer_delta(const char* left, const char* right);
-
  public:
   PSVirtualSpace(ReservedSpace rs, size_t alignment);
 
   ~PSVirtualSpace();
-
-  PSVirtualSpace();
-  void initialize(ReservedSpace rs);
 
   bool is_in_committed(const void* p) const {
     return (p >= committed_low_addr()) && (p < committed_high_addr());
@@ -73,6 +71,7 @@ class PSVirtualSpace : public CHeapObj<mtGC> {
 
   // Accessors (all sizes are bytes).
   size_t alignment()          const { return _alignment; }
+  size_t page_size()          const { return _page_size; }
   char* reserved_low_addr()   const { return _reserved_low_addr; }
   char* reserved_high_addr()  const { return _reserved_high_addr; }
   char* committed_low_addr()  const { return _committed_low_addr; }
@@ -94,10 +93,7 @@ class PSVirtualSpace : public CHeapObj<mtGC> {
 
 #ifndef PRODUCT
   // Debugging
-  static  bool is_aligned(size_t val, size_t align);
-          bool is_aligned(size_t val) const;
-          bool is_aligned(char* val) const;
-          void verify() const;
+  void verify() const;
 
   // Helper class to verify a space when entering/leaving a block.
   class PSVirtualSpaceVerifier: public StackObj {
@@ -127,17 +123,13 @@ class PSVirtualSpace : public CHeapObj<mtGC> {
 //
 // PSVirtualSpace inlines.
 //
-inline size_t
-PSVirtualSpace::pointer_delta(const char* left, const char* right) {
-  return ::pointer_delta((void *)left, (void*)right, sizeof(char));
-}
 
 inline size_t PSVirtualSpace::committed_size() const {
-  return pointer_delta(committed_high_addr(), committed_low_addr());
+  return pointer_delta(committed_high_addr(), committed_low_addr(), sizeof(char));
 }
 
 inline size_t PSVirtualSpace::reserved_size() const {
-  return pointer_delta(reserved_high_addr(), reserved_low_addr());
+  return pointer_delta(reserved_high_addr(), reserved_low_addr(), sizeof(char));
 }
 
 inline size_t PSVirtualSpace::uncommitted_size() const {
@@ -145,6 +137,8 @@ inline size_t PSVirtualSpace::uncommitted_size() const {
 }
 
 inline void PSVirtualSpace::set_reserved(char* low_addr, char* high_addr, bool special) {
+  assert(low_addr <= high_addr, "precondition");
+
   _reserved_low_addr = low_addr;
   _reserved_high_addr = high_addr;
   _special = special;
@@ -155,6 +149,9 @@ inline void PSVirtualSpace::set_reserved(ReservedSpace rs) {
 }
 
 inline void PSVirtualSpace::set_committed(char* low_addr, char* high_addr) {
+  assert(low_addr <= high_addr, "precondition");
+  assert(low_addr == _reserved_low_addr, "precondition");
+
   _committed_low_addr = low_addr;
   _committed_high_addr = high_addr;
 }

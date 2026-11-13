@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package sun.net.httpserver;
 
+import java.net.ProtocolException;
 import java.nio.*;
 import java.io.*;
 import java.nio.channels.*;
@@ -36,37 +37,33 @@ import com.sun.net.httpserver.*;
  */
 class Request {
 
-    static final int BUF_LEN = 2048;
     static final byte CR = 13;
     static final byte LF = 10;
+    static final byte FIRST_CHAR = 32;
 
     private String startLine;
     private SocketChannel chan;
     private InputStream is;
     private OutputStream os;
+    private final int maxReqHeaderSize;
+    private final boolean firstClearRequest;
 
-    Request (InputStream rawInputStream, OutputStream rawout) throws IOException {
+    Request(InputStream rawInputStream, OutputStream rawout, boolean firstClearRequest) throws IOException {
+        this.maxReqHeaderSize = ServerConfig.getMaxReqHeaderSize();
+        this.firstClearRequest = firstClearRequest;
         is = rawInputStream;
         os = rawout;
         do {
             startLine = readLine();
-            if (startLine == null) {
-                return;
-            }
             /* skip blank lines */
-        } while (startLine == null ? false : startLine.equals (""));
+        } while ("".equals(startLine));
     }
 
-
-    char[] buf = new char [BUF_LEN];
-    int pos;
-    StringBuffer lineBuf;
-
-    public InputStream inputStream () {
+    public InputStream inputStream() {
         return is;
     }
 
-    public OutputStream outputStream () {
+    public OutputStream outputStream() {
         return os;
     }
 
@@ -75,52 +72,83 @@ class Request {
      * Not used for reading headers.
      */
 
-    public String readLine () throws IOException {
-        boolean gotCR = false, gotLF = false;
-        pos = 0; lineBuf = new StringBuffer();
+    public String readLine() throws IOException {
+        boolean gotLF = false;
+        StringBuilder lineBuf = new StringBuilder();
+        long lsize = 32;
+
+        // For the first request that comes on a clear connection
+        // we will check that the first non CR/LF char on the
+        // request line is eligible. This should be the first char
+        // of a method name, so it should be at least greater or equal
+        // to 32 (FIRST_CHAR) which is the space character.
+        // The main goal here is to fail fast if we receive 0x16 (22) which
+        // happens to be the first byte of a TLS handshake record.
+        // This is typically what would be received if a TLS client opened
+        // a TLS connection on a non-TLS server.
+        // If we receive 0x16 we should close the connection immediately as
+        // it indicates we're receiving a ClientHello on a clear
+        // connection, and we will never receive the expected CRLF that
+        // terminates the first request line.
+        // Though we could check only for 0x16, any characters < 32
+        // (excluding CRLF) is not expected at this position in a
+        // request line, so we can still fail here early if any of
+        // those are detected.
+        int offset = 0;
         while (!gotLF) {
             int c = is.read();
             if (c == -1) {
                 return null;
             }
-            if (gotCR) {
-                if (c == LF) {
-                    gotLF = true;
-                } else {
-                    gotCR = false;
-                    consume (CR);
-                    consume (c);
-                }
+            if (c == CR || c == LF) {
+                checkCRLF(c);
+                gotLF = true;
             } else {
-                if (c == CR) {
-                    gotCR = true;
-                } else {
-                    consume (c);
+                if (firstClearRequest && offset == 0) {
+                    if (c < FIRST_CHAR) {
+                        throw new ProtocolException("Unexpected start of request line");
+                    }
+                    offset++;
                 }
+                checkCtl(c);
+                lineBuf.append((char)c);
+                lsize = lsize + 1;
+            }
+            if (maxReqHeaderSize > 0 && lsize > maxReqHeaderSize) {
+                throw new IOException("Maximum header (" +
+                        "sun.net.httpserver.maxReqHeaderSize) exceeded, " +
+                        ServerConfig.getMaxReqHeaderSize() + ".");
             }
         }
-        lineBuf.append (buf, 0, pos);
-        return new String (lineBuf);
-    }
-
-    private void consume (int c) {
-        if (pos == BUF_LEN) {
-            lineBuf.append (buf);
-            pos = 0;
-        }
-        buf[pos++] = (char)c;
+        return lineBuf.toString();
     }
 
     /**
      * returns the request line (first line of a request)
      */
-    public String requestLine () {
+    public String requestLine() {
         return startLine;
     }
 
     Headers hdrs = null;
-    @SuppressWarnings("fallthrough")
-    Headers headers () throws IOException {
+
+    void checkCRLF(int firstc) throws IOException {
+        if (firstc == CR) {
+            int c = is.read();
+            if (c != LF) {
+                throw new ProtocolException("Invalid CR in request header");
+            }
+        }
+    }
+
+    void checkCtl(int c) throws IOException {
+        if (c == 0x7f ||
+                c < ' ' && c != CR && c!= LF && c != '\t') {
+            throw new ProtocolException("Invalid character in request header");
+        }
+    }
+
+    Headers headers() throws IOException {
         if (hdrs != null) {
             return hdrs;
         }
@@ -133,43 +161,47 @@ class Request {
 
         // check for empty headers
         if (firstc == CR || firstc == LF) {
-            int c = is.read();
-            if (c == CR || c == LF) {
-                return hdrs;
-            }
-            s[0] = (char)firstc;
-            len = 1;
-            firstc = c;
+            checkCRLF(firstc);
+            return hdrs;
         }
+        long hsize = startLine.length() + 32L;
 
         while (firstc != LF && firstc != CR && firstc >= 0) {
             int keyend = -1;
             int c;
-            boolean inKey = firstc > ' ';
+            boolean inKey = firstc != ' ' && firstc != '\t';
+            checkCtl(firstc);
             s[len++] = (char) firstc;
+            hsize = hsize + 1;
     parseloop:{
+                // We start parsing for a new name value pair here.
+                // The max header size includes an overhead of 32 bytes per
+                // name value pair.
+                // See SETTINGS_MAX_HEADER_LIST_SIZE, RFC 9113, section 6.5.2.
+                long maxRemaining = maxReqHeaderSize > 0
+                        ? maxReqHeaderSize - hsize - 32
+                        : Long.MAX_VALUE;
                 while ((c = is.read()) >= 0) {
+                    checkCtl(c);
                     switch (c) {
-                      /*fallthrough*/
                       case ':':
-                        if (inKey && len > 0)
+                        if (inKey && len > 0) {
                             keyend = len;
-                        inKey = false;
+                            inKey = false;
+                        }
                         break;
                       case '\t':
                         c = ' ';
-                      case ' ':
-                        inKey = false;
                         break;
                       case CR:
                       case LF:
-                        firstc = is.read();
-                        if (c == CR && firstc == LF) {
-                            firstc = is.read();
-                            if (firstc == CR)
-                                firstc = is.read();
+                        checkCRLF(c);
+                        if (inKey) {
+                            throw new ProtocolException("Missing field separator");
                         }
-                        if (firstc == LF || firstc == CR || firstc > ' ')
+                        firstc = is.read();
+                        checkCRLF(firstc);
+                        if (firstc != ' ' && firstc != '\t')
                             break parseloop;
                         /* continuation */
                         c = ' ';
@@ -181,6 +213,11 @@ class Request {
                         s = ns;
                     }
                     s[len++] = (char) c;
+                    if (maxReqHeaderSize > 0 && len > maxRemaining) {
+                        throw new IOException("Maximum header (" +
+                                "sun.net.httpserver.maxReqHeaderSize) exceeded, " +
+                                ServerConfig.getMaxReqHeaderSize() + ".");
+                    }
                 }
                 firstc = -1;
             }
@@ -199,7 +236,7 @@ class Request {
             }
             String v;
             if (keyend >= len)
-                v = new String();
+                v = "";
             else
                 v = String.copyValueOf(s, keyend, len - keyend);
 
@@ -208,8 +245,17 @@ class Request {
                         "sun.net.httpserver.maxReqHeaders) exceeded, " +
                         ServerConfig.getMaxReqHeaders() + ".");
             }
+            hsize = hsize + len + 32;
+            if (maxReqHeaderSize > 0 && hsize > maxReqHeaderSize) {
+                throw new IOException("Maximum header (" +
+                        "sun.net.httpserver.maxReqHeaderSize) exceeded, " +
+                        ServerConfig.getMaxReqHeaderSize() + ".");
+            }
 
-            hdrs.add (k,v);
+            if (k == null) {  // Headers disallows null keys, use empty string
+                k = "";       // instead to represent invalid key
+            }
+            hdrs.add(k, v);
             len = 0;
         }
         return hdrs;
@@ -232,21 +278,21 @@ class Request {
         ServerImpl server;
         static final int BUFSIZE = 8 * 1024;
 
-        public ReadStream (ServerImpl server, SocketChannel chan) throws IOException {
+        public ReadStream(ServerImpl server, SocketChannel chan) throws IOException {
             this.channel = chan;
             this.server = server;
-            chanbuf = ByteBuffer.allocate (BUFSIZE);
+            chanbuf = ByteBuffer.allocate(BUFSIZE);
             chanbuf.clear();
             one = new byte[1];
             closed = marked = reset = false;
         }
 
-        public synchronized int read (byte[] b) throws IOException {
-            return read (b, 0, b.length);
+        public synchronized int read(byte[] b) throws IOException {
+            return read(b, 0, b.length);
         }
 
-        public synchronized int read () throws IOException {
-            int result = read (one, 0, 1);
+        public synchronized int read() throws IOException {
+            int result = read(one, 0, 1);
             if (result == 1) {
                 return one[0] & 0xFF;
             } else {
@@ -254,12 +300,12 @@ class Request {
             }
         }
 
-        public synchronized int read (byte[] b, int off, int srclen) throws IOException {
+        public synchronized int read(byte[] b, int off, int srclen) throws IOException {
 
             int canreturn, willreturn;
 
             if (closed)
-                throw new IOException ("Stream closed");
+                throw new IOException("Stream closed");
 
             if (eof) {
                 return -1;
@@ -267,33 +313,33 @@ class Request {
 
             assert channel.isBlocking();
 
-            Objects.checkFromIndexSize(srclen, off, b.length);
+            Objects.checkFromIndexSize(off, srclen, b.length);
 
             if (reset) { /* satisfy from markBuf */
-                canreturn = markBuf.remaining ();
+                canreturn = markBuf.remaining();
                 willreturn = canreturn>srclen ? srclen : canreturn;
                 markBuf.get(b, off, willreturn);
                 if (canreturn == willreturn) {
                     reset = false;
                 }
             } else { /* satisfy from channel */
-                chanbuf.clear ();
+                chanbuf.clear();
                 if (srclen <  BUFSIZE) {
-                    chanbuf.limit (srclen);
+                    chanbuf.limit(srclen);
                 }
                 do {
-                    willreturn = channel.read (chanbuf);
+                    willreturn = channel.read(chanbuf);
                 } while (willreturn == 0);
                 if (willreturn == -1) {
                     eof = true;
                     return -1;
                 }
-                chanbuf.flip ();
+                chanbuf.flip();
                 chanbuf.get(b, off, willreturn);
 
                 if (marked) { /* copy into markBuf */
                     try {
-                        markBuf.put (b, off, willreturn);
+                        markBuf.put(b, off, willreturn);
                     } catch (BufferOverflowException e) {
                         marked = false;
                     }
@@ -302,14 +348,14 @@ class Request {
             return willreturn;
         }
 
-        public boolean markSupported () {
+        public boolean markSupported() {
             return true;
         }
 
         /* Does not query the OS socket */
-        public synchronized int available () throws IOException {
+        public synchronized int available() throws IOException {
             if (closed)
-                throw new IOException ("Stream is closed");
+                throw new IOException("Stream is closed");
 
             if (eof)
                 return -1;
@@ -320,31 +366,31 @@ class Request {
             return chanbuf.remaining();
         }
 
-        public void close () throws IOException {
+        public void close() throws IOException {
             if (closed) {
                 return;
             }
-            channel.close ();
+            channel.close();
             closed = true;
         }
 
-        public synchronized void mark (int readlimit) {
+        public synchronized void mark(int readlimit) {
             if (closed)
                 return;
             this.readlimit = readlimit;
-            markBuf = ByteBuffer.allocate (readlimit);
+            markBuf = ByteBuffer.allocate(readlimit);
             marked = true;
             reset = false;
         }
 
-        public synchronized void reset () throws IOException {
+        public synchronized void reset() throws IOException {
             if (closed )
                 return;
             if (!marked)
-                throw new IOException ("Stream not marked");
+                throw new IOException("Stream not marked");
             marked = false;
             reset = true;
-            markBuf.flip ();
+            markBuf.flip();
         }
     }
 
@@ -356,50 +402,50 @@ class Request {
         byte[] one;
         ServerImpl server;
 
-        public WriteStream (ServerImpl server, SocketChannel channel) throws IOException {
+        public WriteStream(ServerImpl server, SocketChannel channel) throws IOException {
             this.channel = channel;
             this.server = server;
             assert channel.isBlocking();
             closed = false;
             one = new byte [1];
-            buf = ByteBuffer.allocate (4096);
+            buf = ByteBuffer.allocate(4096);
         }
 
-        public synchronized void write (int b) throws IOException {
+        public synchronized void write(int b) throws IOException {
             one[0] = (byte)b;
             write (one, 0, 1);
         }
 
-        public synchronized void write (byte[] b) throws IOException {
+        public synchronized void write(byte[] b) throws IOException {
             write (b, 0, b.length);
         }
 
-        public synchronized void write (byte[] b, int off, int len) throws IOException {
+        public synchronized void write(byte[] b, int off, int len) throws IOException {
             int l = len;
             if (closed)
-                throw new IOException ("stream is closed");
+                throw new IOException("stream is closed");
 
             int cap = buf.capacity();
             if (cap < len) {
                 int diff = len - cap;
-                buf = ByteBuffer.allocate (2*(cap+diff));
+                buf = ByteBuffer.allocate(2*(cap+diff));
             }
             buf.clear();
-            buf.put (b, off, len);
-            buf.flip ();
+            buf.put(b, off, len);
+            buf.flip();
             int n;
-            while ((n = channel.write (buf)) < l) {
+            while ((n = channel.write(buf)) < l) {
                 l -= n;
                 if (l == 0)
                     return;
             }
         }
 
-        public void close () throws IOException {
+        public void close() throws IOException {
             if (closed)
                 return;
-            //server.logStackTrace ("Request.OS.close: isOpen="+channel.isOpen());
-            channel.close ();
+            //server.logStackTrace("Request.OS.close: isOpen="+channel.isOpen());
+            channel.close();
             closed = true;
         }
     }

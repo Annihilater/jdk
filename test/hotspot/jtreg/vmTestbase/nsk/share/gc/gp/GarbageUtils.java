@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,12 @@
 
 package nsk.share.gc.gp;
 
-import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.invoke.*;
 import java.util.*;
+import jdk.test.whitebox.WhiteBox;
+import nsk.share.gc.DefaultProducer;
 import nsk.share.gc.gp.array.*;
 import nsk.share.gc.gp.string.*;
 import nsk.share.gc.gp.list.*;
@@ -46,7 +47,7 @@ public final class GarbageUtils {
         private static GarbageProducers garbageProducers;
         private static List<GarbageProducer> primitiveArrayProducers;
         private static List<GarbageProducer> arrayProducers;
-        private static final GarbageProducer  byteArrayProducer = new ByteArrayProducer();
+        private static final GarbageProducer defaultProducer = new DefaultProducer();
         public static enum OOM_TYPE {
             ANY (),
             HEAP("Java heap space"),
@@ -84,6 +85,27 @@ public final class GarbageUtils {
         public static final Throwable preloadThrowable = new Throwable("preload");
 
         private GarbageUtils() {
+        }
+
+        /**
+         * engages GC by allocating memory chunks and triggering youngGC.
+         * Allocations are done for a total of YOUNG_GC_ITERATIONS times.
+         * Each iteration, we allocate a memory chunk and trigger youngGC.
+         * Finally fullGC is run once.
+         * This way the objects get to travel to various GC regions.
+         * @param testMemory - memory size to be operated on
+         */
+        public static void engageGC(long testMemory) {
+            final int YOUNG_GC_ITERATIONS = 100;
+            final long memChunk = testMemory / YOUNG_GC_ITERATIONS;
+            int iteration = 0;
+            Object referenceArray[] = new Object[YOUNG_GC_ITERATIONS];
+
+            while (iteration < YOUNG_GC_ITERATIONS) {
+                referenceArray[iteration++] = defaultProducer.create(memChunk);
+                WhiteBox.getWhiteBox().youngGC();
+            }
+            WhiteBox.getWhiteBox().fullGC();
         }
 
         /**
@@ -130,7 +152,7 @@ public final class GarbageUtils {
          * @return number of OOME occured
          */
         public static int eatMemory(ExecutionController stresser) {
-            return eatMemory(stresser, byteArrayProducer, 50, 100, 2, OOM_TYPE.ANY);
+            return eatMemory(stresser, defaultProducer, 50, 100, 2, OOM_TYPE.ANY);
         }
 
         /**
@@ -159,10 +181,7 @@ public final class GarbageUtils {
          * Eat memory using default(byte[]) garbage producer.
          *
          * Note that this method can throw Failure if any exception
-         * is thrown while eating memory. To avoid OOM while allocating
-         * exception we preallocate it before the lunch starts. It means
-         * that exception stack trace does not correspond to the place
-         * where exception is thrown, but points at start of the method.
+         * is thrown while eating memory.
          *
          * @param stresser stresser
          * @param initialFactor determines which portion of initial memory initial chunk will be
@@ -171,17 +190,14 @@ public final class GarbageUtils {
          * @return number of OOME occured
          */
         public static int eatMemory(ExecutionController stresser,long initialFactor, long minMemoryChunk, long factor) {
-            return eatMemory(stresser, byteArrayProducer, initialFactor, minMemoryChunk, factor, OOM_TYPE.ANY);
+            return eatMemory(stresser, defaultProducer, initialFactor, minMemoryChunk, factor, OOM_TYPE.ANY);
         }
 
         /**
          * Eat memory using given garbage producer.
          *
          * Note that this method can throw Failure if any exception
-         * is thrown while eating memory. To avoid OOM while allocating
-         * exception we preallocate it before the lunch starts. It means
-         * that exception stack trace does not correspond to the place
-         * where exception is thrown, but points at start of the method.
+         * is thrown while eating memory.
          *
          * @param stresser stresser to use
          * @param gp garbage producer
@@ -212,15 +228,34 @@ public final class GarbageUtils {
                      long.class,
                      OOM_TYPE.class);
 
+         private static MethodHandle eat;
+
+         static {
+             try {
+                 eat = MethodHandles.lookup().findStatic(GarbageUtils.class, "eatMemoryImpl", mt);
+             } catch (Exception nsme) {
+                 // Can't run the test for some unexpected reason
+                 throw new RuntimeException(nsme);
+             }
+         }
+
+        private static Throwable ultimateCause(Throwable t) {
+            while (t.getCause() != null) {
+                t = t.getCause();
+            }
+            return t;
+        }
+
          public static int eatMemory(ExecutionController stresser, GarbageProducer gp, long initialFactor, long minMemoryChunk, long factor, OOM_TYPE type) {
             try {
                // Using a methodhandle invoke of eatMemoryImpl to prevent inlining of it
-               MethodHandles.Lookup lookup = MethodHandles.lookup();
-               MethodHandle eat = lookup.findStatic(GarbageUtils.class, "eatMemoryImpl", mt);
                return (int) eat.invoke(stresser, gp, initialFactor, minMemoryChunk, factor, type);
             } catch (OutOfMemoryError e) {
                return numberOfOOMEs++;
             } catch (Throwable t) {
+                if (ultimateCause(t) instanceof OutOfMemoryError) {
+                    return numberOfOOMEs++;
+                }
                throw new RuntimeException(t);
             }
          }
@@ -229,10 +264,7 @@ public final class GarbageUtils {
          * Eat memory using given garbage producer.
          *
          * Note that this method can throw Failure if any exception
-         * is thrown while eating memory. To avoid OOM while allocating
-         * exception we preallocate it before the lunch starts. It means
-         * that exception stack trace does not correspond to the place
-         * where exception is thrown, but points at start of the method.
+         * is thrown while eating memory.
          *
          * @param stresser stresser to use
          * @param gp garbage producer
@@ -362,6 +394,12 @@ public final class GarbageUtils {
                         return new FloatArrayProducer();
                 else if (id.equals("doubleArr"))
                         return new DoubleArrayProducer();
+                else if (id.equals("BooleanObjArr"))
+                    return new BooleanObjArrayProducer();
+                else if (id.equals("ByteObjArr"))
+                    return new BooleanObjArrayProducer();
+                else if (id.equals("IntegerObjArr"))
+                    return new IntegerObjArrayProducer();
                 else if (id.equals("objectArr"))
                         return new ObjectArrayProducer();
                 else if (id.equals("randomString"))

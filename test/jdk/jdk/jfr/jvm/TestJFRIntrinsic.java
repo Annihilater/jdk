@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,8 +23,7 @@
 
 /**
  * @test
- * @summary Intrinsic for JFR
- * @key jfr
+ * @summary Intrinsics for JFR
  * @requires vm.hasJFR
  * @library /test/lib
  *
@@ -32,39 +31,55 @@
  *          java.base/jdk.internal.misc
  *          java.management
  *
- * @build sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
  *
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  *
  * @run main/othervm -Xbootclasspath/a:. -ea -Xmixed -Xbatch -XX:TieredStopAtLevel=4 -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      jdk.jfr.jvm.TestJFRIntrinsic
- *
-  * @run main/othervm -Xbootclasspath/a:. -ea -Xmixed -Xbatch -XX:TieredStopAtLevel=1 -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      jdk.jfr.jvm.TestJFRIntrinsic
  */
 
 package jdk.jfr.jvm;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.stream.IntStream;
+
+import jdk.jfr.Recording;
 import jdk.jfr.internal.JVM;
+import jdk.jfr.internal.JVMSupport;
 import jdk.test.lib.Platform;
-import sun.hotspot.WhiteBox;
-import sun.hotspot.code.NMethod;
+import jdk.test.whitebox.WhiteBox;
+import jdk.test.whitebox.code.NMethod;
 
 public class TestJFRIntrinsic {
-
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
+    public Class<?> eventWriterClazz;
     public Object eventWriter;
 
+    TestJFRIntrinsic() throws Exception {
+        // The intrinsic is premised on this class being loaded already - the event writer object is massaged heavily before returning
+        eventWriterClazz = Class.forName("jdk.jfr.internal.event.EventWriter", true, TestJFRIntrinsic.class.getClassLoader());
+        // The epoch intrinsic needs the epoch system to be initialized.
+        try (Recording r = new Recording()) {
+            try {
+                r.start(); // epoch intialized.
+            } finally {
+                r.stop(); // epoch shift.
+            }
+        }
+    }
+
     public static void main(String... args) throws Exception {
-        JVM.getJVM().createNativeJFR();
+        JVMSupport.createJFR();
         TestJFRIntrinsic ti = new TestJFRIntrinsic();
         Method classid = TestJFRIntrinsic.class.getDeclaredMethod("getClassIdIntrinsic",  Class.class);
         ti.runIntrinsicTest(classid);
         Method eventWriterMethod = TestJFRIntrinsic.class.getDeclaredMethod("getEventWriterIntrinsic", Class.class);
         ti.runIntrinsicTest(eventWriterMethod);
+        Method tryUpdateEpochMethod = TestJFRIntrinsic.class.getDeclaredMethod("tryUpdateEpochIntrinsic", Class.class);
+        ti.runIntrinsicTest(tryUpdateEpochMethod);
     }
 
     public void getClassIdIntrinsic(Class<?> cls) {
@@ -78,6 +93,20 @@ public class TestJFRIntrinsic {
         Object o = JVM.getEventWriter();
         if (o != null) {
             eventWriter = o;
+        }
+    }
+
+    /**
+     * Test class with final fields.
+     */
+    static class TestClass {
+        final int value = 1;
+    }
+
+    public void tryUpdateEpochIntrinsic(Class<?> cls) throws NoSuchFieldException {
+        Field field = TestClass.class.getDeclaredField("value");
+        if (!JVM.tryUpdateEpoch(field)) {
+            throw new RuntimeException("tryUpdateEpoch failed");
         }
     }
 
@@ -126,10 +155,10 @@ public class TestJFRIntrinsic {
             int maxLevel = flagValue.intValue();
             return IntStream.rangeClosed(1, maxLevel).toArray();
         } else {
-            if (Platform.isServer() && !Platform.isEmulatedClient()) {
+            if (Platform.isServer()) {
                 return new int[]{4};
             }
-            if (Platform.isClient() || Platform.isMinimal() || Platform.isEmulatedClient()) {
+            if (Platform.isClient() || Platform.isMinimal()) {
                 return new int[]{1};
             }
         }

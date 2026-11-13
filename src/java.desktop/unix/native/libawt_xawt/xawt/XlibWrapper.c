@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -825,7 +825,7 @@ JNIEXPORT void JNICALL Java_sun_awt_X11_XlibWrapper_SetProperty
     */
     if (!JNU_IsNull(env, jstr)) {
 #ifdef X_HAVE_UTF8_STRING
-        cname = (char *) (*env)->GetStringUTFChars(env, jstr, JNI_FALSE);
+        cname = (char *) (*env)->GetStringUTFChars(env, jstr, NULL);
 #else
         cname = (char *) JNU_GetStringPlatformChars(env, jstr, NULL);
 #endif
@@ -1324,15 +1324,15 @@ JNIEXPORT jboolean JNICALL Java_sun_awt_X11_XlibWrapper_IsKanaKeyboard
     return result ? JNI_TRUE : JNI_FALSE;
 }
 
-JavaVM* jvm = NULL;
+JavaVM* jvm_xawt = NULL;
 static int ToolkitErrorHandler(Display * dpy, XErrorEvent * event) {
     JNIEnv * env;
     // First call the native synthetic error handler declared in "awt_util.h" file.
     if (current_native_xerror_handler != NULL) {
         current_native_xerror_handler(dpy, event);
     }
-    if (jvm != NULL) {
-        env = (JNIEnv *)JNU_GetEnv(jvm, JNI_VERSION_1_2);
+    if (jvm_xawt != NULL) {
+        env = (JNIEnv *)JNU_GetEnv(jvm_xawt, JNI_VERSION_1_2);
         if (env) {
             return JNU_CallStaticMethodByName(env, NULL, "sun/awt/X11/XErrorHandlerUtil",
                 "globalErrorHandler", "(JJ)I", ptr_to_jlong(dpy), ptr_to_jlong(event)).i;
@@ -1349,7 +1349,7 @@ static int ToolkitErrorHandler(Display * dpy, XErrorEvent * event) {
 JNIEXPORT jlong JNICALL Java_sun_awt_X11_XlibWrapper_SetToolkitErrorHandler
 (JNIEnv *env, jclass clazz)
 {
-    if ((*env)->GetJavaVM(env, &jvm) < 0) {
+    if ((*env)->GetJavaVM(env, &jvm_xawt) < 0) {
         return 0;
     }
     AWT_CHECK_HAVE_LOCK_RETURN(0);
@@ -2184,11 +2184,6 @@ Java_sun_awt_X11_XlibWrapper_copyLongArray(JNIEnv *env,
     }
 }
 
-JNIEXPORT jint JNICALL
-Java_sun_awt_X11_XlibWrapper_XSynchronize(JNIEnv *env, jclass clazz, jlong display, jboolean onoff)
-{
-    return (jint) XSynchronize((Display*)jlong_to_ptr(display), (onoff == JNI_TRUE ? True : False));
-}
 
 JNIEXPORT jboolean JNICALL
 Java_sun_awt_X11_XlibWrapper_XShapeQueryExtension
@@ -2268,57 +2263,4 @@ Java_sun_awt_X11_XlibWrapper_SetZOrder
     XConfigureWindow((Display *)jlong_to_ptr(display),
                      (Window)jlong_to_ptr(window),
                      value_mask, &wc );
-}
-
-/*
- * Class:     XlibWrapper
- * Method:    SetBitmapShape
- */
-JNIEXPORT void JNICALL
-Java_sun_awt_X11_XlibWrapper_SetBitmapShape
-(JNIEnv *env, jclass clazz, jlong display, jlong window,
- jint width, jint height, jintArray bitmap)
-{
-    jsize len;
-    jint *values;
-    jboolean isCopy = JNI_FALSE;
-    size_t worstBufferSize = (size_t)((width / 2 + 1) * height);
-    RECT_T * pRect;
-    int numrects;
-
-    if (!IS_SAFE_SIZE_MUL(width / 2 + 1, height)) {
-        return;
-    }
-
-    AWT_CHECK_HAVE_LOCK();
-
-    len = (*env)->GetArrayLength(env, bitmap);
-    if (len == 0 || len < width * height) {
-        return;
-    }
-
-    values = (*env)->GetIntArrayElements(env, bitmap, &isCopy);
-    if (JNU_IsNull(env, values)) {
-        return;
-    }
-
-    pRect = (RECT_T *)SAFE_SIZE_ARRAY_ALLOC(malloc, worstBufferSize, sizeof(RECT_T));
-    if (!pRect) {
-        return;
-    }
-
-    /* Note: the values[0] and values[1] are supposed to contain the width
-     * and height (see XIconInfo.getIntData() for details). So, we do +2.
-     */
-    numrects = BitmapToYXBandedRectangles(32, (int)width, (int)height,
-            (unsigned char *)(values + 2), pRect);
-
-    XShapeCombineRectangles((Display *)jlong_to_ptr(display), (Window)jlong_to_ptr(window),
-            ShapeClip, 0, 0, pRect, numrects, ShapeSet, YXBanded);
-    XShapeCombineRectangles((Display *)jlong_to_ptr(display), (Window)jlong_to_ptr(window),
-            ShapeBounding, 0, 0, pRect, numrects, ShapeSet, YXBanded);
-
-    free(pRect);
-
-    (*env)->ReleaseIntArrayElements(env, bitmap, values, JNI_ABORT);
 }

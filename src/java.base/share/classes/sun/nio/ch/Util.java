@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,22 +27,24 @@ package sun.nio.ch;
 
 import java.io.FileDescriptor;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.Set;
 
-import jdk.internal.access.foreign.MemorySegmentProxy;
+import jdk.internal.access.JavaNioAccess;
+import jdk.internal.access.SharedSecrets;
 import jdk.internal.misc.TerminatingThreadLocal;
 import jdk.internal.misc.Unsafe;
-import sun.security.action.GetPropertyAction;
+import jdk.internal.vm.ContinuationSupport;
 
 public class Util {
+
+    private static final JavaNioAccess NIO_ACCESS = SharedSecrets.getJavaNioAccess();
 
     // -- Caches --
 
@@ -52,8 +54,8 @@ public class Util {
     // The max size allowed for a cached temp buffer, in bytes
     private static final long MAX_CACHED_BUFFER_SIZE = getMaxCachedBufferSize();
 
-    // Per-thread cache of temporary direct buffers
-    private static ThreadLocal<BufferCache> bufferCache = new TerminatingThreadLocal<>() {
+    // Per-carrier-thread cache of temporary direct buffers
+    private static final TerminatingThreadLocal<BufferCache> bufferCache = new TerminatingThreadLocal<>() {
         @Override
         protected BufferCache initialValue() {
             return new BufferCache();
@@ -75,8 +77,7 @@ public class Util {
      * for potential future-proofing.
      */
     private static long getMaxCachedBufferSize() {
-        String s = GetPropertyAction
-                .privilegedGetProperty("jdk.nio.maxCachedBufferSize");
+        String s = System.getProperty("jdk.nio.maxCachedBufferSize");
         if (s != null) {
             try {
                 long m = Long.parseLong(s);
@@ -113,7 +114,7 @@ public class Util {
      */
     private static class BufferCache {
         // the array of buffers
-        private ByteBuffer[] buffers;
+        private final ByteBuffer[] buffers;
 
         // the number of buffers in the cache
         private int count;
@@ -222,52 +223,63 @@ public class Util {
         // If a buffer of this size is too large for the cache, there
         // should not be a buffer in the cache that is at least as
         // large. So we'll just create a new one. Also, we don't have
-        // to remove the buffer from the cache (as this method does
-        // below) given that we won't put the new buffer in the cache.
-        if (isBufferTooLarge(size)) {
-            return ByteBuffer.allocateDirect(size);
+        // to remove a buffer from the cache given that we won't put
+        // the new buffer in the cache.
+        if (!isBufferTooLarge(size)) {
+            // Try to get buffer from carrier thread local cache
+            ContinuationSupport.pinIfSupported();
+            try {
+                BufferCache cache = bufferCache.get();
+                ByteBuffer buf = cache.get(size);
+                if (buf != null) {
+                    return buf;
+                }
+                if (!cache.isEmpty()) {
+                    // Free buffer to avoid cache growing
+                    ByteBuffer fromCache = cache.removeFirst();
+                    free(fromCache);
+                }
+            } finally {
+                ContinuationSupport.unpinIfSupported();
+            }
         }
 
-        BufferCache cache = bufferCache.get();
-        ByteBuffer buf = cache.get(size);
-        if (buf != null) {
-            return buf;
-        } else {
-            // No suitable buffer in the cache so we need to allocate a new
-            // one. To avoid the cache growing then we remove the first
-            // buffer from the cache and free it.
-            if (!cache.isEmpty()) {
-                buf = cache.removeFirst();
-                free(buf);
-            }
-            return ByteBuffer.allocateDirect(size);
-        }
+        // Allocate and return new buffer
+        long addr = unsafe.allocateMemory(size);
+        return NIO_ACCESS.newDirectByteBuffer(addr, size);
     }
 
     /**
      * Returns a temporary buffer of at least the given size and
      * aligned to the alignment
      */
-    public static ByteBuffer getTemporaryAlignedDirectBuffer(int size,
-                                                             int alignment) {
-        if (isBufferTooLarge(size)) {
-            return ByteBuffer.allocateDirect(size + alignment - 1)
-                    .alignedSlice(alignment);
+    public static ByteBuffer getTemporaryAlignedDirectBuffer(int size, int alignment) {
+        assert alignment > 0 && (alignment & (alignment - 1)) == 0;
+        assert size >= 0 && size % alignment == 0;
+
+        int allocationSize = size + alignment - 1;
+        if (!isBufferTooLarge(allocationSize)) {
+            // Try to get buffer from carrier thread local cache
+            ContinuationSupport.pinIfSupported();
+            try {
+                BufferCache cache = bufferCache.get();
+                ByteBuffer buf = cache.get(allocationSize);
+                if (buf != null) {
+                    return buf.alignedSlice(alignment);
+                }
+                if (!cache.isEmpty()) {
+                    // Free buffer to avoid cache growing
+                    ByteBuffer fromCache = cache.removeFirst();
+                    free(fromCache);
+                }
+            } finally {
+                ContinuationSupport.unpinIfSupported();
+            }
         }
 
-        BufferCache cache = bufferCache.get();
-        ByteBuffer buf = cache.get(size);
-        if (buf != null) {
-            if (buf.alignmentOffset(0, alignment) == 0) {
-                return buf;
-            }
-        } else {
-            if (!cache.isEmpty()) {
-                buf = cache.removeFirst();
-                free(buf);
-            }
-        }
-        return ByteBuffer.allocateDirect(size + alignment - 1)
+        // Allocate new buffer and return slice with the required alignment
+        long addr = unsafe.allocateMemory(allocationSize);
+        return NIO_ACCESS.newDirectByteBuffer(addr, allocationSize)
                 .alignedSlice(alignment);
     }
 
@@ -279,11 +291,23 @@ public class Util {
     }
 
     /**
+     * Return the underling byte buffer if the given byte buffer is
+     * an aligned slice.
+     */
+    private static ByteBuffer unwrapIfAlignedSlice(ByteBuffer buf) {
+        var parent = (ByteBuffer) ((DirectBuffer) buf).attachment();
+        return (parent != null) ? parent : buf;
+    }
+
+    /**
      * Releases a temporary buffer by returning to the cache or freeing it. If
      * returning to the cache then insert it at the start so that it is
      * likely to be returned by a subsequent call to getTemporaryDirectBuffer.
      */
     static void offerFirstTemporaryDirectBuffer(ByteBuffer buf) {
+        buf = unwrapIfAlignedSlice(buf);
+        assert buf != null;
+
         // If the buffer is too large for the cache we don't have to
         // check the cache. We'll just free it.
         if (isBufferTooLarge(buf)) {
@@ -291,11 +315,16 @@ public class Util {
             return;
         }
 
-        assert buf != null;
-        BufferCache cache = bufferCache.get();
-        if (!cache.offerFirst(buf)) {
-            // cache is full
-            free(buf);
+        // Return buffer to carrier thread local cache if possible
+        ContinuationSupport.pinIfSupported();
+        try {
+            BufferCache cache = bufferCache.get();
+            if (!cache.offerFirst(buf)) {
+                // cache is full
+                free(buf);
+            }
+        } finally {
+            ContinuationSupport.unpinIfSupported();
         }
     }
 
@@ -306,6 +335,9 @@ public class Util {
      * cache in same order that they were obtained.
      */
     static void offerLastTemporaryDirectBuffer(ByteBuffer buf) {
+        buf = unwrapIfAlignedSlice(buf);
+        assert buf != null;
+
         // If the buffer is too large for the cache we don't have to
         // check the cache. We'll just free it.
         if (isBufferTooLarge(buf)) {
@@ -313,11 +345,16 @@ public class Util {
             return;
         }
 
-        assert buf != null;
-        BufferCache cache = bufferCache.get();
-        if (!cache.offerLast(buf)) {
-            // cache is full
-            free(buf);
+        // Return buffer to carrier thread local cache if possible
+        ContinuationSupport.pinIfSupported();
+        try {
+            BufferCache cache = bufferCache.get();
+            if (!cache.offerLast(buf)) {
+                // cache is full
+                free(buf);
+            }
+        } finally {
+            ContinuationSupport.unpinIfSupported();
         }
     }
 
@@ -325,7 +362,7 @@ public class Util {
      * Frees the memory for the given direct buffer
      */
     private static void free(ByteBuffer buf) {
-        ((DirectBuffer)buf).cleaner().clean();
+        unsafe.freeMemory(((DirectBuffer)buf).address());
     }
 
 
@@ -379,7 +416,7 @@ public class Util {
 
     // -- Unsafe access --
 
-    private static Unsafe unsafe = Unsafe.getUnsafe();
+    private static final Unsafe unsafe = Unsafe.getUnsafe();
 
     private static byte _get(long a) {
         return unsafe.getByte(a);
@@ -407,28 +444,23 @@ public class Util {
 
     private static volatile Constructor<?> directByteBufferConstructor;
 
-    @SuppressWarnings("removal")
     private static void initDBBConstructor() {
-        AccessController.doPrivileged(new PrivilegedAction<Void>() {
-                public Void run() {
-                    try {
-                        Class<?> cl = Class.forName("java.nio.DirectByteBuffer");
-                        Constructor<?> ctor = cl.getDeclaredConstructor(
-                            new Class<?>[] { int.class,
-                                             long.class,
-                                             FileDescriptor.class,
-                                             Runnable.class,
-                                             boolean.class, MemorySegmentProxy.class});
-                        ctor.setAccessible(true);
-                        directByteBufferConstructor = ctor;
-                    } catch (ClassNotFoundException   |
-                             NoSuchMethodException    |
-                             IllegalArgumentException |
-                             ClassCastException x) {
-                        throw new InternalError(x);
-                    }
-                    return null;
-                }});
+        try {
+            Class<?> cl = Class.forName("java.nio.DirectByteBuffer");
+            Constructor<?> ctor = cl.getDeclaredConstructor(
+                new Class<?>[] { int.class,
+                                 long.class,
+                                 FileDescriptor.class,
+                                 Runnable.class,
+                                 boolean.class, MemorySegment.class });
+            ctor.setAccessible(true);
+            directByteBufferConstructor = ctor;
+        } catch (ClassNotFoundException   |
+                 NoSuchMethodException    |
+                 IllegalArgumentException |
+                 ClassCastException x) {
+            throw new InternalError(x);
+        }
     }
 
     static MappedByteBuffer newMappedByteBuffer(int size, long addr,
@@ -456,28 +488,23 @@ public class Util {
 
     private static volatile Constructor<?> directByteBufferRConstructor;
 
-    @SuppressWarnings("removal")
     private static void initDBBRConstructor() {
-        AccessController.doPrivileged(new PrivilegedAction<Void>() {
-                public Void run() {
-                    try {
-                        Class<?> cl = Class.forName("java.nio.DirectByteBufferR");
-                        Constructor<?> ctor = cl.getDeclaredConstructor(
-                            new Class<?>[] { int.class,
-                                             long.class,
-                                             FileDescriptor.class,
-                                             Runnable.class,
-                                             boolean.class, MemorySegmentProxy.class });
-                        ctor.setAccessible(true);
-                        directByteBufferRConstructor = ctor;
-                    } catch (ClassNotFoundException |
-                             NoSuchMethodException |
-                             IllegalArgumentException |
-                             ClassCastException x) {
-                        throw new InternalError(x);
-                    }
-                    return null;
-                }});
+        try {
+            Class<?> cl = Class.forName("java.nio.DirectByteBufferR");
+            Constructor<?> ctor = cl.getDeclaredConstructor(
+                new Class<?>[] { int.class,
+                                 long.class,
+                                 FileDescriptor.class,
+                                 Runnable.class,
+                                 boolean.class, MemorySegment.class });
+            ctor.setAccessible(true);
+            directByteBufferRConstructor = ctor;
+        } catch (ClassNotFoundException |
+                 NoSuchMethodException |
+                 IllegalArgumentException |
+                 ClassCastException x) {
+            throw new InternalError(x);
+        }
     }
 
     static MappedByteBuffer newMappedByteBufferR(int size, long addr,
@@ -503,19 +530,18 @@ public class Util {
         return dbb;
     }
 
-    static void checkBufferPositionAligned(ByteBuffer bb,
-                                                     int pos, int alignment)
+    static void checkBufferPositionAligned(ByteBuffer bb, int pos, int alignment)
         throws IOException
     {
-        if (bb.alignmentOffset(pos, alignment) != 0) {
-            throw new IOException("Current location of the bytebuffer ("
+        final int alignmentOffset = bb.alignmentOffset(pos, alignment);
+        if (alignmentOffset != 0) {
+            throw new IOException("Current position of the bytebuffer ("
                 + pos + ") is not a multiple of the block size ("
-                + alignment + ")");
+                + alignment + "): alignment offset = " + alignmentOffset);
         }
     }
 
-    static void checkRemainingBufferSizeAligned(int rem,
-                                                          int alignment)
+    static void checkRemainingBufferSizeAligned(int rem, int alignment)
         throws IOException
     {
         if (rem % alignment != 0) {
@@ -525,8 +551,7 @@ public class Util {
         }
     }
 
-    static void checkChannelPositionAligned(long position,
-                                                      int alignment)
+    static void checkChannelPositionAligned(long position, int alignment)
         throws IOException
     {
         if (position % alignment != 0) {

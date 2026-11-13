@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,8 +23,9 @@
 
 /*
  * @test
- * @bug 8234808
+ * @bug 8234808 8282988
  *
+ * @requires vm.flagless
  * @library /test/lib
  * @run main/othervm JdbOptions
  */
@@ -85,6 +86,16 @@ public class JdbOptions {
     private static final String targ = JbdOptionsTarg.class.getName();
 
     public static void main(String[] args) throws Exception {
+        // Set the options before Utils caches them when Jdb is initialized.
+        System.setProperty("test.vm.opts", System.getProperty("test.vm.opts", "") + " -Dtest.jdb.vm.opts=vm");
+        System.setProperty("test.java.opts", System.getProperty("test.java.opts", "") + " -Dtest.jdb.java.opts=java");
+        try (Jdb jdb = new Jdb("-J-Xlog:arguments=info:stdout")) {
+            jdb.waitForSimplePrompt(1024, false);
+            new OutputAnalyzer(jdb.getJdbOutput())
+                    .shouldContain("-Dtest.jdb.vm.opts=vm")
+                    .shouldNotContain("-Dtest.jdb.java.opts=java");
+        }
+
         // the simplest case
         test("-connect",
                 "com.sun.jdi.CommandLineLaunch:vmexec=java,options=-client -XX:+PrintVMOptions"
@@ -150,6 +161,22 @@ public class JdbOptions {
                 .expectedProp("prop4", "val 4")
                 .expectedArg("-XX:StartFlightRecording:dumponexit=true,maxsize=500M")
                 .expectedArg("-XX:FlightRecorderOptions:repository=jfrrep");
+
+        // -R is tested to see if options are passed through.
+        test("-R-Dprop1=val1",
+                "-R-Dprop2=val 2",
+                "-R-Xmixed",
+                "-R--add-modules", "-Rjdk.attach",
+                "-R-Xcheck:jni",
+                "-R--enable-preview",
+                "-connect",
+                "com.sun.jdi.CommandLineLaunch:vmexec=java,main=" + targ + " " + outFilename + " prop1 prop2")
+                .expectedProp("prop1", "val1")
+                .expectedProp("prop2", "val 2")
+                .expectedArg("-Xmixed")
+                .expectedArg("--add-modules=jdk.attach")
+                .expectedArg("-Xcheck:jni")
+                .expectedArg("--enable-preview");
 
     }
 

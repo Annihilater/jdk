@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2004, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,9 +65,9 @@ public abstract class IIOServiceProvider implements RegisterableService {
      * @param vendorName the vendor name.
      * @param version a version identifier.
      *
-     * @exception IllegalArgumentException if {@code vendorName}
+     * @throws IllegalArgumentException if {@code vendorName}
      * is {@code null}.
-     * @exception IllegalArgumentException if {@code version}
+     * @throws IllegalArgumentException if {@code version}
      * is {@code null}.
      */
     public IIOServiceProvider(String vendorName,
@@ -107,6 +107,7 @@ public abstract class IIOServiceProvider implements RegisterableService {
      *
      * @see ServiceRegistry#registerServiceProvider(Object provider)
      */
+    @Override
     public void onRegistration(ServiceRegistry registry,
                                Class<?> category) {}
 
@@ -120,6 +121,7 @@ public abstract class IIOServiceProvider implements RegisterableService {
      *
      * @see ServiceRegistry#deregisterServiceProvider(Object provider)
      */
+    @Override
     public void onDeregistration(ServiceRegistry registry,
                                  Class<?> category) {}
 

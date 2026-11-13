@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@ package com.sun.tools.javac.platform;
 
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.net.URI;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -48,16 +47,12 @@ import java.util.Map.Entry;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import javax.annotation.processing.Processor;
 import javax.tools.ForwardingJavaFileObject;
 import javax.tools.JavaFileManager;
-import javax.tools.JavaFileManager.Location;
 import javax.tools.JavaFileObject;
 import javax.tools.JavaFileObject.Kind;
-import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 
 import com.sun.source.util.Plugin;
@@ -71,8 +66,6 @@ import com.sun.tools.javac.util.Context;
 import com.sun.tools.javac.util.Log;
 import com.sun.tools.javac.util.StringUtils;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-
 /** PlatformProvider for JDK N.
  *
  *  <p><b>This is NOT part of any supported API.
@@ -82,17 +75,47 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  */
 public class JDKPlatformProvider implements PlatformProvider {
 
+    public static final String PREVIEW_OPTION = "preview";
+    private static final String CT_SYM_PREVIEW_VERSION = "@";
+
     @Override
     public Iterable<String> getSupportedPlatformNames() {
         return SUPPORTED_JAVA_PLATFORM_VERSIONS;
     }
 
     @Override
-    public PlatformDescription getPlatform(String platformName, String options) {
-        return new PlatformDescriptionImpl(platformName);
+    public PlatformDescription getPlatform(String platformName, String options) throws PlatformNotSupported {
+        if (!SUPPORTED_JAVA_PLATFORM_VERSIONS.contains(platformName)) {
+            throw new PlatformNotSupported();
+        }
+        if (PREVIEW_OPTION.equals(options) && !Source.DEFAULT.name.equals(platformName)) {
+            throw new PlatformNotSupported();
+        }
+        return getPlatformTrusted(platformName, options);
+    }
+
+    public PlatformDescription getPlatformTrusted(String platformName, String options) {
+        String ctSymVersion;
+
+        if (PREVIEW_OPTION.equals(options)) {
+            ctSymVersion = CT_SYM_PREVIEW_VERSION;
+        } else {
+            ctSymVersion =
+                    StringUtils.toUpperCase(Integer.toString(Integer.parseInt(platformName), Character.MAX_RADIX));
+        }
+
+        return new PlatformDescriptionImpl(platformName, ctSymVersion);
     }
 
     private static final String[] symbolFileLocation = { "lib", "ct.sym" };
+
+    // These must match attributes defined in ZipFileSystem.java.
+    private static final Map<String, ?> CT_SYM_ZIP_ENV = Map.of(
+            // Symbol file should always be opened read-only.
+            "accessMode", "readOnly",
+            // Uses less accurate, but faster, timestamp information
+            // (nobody should care about timestamps in the CT symbol file).
+            "zipinfo-time", "false");
 
     private static final Set<String> SUPPORTED_JAVA_PLATFORM_VERSIONS;
     public static final Comparator<String> NUMERICAL_COMPARATOR = (s1, s2) -> {
@@ -115,7 +138,7 @@ public class JDKPlatformProvider implements PlatformProvider {
         SUPPORTED_JAVA_PLATFORM_VERSIONS = new TreeSet<>(NUMERICAL_COMPARATOR);
         Path ctSymFile = findCtSym();
         if (Files.exists(ctSymFile)) {
-            try (FileSystem fs = FileSystems.newFileSystem(ctSymFile, (ClassLoader)null);
+            try (FileSystem fs = FileSystems.newFileSystem(ctSymFile, CT_SYM_ZIP_ENV);
                  DirectoryStream<Path> dir =
                          Files.newDirectoryStream(fs.getRootDirectories().iterator().next())) {
                 for (Path section : dir) {
@@ -123,6 +146,11 @@ public class JDKPlatformProvider implements PlatformProvider {
                         continue;
                     for (char ver : section.getFileName().toString().toCharArray()) {
                         String verString = Character.toString(ver);
+
+                        if (CT_SYM_PREVIEW_VERSION.equals(verString)) {
+                            continue; //ignore - preview is just an option
+                        }
+
                         Target t = Target.lookup("" + Integer.parseInt(verString, Character.MAX_RADIX));
 
                         if (t != null) {
@@ -145,10 +173,9 @@ public class JDKPlatformProvider implements PlatformProvider {
         private final String sourceVersion;
         private final String ctSymVersion;
 
-        PlatformDescriptionImpl(String sourceVersion) {
+        PlatformDescriptionImpl(String sourceVersion, String ctSymVersion) {
             this.sourceVersion = sourceVersion;
-            this.ctSymVersion =
-                    StringUtils.toUpperCase(Integer.toString(Integer.parseInt(sourceVersion), Character.MAX_RADIX));
+            this.ctSymVersion = ctSymVersion;
         }
 
         @Override
@@ -173,17 +200,8 @@ public class JDKPlatformProvider implements PlatformProvider {
                                                                  "",
                                                                  fileName + ".sig");
 
-                        if (result == null) {
-                            //in jrt://, the classfile may have the .class extension:
-                            result = (JavaFileObject) getFileForInput(location,
-                                                                      "",
-                                                                      fileName + ".class");
-                        }
-
                         if (result != null) {
                             return new SigJavaFileObject(result);
-                        } else {
-                            return null;
                         }
                     }
 
@@ -256,13 +274,17 @@ public class JDKPlatformProvider implements PlatformProvider {
                 try {
                     FileSystem fs = ctSym2FileSystem.get(file);
                     if (fs == null) {
-                        ctSym2FileSystem.put(file, fs = FileSystems.newFileSystem(file, (ClassLoader)null));
+                        fs = FileSystems.newFileSystem(file, CT_SYM_ZIP_ENV);
+                        // If for any reason this was not opened from a ZIP file,
+                        // then the resulting file system would not be read-only.
+                        // NOTE: This check is disabled until JDK 25 bootstrap!
+                        // Assert.check(fs.isReadOnly());
+                        ctSym2FileSystem.put(file, fs);
                     }
 
                     Path root = fs.getRootDirectories().iterator().next();
                     boolean hasModules =
                             Feature.MODULES.allowedInSource(Source.lookup(sourceVersion));
-                    Path systemModules = root.resolve(ctSymVersion).resolve("system-modules");
 
                     if (!hasModules) {
                         List<Path> paths = new ArrayList<>();
@@ -281,18 +303,6 @@ public class JDKPlatformProvider implements PlatformProvider {
                         }
 
                         fm.setLocationFromPaths(StandardLocation.PLATFORM_CLASS_PATH, paths);
-                    } else if (Files.isRegularFile(systemModules)) {
-                        fm.handleOption("--system", Arrays.asList("none").iterator());
-
-                        Path jrtModules =
-                                FileSystems.getFileSystem(URI.create("jrt:/"))
-                                           .getPath("modules");
-                        try (Stream<String> lines =
-                                Files.lines(systemModules, UTF_8)) {
-                            lines.map(line -> jrtModules.resolve(line))
-                                 .filter(mod -> Files.exists(mod))
-                                 .forEach(mod -> setModule(fm, mod));
-                        }
                     } else {
                         Map<String, List<Path>> module2Paths = new HashMap<>();
 
@@ -324,16 +334,6 @@ public class JDKPlatformProvider implements PlatformProvider {
                 }
             } else {
                 throw new IllegalStateException("Cannot find ct.sym!");
-            }
-        }
-
-        private static void setModule(StandardJavaFileManager fm, Path mod) {
-            try {
-                fm.setLocationForModule(StandardLocation.SYSTEM_MODULES,
-                                        mod.getFileName().toString(),
-                                        Collections.singleton(mod));
-            } catch (IOException ex) {
-                throw new IllegalStateException(ex);
             }
         }
 

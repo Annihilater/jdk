@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2016 Red Hat Inc.
+ * Copyright (c) 2026, Oracle and/or its affiliates. All rights reserved.
  *
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -30,6 +31,7 @@
  *  @author Severin Gehwolf <sgehwolf@redhat.com>
  *
  *  @requires vm.gc != "Z"
+ *  @requires vm.flagless
  *  @library ..
  *  @run build TestScaffold VMConnection TargetListener TargetAdapter
  *  @run compile -g OomDebugTest.java
@@ -296,7 +298,7 @@ public class OomDebugTest extends TestScaffold {
     private void handleFailure(InvocationException e) {
         // There is no good way to see the OOME diagnostic message in the target since the
         // TestScaffold might throw an exception while trying to print the stack trace. I.e
-        // it might get a a VMDisconnectedException before the stack trace printing finishes.
+        // it might get a VMDisconnectedException before the stack trace printing finishes.
         System.err.println("FAILURE: InvocationException thrown. Trying to determine cause...");
         defaultHandleOOMFailure(e);
     }

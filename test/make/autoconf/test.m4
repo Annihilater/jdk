@@ -1,12 +1,10 @@
 #
-# Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License version 2 only, as
-# published by the Free Software Foundation.  Oracle designates this
-# particular file as subject to the "Classpath" exception as provided
-# by Oracle in the LICENSE file that accompanied this code.
+# published by the Free Software Foundation.
 #
 # This code is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -91,17 +89,33 @@ AC_DEFUN([TEST_ARG_ENABLE],
   UTIL_ASSERT_NOT_TRUE($disabled)
 ])
 
+AC_DEFUN([TEST_PLATFORM_LIBC],
+[
+  for TEST_OS in linux-musl linux-musleabi linux-musleabihf; do
+    PLATFORM_EXTRACT_VARS_FROM_LIBC($TEST_OS)
+    UTIL_ASSERT_STRING_EQUALS($VAR_LIBC, musl, [Incorrect libc for $TEST_OS])
+  done
+
+  for TEST_OS in linux-gnu linux-gnueabi linux-gnueabihf linux-gnuabi64; do
+    PLATFORM_EXTRACT_VARS_FROM_LIBC($TEST_OS)
+    UTIL_ASSERT_STRING_EQUALS($VAR_LIBC, gnu, [Incorrect libc for $TEST_OS])
+  done
+])
+
 # Use the CUSTOM_EARLY_HOOK to inject our test after basic init is done.
 AC_DEFUN_ONCE([CUSTOM_EARLY_HOOK],
 [
-  $PRINTF "\nStarting configure tests\n"
-  $PRINTF "==============================\n"
+  $ECHO ""
+  $ECHO "Starting configure tests"
+  $ECHO "=============================="
 
   TEST_STRING_OPS
   TEST_ARG_ENABLE
+  TEST_PLATFORM_LIBC
 
   # If no assertions failed, report success
-  $PRINTF "==============================\n"
-  $PRINTF "Configure tests finished successfully\n\n"
+  $ECHO "=============================="
+  $ECHO "Configure tests finished successfully"
+  $ECHO ""
   exit 0
 ])

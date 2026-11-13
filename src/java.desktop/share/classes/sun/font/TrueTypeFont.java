@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,9 +27,7 @@ package sun.font;
 
 import java.awt.Font;
 import java.awt.FontFormatException;
-import java.awt.GraphicsEnvironment;
 import java.awt.geom.Point2D;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UnsupportedEncodingException;
@@ -39,9 +37,6 @@ import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
-import java.security.AccessController;
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -49,7 +44,6 @@ import java.util.Map;
 
 import sun.java2d.Disposer;
 import sun.java2d.DisposerRecord;
-import sun.security.action.GetPropertyAction;
 
 /**
  * TrueTypeFont is not called SFntFont because it is not expected
@@ -58,10 +52,10 @@ import sun.security.action.GetPropertyAction;
  * create an SFnt superclass. Eg to handle sfnt-housed postscript fonts.
  * OpenType fonts are handled by this class, and possibly should be
  * represented by a subclass.
- * An instance stores some information from the font file to faciliate
+ * An instance stores some information from the font file to facilitate
  * faster access. File size, the table directory and the names of the font
  * are the most important of these. It amounts to approx 400 bytes
- * for a typical font. Systems with mutiple locales sometimes have up to 400
+ * for a typical font. Systems with multiple locales sometimes have up to 400
  * font files, and an app which loads all font files would need around
  * 160Kbytes. So storing any more info than this would be expensive.
  */
@@ -220,8 +214,8 @@ public class TrueTypeFont extends FileFont {
             }
         } catch (Throwable t) {
             close();
-            if (t instanceof FontFormatException) {
-                throw (FontFormatException)t;
+            if (t instanceof FontFormatException ffe) {
+                throw ffe;
             } else {
                 throw new FontFormatException("Unexpected runtime exception.");
             }
@@ -247,28 +241,15 @@ public class TrueTypeFont extends FileFont {
                 FontUtilities.logInfo("open TTF: " + platName);
             }
             try {
-                @SuppressWarnings("removal")
-                RandomAccessFile raf = AccessController.doPrivileged(
-                    new PrivilegedExceptionAction<RandomAccessFile>() {
-                        public RandomAccessFile run() throws FileNotFoundException {
-                            return new RandomAccessFile(platName, "r");
-                    }
-                });
+                RandomAccessFile raf = new RandomAccessFile(platName, "r");
                 disposerRecord.channel = raf.getChannel();
                 fileSize = (int)disposerRecord.channel.size();
                 if (usePool) {
                     FontManager fm = FontManagerFactory.getInstance();
-                    if (fm instanceof SunFontManager) {
-                        ((SunFontManager) fm).addToPool(this);
+                    if (fm instanceof SunFontManager sfm) {
+                        sfm.addToPool(this);
                     }
                 }
-            } catch (PrivilegedActionException e) {
-                close();
-                Throwable reason = e.getCause();
-                if (reason == null) {
-                    reason = e;
-                }
-                throw new FontFormatException(reason.toString());
             } catch (ClosedChannelException e) {
                 /* NIO I/O is interruptible, recurse to retry operation.
                  * The call to channel.size() above can throw this exception.
@@ -413,8 +394,6 @@ public class TrueTypeFont extends FileFont {
                 disposerRecord.channel.read(buffer);
                 buffer.flip();
             }
-        } catch (FontFormatException e) {
-            return null;
         } catch (ClosedChannelException e) {
             /* NIO I/O is interruptible, recurse to retry operation.
              * Clear interrupts before recursing in case NIO didn't.
@@ -422,7 +401,7 @@ public class TrueTypeFont extends FileFont {
             Thread.interrupted();
             close();
             readBlock(buffer, offset, length);
-        } catch (IOException e) {
+        } catch (FontFormatException | IOException e) {
             return null;
         }
         return buffer;
@@ -503,7 +482,9 @@ public class TrueTypeFont extends FileFont {
                 /* checksum */ ibuffer.get();
                 table.offset = ibuffer.get() & 0x7FFFFFFF;
                 table.length = ibuffer.get() & 0x7FFFFFFF;
-                if (table.offset + table.length > fileSize) {
+                if ((table.offset + table.length < table.length) ||
+                    (table.offset + table.length > fileSize))
+                {
                     throw new FontFormatException("bad table, tag="+table.tag);
                 }
             }
@@ -527,8 +508,8 @@ public class TrueTypeFont extends FileFont {
             if (FontUtilities.isLogging()) {
                 FontUtilities.logSevere(e.toString());
             }
-            if (e instanceof FontFormatException) {
-                throw (FontFormatException)e;
+            if (e instanceof FontFormatException ffe) {
+                throw ffe;
             } else {
                 throw new FontFormatException(e.toString());
             }
@@ -665,7 +646,6 @@ public class TrueTypeFont extends FileFont {
     };
 
     private static String defaultCodePage = null;
-    @SuppressWarnings("removal")
     static String getCodePage() {
 
         if (defaultCodePage != null) {
@@ -673,8 +653,7 @@ public class TrueTypeFont extends FileFont {
         }
 
         if (FontUtilities.isWindows) {
-            defaultCodePage =
-                AccessController.doPrivileged(new GetPropertyAction("file.encoding"));
+            defaultCodePage = System.getProperty("file.encoding");
         } else {
             if (languages.length != codePages.length) {
                 throw new InternalError("wrong code pages array length");
@@ -798,8 +777,11 @@ public class TrueTypeFont extends FileFont {
                 break;
             }
         }
+
         if (entry == null || entry.length == 0 ||
-            entry.offset+entry.length > fileSize) {
+            (entry.offset + entry.length < entry.length) ||
+            (entry.offset + entry.length > fileSize))
+        {
             return null;
         }
 
@@ -820,9 +802,7 @@ public class TrueTypeFont extends FileFont {
                 Thread.interrupted();
                 close();
                 return getTableBuffer(tag);
-            } catch (IOException e) {
-                return null;
-            } catch (FontFormatException e) {
+            } catch (IOException | FontFormatException e) {
                 return null;
             }
 
@@ -888,6 +868,9 @@ public class TrueTypeFont extends FileFont {
             return false;
         }
         ByteBuffer eblcTable = getTableBuffer(EBLCTag);
+        if (eblcTable == null) {
+            return false;
+        }
         int numSizes = eblcTable.getInt(4);
         /* The bitmapSizeTable's start at offset of 8.
          * Each bitmapSizeTable entry is 48 bytes.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,18 +28,37 @@
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
  *
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -XX:-UseOnStackReplacement -XX:-BackgroundCompilation -Xss512K
- *      -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockExperimentalVMOptions -XX:+EagerJVMCI
+ *      -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockExperimentalVMOptions
  *      -XX:CompileCommand=exclude,compiler.uncommontrap.Test8009761::m2
+ *      compiler.uncommontrap.Test8009761
+ */
+
+/*
+ * @test
+ * @bug 8009761
+ * @summary Deoptimization on sparc doesn't set Llast_SP correctly in the interpreter frames it creates
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *
+ * @requires os.arch == "aarch64" | os.arch == "riscv64"
+ * @requires vm.compiler2.enabled
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -XX:-UseOnStackReplacement -XX:-BackgroundCompilation -Xss512K
+ *      -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockExperimentalVMOptions
+ *      -XX:CompileCommand=exclude,compiler.uncommontrap.Test8009761::m2
+ *      -XX:+PreferCallBasedUncommonTraps
  *      compiler.uncommontrap.Test8009761
  */
 
 package compiler.uncommontrap;
 
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 import java.lang.reflect.Method;
 import compiler.whitebox.CompilerWhiteBoxTest;
 

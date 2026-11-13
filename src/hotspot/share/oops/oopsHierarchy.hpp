@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
 #ifndef SHARE_OOPS_OOPSHIERARCHY_HPP
 #define SHARE_OOPS_OOPSHIERARCHY_HPP
 
-#include "metaprogramming/integralConstant.hpp"
+#include "cppstdlib/type_traits.hpp"
 #include "metaprogramming/primitiveConversions.hpp"
 #include "utilities/globalDefinitions.hpp"
 
@@ -36,17 +36,18 @@
 // Global offset instead of address for an oop within a java object.
 enum class narrowOop : uint32_t { null = 0 };
 
-// If compressed klass pointers then use narrowKlass.
-typedef juint  narrowKlass;
-
 typedef void* OopOrNarrowOopStar;
 
 #ifndef CHECK_UNHANDLED_OOPS
 
 typedef class oopDesc*                    oop;
 typedef class   instanceOopDesc*            instanceOop;
+typedef class     valueOopDesc*               valueOop;
+typedef class     stackChunkOopDesc*          stackChunkOop;
 typedef class   arrayOopDesc*               arrayOop;
 typedef class     objArrayOopDesc*            objArrayOop;
+typedef class       flatArrayOopDesc*           flatArrayOop;
+typedef class       refArrayOopDesc*            refArrayOop;
 typedef class     typeArrayOopDesc*           typeArrayOop;
 
 #else
@@ -66,7 +67,7 @@ typedef class     typeArrayOopDesc*           typeArrayOop;
 // a conversion to or from an oop to a numerical type is needed,
 // use the inline template methods, cast_*_oop, defined below.
 //
-// Converting NULL to oop to Handle implicit is no longer accepted by the
+// Converting null to oop to Handle implicit is no longer accepted by the
 // compiler because there are too many steps in the conversion.  Use Handle()
 // instead, which generates less code anyway.
 
@@ -75,39 +76,52 @@ class oopDesc;
 
 extern "C" bool CheckUnhandledOops;
 
+// Extra verification when creating and using oops.
+// Used to catch broken oops as soon as possible.
+using CheckOopFunctionPointer = void(*)(oopDesc*);
+extern CheckOopFunctionPointer check_oop_function;
+
 class oop {
+public:
+  using DescType = oopDesc;
+
+private:
   oopDesc* _o;
 
   void register_oop();
   void unregister_oop();
 
-  void register_if_checking() {
-    if (CheckUnhandledOops) register_oop();
-  }
+  // Extra verification of the oop
+  void check_oop() const { if (check_oop_function != nullptr && _o != nullptr) check_oop_function(_o); }
+
+  void on_usage() const  { check_oop(); }
+  void on_construction() { check_oop(); if (CheckUnhandledOops)   register_oop(); }
+  void on_destruction()  {              if (CheckUnhandledOops) unregister_oop(); }
 
 public:
-  oop()             : _o(nullptr) { register_if_checking(); }
-  oop(const oop& o) : _o(o._o)    { register_if_checking(); }
-  oop(oopDesc* o)   : _o(o)       { register_if_checking(); }
+  oop()             : _o(nullptr) { on_construction(); }
+  oop(const oop& o) : _o(o._o)    { on_construction(); }
+  oop(oopDesc* o)   : _o(o)       { on_construction(); }
   ~oop() {
-    if (CheckUnhandledOops) unregister_oop();
+    on_destruction();
   }
 
-  oopDesc* obj() const                 { return _o; }
-  oopDesc* operator->() const          { return _o; }
-  operator oopDesc* () const           { return _o; }
+  oopDesc* obj() const                  { on_usage(); return _o; }
 
-  bool operator==(const oop& o) const  { return _o == o._o; }
-  bool operator!=(const oop& o) const  { return _o != o._o; }
+  oopDesc* operator->() const           { return obj(); }
+  operator oopDesc* () const            { return obj(); }
 
-  bool operator==(std::nullptr_t) const     { return _o == nullptr; }
-  bool operator!=(std::nullptr_t) const     { return _o != nullptr; }
+  bool operator==(const oop& o) const   { return obj() == o.obj(); }
+  bool operator!=(const oop& o) const   { return obj() != o.obj(); }
 
-  oop& operator=(const oop& o)         { _o = o._o; return *this; }
+  bool operator==(std::nullptr_t) const { return obj() == nullptr; }
+  bool operator!=(std::nullptr_t) const { return obj() != nullptr; }
+
+  oop& operator=(const oop& o)          { _o = o.obj(); return *this; }
 };
 
 template<>
-struct PrimitiveConversions::Translate<oop> : public TrueType {
+struct PrimitiveConversions::Translate<oop> : public std::true_type {
   typedef oop Value;
   typedef oopDesc* Decayed;
 
@@ -115,37 +129,54 @@ struct PrimitiveConversions::Translate<oop> : public TrueType {
   static Value recover(Decayed x) { return oop(x); }
 };
 
-#define DEF_OOP(type)                                                      \
-   class type##OopDesc;                                                    \
-   class type##Oop : public oop {                                          \
-     public:                                                               \
-       type##Oop() : oop() {}                                              \
-       type##Oop(const type##Oop& o) : oop(o) {}                           \
-       type##Oop(const oop& o) : oop(o) {}                                 \
-       type##Oop(type##OopDesc* o) : oop((oopDesc*)o) {}                   \
-       operator type##OopDesc* () const { return (type##OopDesc*)obj(); }  \
-       type##OopDesc* operator->() const {                                 \
-            return (type##OopDesc*)obj();                                  \
-       }                                                                   \
-       type##Oop& operator=(const type##Oop& o) {                          \
-            oop::operator=(o);                                             \
-            return *this;                                                  \
-       }                                                                   \
-   };                                                                      \
-                                                                           \
-   template<>                                                              \
-   struct PrimitiveConversions::Translate<type##Oop> : public TrueType {   \
-     typedef type##Oop Value;                                              \
-     typedef type##OopDesc* Decayed;                                       \
-                                                                           \
-     static Decayed decay(Value x) { return (type##OopDesc*)x.obj(); }     \
-     static Value recover(Decayed x) { return type##Oop(x); }              \
-   };
+#define DEF_OOP_IMPL(OopType, OopDescType, BaseOopType)                        \
+  class OopDescType;                                                           \
+  class OopType : public BaseOopType {                                         \
+  public:                                                                      \
+    using DescType = OopDescType;                                              \
+    OopType() : BaseOopType() {}                                               \
+    OopType(std::nullptr_t) : BaseOopType() {}                                 \
+    OopType(const OopType& o) : BaseOopType(o) {}                              \
+    explicit OopType(const oop& o) : BaseOopType(o) {}                         \
+    OopType(DescType* o) : BaseOopType((BaseOopType::DescType*)o) {}           \
+    operator DescType*() const { return (DescType*)obj(); }                    \
+    DescType* operator->() const { return (DescType*)obj(); }                  \
+    OopType& operator=(std::nullptr_t) {                                       \
+      BaseOopType::operator=(nullptr);                                         \
+      return *this;                                                            \
+    }                                                                          \
+    OopType& operator=(const OopType& o) {                                     \
+      BaseOopType::operator=(o);                                               \
+      return *this;                                                            \
+    }                                                                          \
+    OopType& operator=(const oop& o) = delete;                                 \
+  };                                                                           \
+                                                                               \
+  template <>                                                                  \
+  struct PrimitiveConversions::Translate<OopType> : public std::true_type {    \
+    typedef OopType Value;                                                     \
+    typedef OopType::DescType* Decayed;                                        \
+                                                                               \
+    static Decayed decay(Value x) { return (OopType::DescType*)x.obj(); }      \
+    static Value recover(Decayed x) { return OopType(x); }                     \
+  };
+
+#define DEF_OOP_BASE(type, base)                                               \
+  DEF_OOP_IMPL(type##Oop, type##OopDesc, base##Oop)
+#define DEF_OOP(type) DEF_OOP_IMPL(type##Oop, type##OopDesc, oop)
 
 DEF_OOP(instance);
+DEF_OOP_BASE(value, instance);
+DEF_OOP_BASE(stackChunk, instance);
 DEF_OOP(array);
-DEF_OOP(objArray);
-DEF_OOP(typeArray);
+DEF_OOP_BASE(objArray, array);
+DEF_OOP_BASE(typeArray, array);
+DEF_OOP_BASE(flatArray, objArray);
+DEF_OOP_BASE(refArray, objArray);
+
+#undef DEF_OOP_IMPL
+#undef DEF_OOP_BASE
+#undef DEF_OOP
 
 #endif // CHECK_UNHANDLED_OOPS
 
@@ -157,6 +188,10 @@ template <typename T> inline T cast_from_oop(oop o) {
   return (T)(CHECK_UNHANDLED_OOPS_ONLY((oopDesc*))o);
 }
 
+inline intptr_t p2i(narrowOop o) {
+  return static_cast<intptr_t>(o);
+}
+
 // The metadata hierarchy is separate from the oop hierarchy
 
 //      class MetaspaceObj
@@ -166,19 +201,20 @@ class   MethodData;
 //      class Metadata
 class   Method;
 class   ConstantPool;
-//      class CHeapObj
-class   CompiledICHolder;
-
 
 // The klass hierarchy is separate from the oop hierarchy.
 
 class Klass;
 class   InstanceKlass;
+class     ValueKlass;
 class     InstanceMirrorKlass;
 class     InstanceClassLoaderKlass;
 class     InstanceRefKlass;
+class     InstanceStackChunkKlass;
 class   ArrayKlass;
 class     ObjArrayKlass;
+class       FlatArrayKlass;
+class       RefArrayKlass;
 class     TypeArrayKlass;
 
 #endif // SHARE_OOPS_OOPSHIERARCHY_HPP

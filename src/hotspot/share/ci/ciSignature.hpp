@@ -27,6 +27,7 @@
 
 #include "ci/ciClassList.hpp"
 #include "ci/ciSymbol.hpp"
+#include "ci/ciType.hpp"
 #include "interpreter/bytecodes.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/growableArray.hpp"
@@ -34,7 +35,7 @@
 // ciSignature
 //
 // This class represents the signature of a method.
-class ciSignature : public ResourceObj {
+class ciSignature : public ArenaObj {
 private:
   ciSymbol* _symbol;
   ciKlass*  _accessing_klass;
@@ -56,12 +57,18 @@ public:
   ciKlass*  accessing_klass() const              { return _accessing_klass; }
 
   ciType*   return_type() const                  { return _return_type; }
-  ciType*   type_at(int index) const             { return _types.at(index); }
+  ciType*   type_at(int index) const {
+    ciType* type = _types.at(index);
+    assert(type == type->unwrap(), "signature type should not be wrapped");
+    return _types.at(index)->unwrap();
+  }
 
   int       size() const                         { return _size; }
   int       count() const                        { return _types.length(); }
 
   int       arg_size_for_bc(Bytecodes::Code bc)  { return size() + (Bytecodes::has_receiver(bc) ? 1 : 0); }
+
+  bool has_unloaded_classes();
 
   bool equals(ciSignature* that);
 

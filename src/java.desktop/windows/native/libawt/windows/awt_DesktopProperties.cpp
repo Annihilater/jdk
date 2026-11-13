@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,8 @@
  * questions.
  */
 
+#include <cmath>
+
 #include "awt.h"
 #include "mmsystem.h"
 #include "jlong.h"
@@ -34,14 +36,6 @@
 #include "zmouse.h"
 #include <shellapi.h>
 #include <shlobj.h>
-
-#include "math.h"
-
-#if defined(_MSC_VER) && _MSC_VER >= 1800
-#  define ROUND_TO_INT(num)    ((int) round(num))
-#else
-#  define ROUND_TO_INT(num)    ((int) floor((num) + 0.5))
-#endif
 
 // WDesktopProperties fields
 jfieldID AwtDesktopProperties::pDataID = 0;
@@ -82,9 +76,7 @@ void AwtDesktopProperties::GetWindowsParameters() {
     GetOtherParameters();
     GetSoundEvents();
     GetSystemProperties();
-    if (IS_WINXP) {
-        GetXPStyleProperties();
-    }
+    GetXPStyleProperties();
 }
 
 void getInvScale(float &invScaleX, float &invScaleY) {
@@ -103,7 +95,7 @@ void getInvScale(float &invScaleX, float &invScaleY) {
 }
 
 int rescale(int value, float invScale){
-    return invScale == 1.0f ? value : ROUND_TO_INT(value * invScale);
+    return invScale == 1.0f ? value : (int) round(value * invScale);
 }
 
 void AwtDesktopProperties::GetSystemProperties() {
@@ -138,7 +130,7 @@ void AwtDesktopProperties::GetSystemProperties() {
 // Note that it uses malloc() and returns the pointer to allocated
 // memory, so remember to use free() when you are done with its
 // result.
-static LPTSTR resolveShellDialogFont(LPTSTR fontName, HKEY handle) {
+static LPTSTR resolveShellDialogFont(LPCTSTR fontName, HKEY handle) {
     DWORD valueType, valueSize;
     if (RegQueryValueEx((HKEY)handle, fontName, NULL,
                         &valueType, NULL, &valueSize) != 0) {
@@ -164,7 +156,7 @@ static LPTSTR resolveShellDialogFont(LPTSTR fontName, HKEY handle) {
 // memory, so remember to use free() when you are done with its
 // result.
 static LPTSTR resolveShellDialogFont() {
-    LPTSTR subKey = TEXT("Software\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes");
+    LPCTSTR subKey = TEXT("Software\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes");
 
     HKEY handle;
     if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, subKey, 0, KEY_READ, &handle) != 0) {
@@ -183,7 +175,7 @@ static LPTSTR resolveShellDialogFont() {
 // Note that it uses malloc() and returns the pointer to allocated
 // memory, so remember to use free() when you are done with its
 // result.
-static LPTSTR getWindowsPropFromReg(LPTSTR subKey, LPTSTR valueName, DWORD *valueType) {
+static LPTSTR getWindowsPropFromReg(LPCTSTR subKey, LPCTSTR valueName, DWORD *valueType) {
     HKEY handle;
     if (RegOpenKeyEx(HKEY_CURRENT_USER, subKey, 0, KEY_READ, &handle) != 0) {
         return NULL;
@@ -221,7 +213,7 @@ static LPTSTR getWindowsPropFromReg(LPTSTR subKey, LPTSTR valueName, DWORD *valu
     }
 }
 
-static LPTSTR getXPStylePropFromReg(LPTSTR valueName) {
+static LPTSTR getXPStylePropFromReg(LPCTSTR valueName) {
     DWORD valueType;
     return getWindowsPropFromReg(TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager"),
                                  valueName, &valueType);
@@ -280,20 +272,8 @@ void AwtDesktopProperties::GetNonClientParameters() {
     // general window properties
     //
     NONCLIENTMETRICS    ncmetrics;
+    ncmetrics.cbSize = sizeof(ncmetrics);
 
-    // Fix for 6944516: specify correct size for ncmetrics on WIN2K/XP
-    // Microsoft recommend to subtract the size of  'iPaddedBorderWidth' field
-    // when running on XP. However this can't be referenced at compile time
-    // with the older SDK, so there use 'lfMessageFont' plus its size.
-    if (!IS_WINVISTA) {
-#if defined(_MSC_VER) && (_MSC_VER >= 1600)
-        ncmetrics.cbSize = offsetof(NONCLIENTMETRICS, iPaddedBorderWidth);
-#else
-        ncmetrics.cbSize = offsetof(NONCLIENTMETRICS,lfMessageFont) + sizeof(LOGFONT);
-#endif
-    } else {
-        ncmetrics.cbSize = sizeof(ncmetrics);
-    }
     VERIFY( SystemParametersInfo(SPI_GETNONCLIENTMETRICS, ncmetrics.cbSize, &ncmetrics, FALSE) );
 
     float invScaleX;
@@ -429,12 +409,8 @@ void CheckFontSmoothingSettings(HWND hWnd) {
 
     if (firstTime) {
         SystemParametersInfo(SPI_GETFONTSMOOTHING, 0, &fontSmoothing, 0);
-        if (IS_WINXP) {
-            SystemParametersInfo(SPI_GETFONTSMOOTHINGTYPE, 0,
-                                 &fontSmoothingType, 0);
-            SystemParametersInfo(SPI_GETFONTSMOOTHINGCONTRAST, 0,
-                                 &fontSmoothingContrast, 0);
-        }
+        SystemParametersInfo(SPI_GETFONTSMOOTHINGTYPE, 0, &fontSmoothingType, 0);
+        SystemParametersInfo(SPI_GETFONTSMOOTHINGCONTRAST, 0, &fontSmoothingContrast, 0);
         lastFontSmoothing = fontSmoothing;
         lastFontSmoothingType = fontSmoothingType;
         lastFontSmoothingContrast = fontSmoothingContrast;
@@ -447,28 +423,18 @@ void CheckFontSmoothingSettings(HWND hWnd) {
             /* no need to check the other settings in this case. */
             return;
         }
-        if (IS_WINXP) {
-            SystemParametersInfo(SPI_GETFONTSMOOTHINGTYPE, 0,
-                                 &fontSmoothingType, 0);
-            settingsChanged |= fontSmoothingType != lastFontSmoothingType;
-            if (!settingsChanged &&
-                fontSmoothingType == FONTSMOOTHING_STANDARD) {
-                /* No need to check any LCD specific settings */
-                return;
-            } else {
-                SystemParametersInfo(SPI_GETFONTSMOOTHINGCONTRAST, 0,
-                                     &fontSmoothingContrast, 0);
-                settingsChanged |=
-                    fontSmoothingContrast != lastFontSmoothingContrast;
-                if (fontSmoothingType == FONTSMOOTHING_LCD) {
-                    // Order is a registry entry so more expensive to check.x
-                    subPixelOrder = GetLCDSubPixelOrder();
-                    settingsChanged |= subPixelOrder != lastSubpixelOrder;
-                }
-            }
+        SystemParametersInfo(SPI_GETFONTSMOOTHINGTYPE, 0, &fontSmoothingType, 0);
+        settingsChanged |= fontSmoothingType != lastFontSmoothingType;
+        if (!settingsChanged && fontSmoothingType == FONTSMOOTHING_STANDARD) {
+            /* No need to check any LCD specific settings */
+            return;
         } else {
-            if (settingsChanged && fontSmoothing == FONTSMOOTHING_ON) {
-                fontSmoothingType = FONTSMOOTHING_STANDARD;
+            SystemParametersInfo(SPI_GETFONTSMOOTHINGCONTRAST, 0, &fontSmoothingContrast, 0);
+            settingsChanged |= fontSmoothingContrast != lastFontSmoothingContrast;
+            if (fontSmoothingType == FONTSMOOTHING_LCD) {
+                // Order is a registry entry so more expensive to check.x
+                subPixelOrder = GetLCDSubPixelOrder();
+                settingsChanged |= subPixelOrder != lastSubpixelOrder;
             }
         }
     }
@@ -525,13 +491,7 @@ void AwtDesktopProperties::GetColorParameters() {
     SetColorProperty(TEXT("win.mdi.backgroundColor"), GetSysColor(COLOR_APPWORKSPACE));
     SetColorProperty(TEXT("win.menu.backgroundColor"), GetSysColor(COLOR_MENU));
     SetColorProperty(TEXT("win.menu.textColor"), GetSysColor(COLOR_MENUTEXT));
-    // COLOR_MENUBAR is only defined on WindowsXP. Our binaries are
-    // built on NT, hence the below ifdef.
-#ifndef COLOR_MENUBAR
-#define COLOR_MENUBAR 30
-#endif
-    SetColorProperty(TEXT("win.menubar.backgroundColor"),
-                                GetSysColor(IS_WINXP ? COLOR_MENUBAR : COLOR_MENU));
+    SetColorProperty(TEXT("win.menubar.backgroundColor"), GetSysColor(COLOR_MENUBAR));
     SetColorProperty(TEXT("win.scrollbar.backgroundColor"), GetSysColor(COLOR_SCROLLBAR));
     SetColorProperty(TEXT("win.text.grayedTextColor"), GetSysColor(COLOR_GRAYTEXT));
     SetColorProperty(TEXT("win.tooltip.backgroundColor"), GetSysColor(COLOR_INFOBK));
@@ -539,21 +499,16 @@ void AwtDesktopProperties::GetColorParameters() {
 }
 
 void AwtDesktopProperties::GetOtherParameters() {
-    // TODO BEGIN: On NT4, some setttings don't trigger WM_SETTINGCHANGE --
+    // TODO BEGIN: On NT4, some settings don't trigger WM_SETTINGCHANGE --
     // check whether this has been fixed on Windows 2000 and Windows 98
     // ECH 10/6/2000 seems to be fixed on NT4 SP5, but not on 98
     SetBooleanProperty(TEXT("win.frame.fullWindowDragsOn"), GetBooleanParameter(SPI_GETDRAGFULLWINDOWS));
     SetBooleanProperty(TEXT("win.text.fontSmoothingOn"), GetBooleanParameter(SPI_GETFONTSMOOTHING));
     // TODO END
 
-    if (IS_WINXP) {
-        SetIntegerProperty(TEXT("win.text.fontSmoothingType"),
-                           GetIntegerParameter(SPI_GETFONTSMOOTHINGTYPE));
-        SetIntegerProperty(TEXT("win.text.fontSmoothingContrast"),
-                           GetIntegerParameter(SPI_GETFONTSMOOTHINGCONTRAST));
-        SetIntegerProperty(TEXT("win.text.fontSmoothingOrientation"),
-                           GetLCDSubPixelOrder());
-    }
+    SetIntegerProperty(TEXT("win.text.fontSmoothingType"), GetIntegerParameter(SPI_GETFONTSMOOTHINGTYPE));
+    SetIntegerProperty(TEXT("win.text.fontSmoothingContrast"), GetIntegerParameter(SPI_GETFONTSMOOTHINGCONTRAST));
+    SetIntegerProperty(TEXT("win.text.fontSmoothingOrientation"), GetLCDSubPixelOrder());
 
     int cxdrag = GetSystemMetrics(SM_CXDRAG);
     int cydrag = GetSystemMetrics(SM_CYDRAG);
@@ -651,11 +606,11 @@ void AwtDesktopProperties::GetOtherParameters() {
         throw;
     }
 
-    LPTSTR valueName = TEXT("PlaceN");
+    LPCTSTR valueName = TEXT("PlaceN");
     LPTSTR valueNameBuf = (LPTSTR)SAFE_SIZE_ARRAY_ALLOC(safe_Malloc, (lstrlen(valueName) + 1), sizeof(TCHAR));
     lstrcpy(valueNameBuf, valueName);
 
-    LPTSTR propKey = TEXT("win.comdlg.placesBarPlaceN");
+    LPCTSTR propKey = TEXT("win.comdlg.placesBarPlaceN");
 
     LPTSTR propKeyBuf;
     try {
@@ -672,7 +627,7 @@ void AwtDesktopProperties::GetOtherParameters() {
         valueNameBuf[5] = _T('0' + i++);
         propKeyBuf[25] = valueNameBuf[5];
 
-        LPTSTR key = TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\comdlg32\\PlacesBar");
+        LPCTSTR key = TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\comdlg32\\PlacesBar");
         try {
             value = NULL;
             if ((value = getWindowsPropFromReg(key, valueNameBuf, &valueType)) != NULL) {

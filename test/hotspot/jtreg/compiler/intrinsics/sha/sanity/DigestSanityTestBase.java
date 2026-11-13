@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@ package compiler.intrinsics.sha.sanity;
 
 import compiler.intrinsics.sha.TestDigest;
 import compiler.testlibrary.intrinsics.Verifier;
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -53,8 +53,7 @@ public class DigestSanityTestBase {
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
     private static final int MSG_SIZE = 1024;
     private static final int OFFSET = 0;
-    private static final int ITERATIONS = 10000;
-    private static final int WARMUP_ITERATIONS = 1;
+    private static final int WARMUP_ITERATIONS = WHITE_BOX.getIntxVMFlag("Tier4InvocationThreshold").intValue() + 10_000;
     private static final String PROVIDER = "SUN";
 
     private final BooleanSupplier predicate;
@@ -88,7 +87,6 @@ public class DigestSanityTestBase {
 
         TestDigest.testDigest(DigestSanityTestBase.PROVIDER, algorithm,
                 DigestSanityTestBase.MSG_SIZE, DigestSanityTestBase.OFFSET,
-                DigestSanityTestBase.ITERATIONS,
                 DigestSanityTestBase.WARMUP_ITERATIONS);
     }
 

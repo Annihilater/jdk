@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2026, Oracle and/or its affiliates. All rights reserved.
  */
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -42,11 +42,9 @@ import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
 import java.lang.reflect.InvocationTargetException;
-import java.security.AccessController;
 import java.security.CodeSigner;
 import java.security.CodeSource;
 import java.security.PermissionCollection;
-import java.security.PrivilegedAction;
 import java.security.ProtectionDomain;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -60,7 +58,8 @@ import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerConfigurationException;
 import javax.xml.transform.URIResolver;
 import jdk.xml.internal.JdkConstants;
-import jdk.xml.internal.SecuritySupport;
+import jdk.xml.internal.JdkXmlFeatures;
+import jdk.xml.internal.XMLSecurityManager;
 
 
 /**
@@ -68,7 +67,7 @@ import jdk.xml.internal.SecuritySupport;
  * @author G. Todd Millerj
  * @author Jochen Cordes <Jochen.Cordes@t-online.de>
  * @author Santiago Pericas-Geertsen
- * @LastModified: May 2021
+ * @LastModified: July 2026
  */
 public final class TemplatesImpl implements Templates, Serializable {
     static final long serialVersionUID = 673094361519270707L;
@@ -150,6 +149,7 @@ public final class TemplatesImpl implements Templates, Serializable {
      * protocols allowed for external references set by the stylesheet processing instruction, Import and Include element.
      */
     private transient String _accessExternalStylesheet = JdkConstants.EXTERNAL_ACCESS_DEFAULT;
+    private transient XMLSecurityManager _xsm;
 
     /**
      * @serialField _name String The Name of the main class
@@ -243,6 +243,7 @@ public final class TemplatesImpl implements Templates, Serializable {
         _tfactory = tfactory;
         _overrideDefaultParser = tfactory.overrideDefaultParser();
         _accessExternalStylesheet = (String) tfactory.getAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET);
+        _xsm = (XMLSecurityManager) tfactory.getAttribute(JdkConstants.SECURITY_MANAGER);
     }
     /**
      * Need for de-serialization, see readObject().
@@ -258,18 +259,15 @@ public final class TemplatesImpl implements Templates, Serializable {
      *  if yes then we need to deserialize the URIResolver
      *  Fix for bugzilla bug 22438
      */
-    @SuppressWarnings("unchecked")
     private void  readObject(ObjectInputStream is)
       throws IOException, ClassNotFoundException
     {
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null){
-            String temp = SecuritySupport.getSystemProperty(DESERIALIZE_TRANSLET);
-            if (temp == null || !(temp.length()==0 || temp.equalsIgnoreCase("true"))) {
-                ErrorMsg err = new ErrorMsg(ErrorMsg.DESERIALIZE_TRANSLET_ERR);
-                throw new UnsupportedOperationException(err.toString());
-            }
+        TransformerFactoryImpl tfactory = new TransformerFactoryImpl();
+
+        if (!tfactory.getFeature(
+                JdkXmlFeatures.XmlFeature.ENABLE_TEMPLATESIMPL_DESERIALIZATION.apiProperty())) {
+            ErrorMsg err = new ErrorMsg(ErrorMsg.DESERIALIZE_TRANSLET_ERR);
+            throw new UnsupportedOperationException(err.toString());
         }
 
         // We have to read serialized fields first.
@@ -286,7 +284,7 @@ public final class TemplatesImpl implements Templates, Serializable {
             _uriResolver = (URIResolver) is.readObject();
         }
 
-        _tfactory = new TransformerFactoryImpl();
+        _tfactory = tfactory;
     }
 
 
@@ -441,10 +439,7 @@ public final class TemplatesImpl implements Templates, Serializable {
         Configuration cf = bootLayer.configuration()
                 .resolve(finder, ModuleFinder.of(), Set.of(mn));
 
-        PrivilegedAction<ModuleLayer> pa = () -> bootLayer.defineModules(cf, name -> loader);
-        @SuppressWarnings("removal")
-        ModuleLayer layer = AccessController.doPrivileged(pa);
-
+        ModuleLayer layer = bootLayer.defineModules(cf, _ -> loader);
         Module m = layer.findModule(mn).get();
         assert m.getLayer() == layer;
 
@@ -455,6 +450,7 @@ public final class TemplatesImpl implements Templates, Serializable {
      * Defines the translet class and auxiliary classes.
      * Returns a reference to the Class object that defines the main class
      */
+    @SuppressWarnings("removal")
     private void defineTransletClasses()
         throws TransformerConfigurationException {
 
@@ -463,14 +459,9 @@ public final class TemplatesImpl implements Templates, Serializable {
             throw new TransformerConfigurationException(err.toString());
         }
 
-        @SuppressWarnings("removal")
         TransletClassLoader loader =
-                AccessController.doPrivileged(new PrivilegedAction<TransletClassLoader>() {
-                public TransletClassLoader run() {
-                    return new TransletClassLoader(ObjectFactory.findClassLoader(),
+                new TransletClassLoader(ObjectFactory.findClassLoader(),
                             _tfactory.getExternalExtensionsMap());
-                }
-            });
 
         try {
             final int classCount = _bytecodes.length;
@@ -561,6 +552,7 @@ public final class TemplatesImpl implements Templates, Serializable {
             translet.setTemplates(this);
             translet.setOverrideDefaultParser(_overrideDefaultParser);
             translet.setAllowedProtocols(_accessExternalStylesheet);
+            translet.setXMLSecurityManager(_xsm);
             if (_auxClasses != null) {
                 translet.setAuxiliaryClasses(_auxClasses);
             }

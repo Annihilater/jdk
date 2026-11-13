@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,10 +31,10 @@
  * @requires vm.cds
  * @library /test/lib /test/hotspot/jtreg/runtime/cds/appcds
  *          /test/hotspot/jtreg/runtime/cds/appcds/dynamicArchive/test-classes
- * @build sun.hotspot.WhiteBox ArchivedSuperIfApp Bar Baz
+ * @build jdk.test.whitebox.WhiteBox ArchivedSuperIfApp Bar Baz
  * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar archived_super_if.jar pkg.ArchivedSuperIfApp pkg.Bar pkg.Baz
- * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar WhiteBox.jar sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar WhiteBox.jar jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:. ArchivedSuperIf
  */
 
@@ -74,7 +74,7 @@ public class ArchivedSuperIf extends DynamicArchiveTestBase {
             .assertNormalExit(output -> {
                 // The interface Bar will be loaded from the archive.
                 // The class (Baz) which implements Bar will be loaded from jar.
-                output.shouldContain("[class,load] pkg.Bar source: shared objects file (top)")
+                output.shouldMatch("\\[class,load *\\] pkg\\.Bar source: shared objects file \\(top\\)")
                       .shouldMatch(".class.load. pkg.Baz source:.*archived_super_if.jar")
                       .shouldHaveExitValue(0);
             });

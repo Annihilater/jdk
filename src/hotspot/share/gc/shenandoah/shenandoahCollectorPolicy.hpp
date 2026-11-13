@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2013, 2021, Red Hat, Inc. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,62 +27,94 @@
 #define SHARE_GC_SHENANDOAH_SHENANDOAHCOLLECTORPOLICY_HPP
 
 #include "gc/shared/gcTrace.hpp"
-#include "gc/shenandoah/shenandoahGC.hpp"
+#include "gc/shenandoah/shenandoahController.hpp"
 #include "gc/shenandoah/shenandoahSharedVariables.hpp"
+#include "gc/shenandoah/shenandoahTrace.hpp"
 #include "memory/allocation.hpp"
-#include "utilities/ostream.hpp"
 
-class ShenandoahTracer : public GCTracer {
-public:
-  ShenandoahTracer() : GCTracer(Shenandoah) {}
-};
+class ShenandoahHeapRegion;
+class ShenandoahMode;
 
 class ShenandoahCollectorPolicy : public CHeapObj<mtGC> {
 private:
   size_t _success_concurrent_gcs;
-  size_t _success_degenerated_gcs;
-  size_t _success_full_gcs;
-  size_t _alloc_failure_degenerated;
-  size_t _alloc_failure_degenerated_upgrade_to_full;
+  size_t _abbreviated_concurrent_gcs;
+
+  // Written by control thread, read by mutators (infrequently)
+  Atomic<size_t> _last_whole_heap_gc_id;
+  volatile size_t _success_full_gcs;
+  volatile size_t _consecutive_young_gcs;
+
+  size_t _mixed_gcs;
+  size_t _success_old_gcs;
+  size_t _interrupted_old_gcs;
   size_t _alloc_failure_full;
-  size_t _explicit_concurrent;
-  size_t _explicit_full;
-  size_t _implicit_concurrent;
-  size_t _implicit_full;
-  size_t _degen_points[ShenandoahGC::_DEGENERATED_LIMIT];
+  size_t _collection_cause_counts[GCCause::_last_gc_cause];
+
+  Atomic<size_t> _stall_counts[ShenandoahController::PHASE_LIMIT];
 
   ShenandoahSharedFlag _in_shutdown;
-
   ShenandoahTracer* _tracer;
-
-  size_t _cycle_counter;
+  ShenandoahMode* _mode;
 
 public:
-  ShenandoahCollectorPolicy();
 
-  // TODO: This is different from gc_end: that one encompasses one VM operation.
-  // These two encompass the entire cycle.
-  void record_cycle_start();
+  ShenandoahCollectorPolicy(ShenandoahMode* mode);
 
-  void record_success_concurrent();
-  void record_success_degenerated();
-  void record_success_full();
-  void record_alloc_failure_to_degenerated(ShenandoahGC::ShenandoahDegenPoint point);
+  void record_mixed_cycle();
+  void record_success_old();
+  void record_interrupted_old();
+
+  // A collection cycle may be "abbreviated" if Shenandoah finds a sufficient percentage
+  // of regions that contain no live objects (ShenandoahImmediateThreshold). These cycles
+  // end after final mark, skipping the evacuation and reference-updating phases. Such
+  // cycles are very efficient and are worth tracking.
+  void record_success_concurrent(size_t gc_id, bool is_young, bool is_abbreviated);
+
+  void record_success_full(size_t gc_id);
+  void record_allocation_stall(ShenandoahController::ShenandoahCollectorPhase phase);
   void record_alloc_failure_to_full();
-  void record_degenerated_upgrade_to_full();
-  void record_explicit_to_concurrent();
-  void record_explicit_to_full();
-  void record_implicit_to_concurrent();
-  void record_implicit_to_full();
+  void record_collection_cause(GCCause::Cause cause);
 
   void record_shutdown();
-  bool is_at_shutdown();
+  bool is_at_shutdown() const;
 
-  ShenandoahTracer* tracer() {return _tracer;}
-
-  size_t cycle_counter() const;
+  ShenandoahTracer* tracer() const {return _tracer;}
 
   void print_gc_stats(outputStream* out) const;
+
+  size_t full_gc_count() const {
+    return _success_full_gcs;
+  }
+
+  size_t last_whole_heap_gc_id() const {
+    return _last_whole_heap_gc_id.load_relaxed();
+  }
+
+  static bool is_allocation_failure(GCCause::Cause cause);
+  static bool is_shenandoah_gc(GCCause::Cause cause);
+  static bool is_explicit_gc(GCCause::Cause cause);
+  static bool should_run_full_gc(GCCause::Cause cause);
+  static bool should_handle_requested_gc(GCCause::Cause cause);
+
+  static bool is_higher_priority(GCCause::Cause lhs, GCCause::Cause rhs) {
+    return cause_priority(lhs) > cause_priority(rhs);
+  }
+
+  // True if the region has self-forwarded objects and the calling thread has exhausted its LABs.
+  static bool should_abandon_evacuations(ShenandoahHeapRegion* region);
+
+  size_t consecutive_young_gc_count() const {
+    return _consecutive_young_gcs;
+  }
+
+  size_t reclaiming_gc_count() const {
+    return _success_concurrent_gcs + _success_full_gcs + _success_old_gcs;
+  }
+
+private:
+  static int cause_priority(GCCause::Cause cause);
+  void update_young(bool is_young);
 };
 
 #endif // SHARE_GC_SHENANDOAH_SHENANDOAHCOLLECTORPOLICY_HPP

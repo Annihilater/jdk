@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,12 +21,14 @@
  * questions.
  *
  */
-#include "precompiled.hpp"
 #include "ci/ciMethod.hpp"
 #include "compiler/compilerEvent.hpp"
 #include "jfr/jfr.hpp"
 #include "jfr/jfrEvents.hpp"
 #include "jfr/metadata/jfrSerializer.hpp"
+#include "runtime/interfaceSupport.inline.hpp"
+#include "runtime/javaThread.hpp"
+#include "runtime/os.hpp"
 #include "runtime/semaphore.inline.hpp"
 #include "utilities/growableArray.hpp"
 
@@ -54,26 +56,26 @@ class PhaseTypeGuard : public StackObj {
 Semaphore PhaseTypeGuard::_mutex_semaphore(1);
 
 // Table for mapping compiler phases names to int identifiers.
-static GrowableArray<const char*>* phase_names = NULL;
+static GrowableArray<const char*>* _phase_names = nullptr;
 
 class CompilerPhaseTypeConstant : public JfrSerializer {
  public:
   void serialize(JfrCheckpointWriter& writer) {
     PhaseTypeGuard guard;
-    assert(phase_names != NULL, "invariant");
-    assert(phase_names->is_nonempty(), "invariant");
-    const u4 nof_entries = phase_names->length();
+    assert(_phase_names != nullptr, "invariant");
+    assert(_phase_names->is_nonempty(), "invariant");
+    const u4 nof_entries = _phase_names->length();
     writer.write_count(nof_entries);
     for (u4 i = 0; i < nof_entries; i++) {
       writer.write_key(i);
-      writer.write(phase_names->at(i));
+      writer.write(_phase_names->at(i));
     }
   }
 };
 
 static int lookup_phase(const char* phase_name) {
-  for (int i = 0; i < phase_names->length(); i++) {
-    const char* name = phase_names->at(i);
+  for (int i = 0; i < _phase_names->length(); i++) {
+    const char* name = _phase_names->at(i);
     if (strcmp(name, phase_name) == 0) {
       return i;
     }
@@ -86,8 +88,8 @@ int CompilerEvent::PhaseEvent::get_phase_id(const char* phase_name, bool may_exi
   bool register_jfr_serializer = false;
   {
     PhaseTypeGuard guard(sync);
-    if (phase_names == NULL) {
-      phase_names = new (ResourceObj::C_HEAP, mtInternal) GrowableArray<const char*>(100, mtCompiler);
+    if (_phase_names == nullptr) {
+      _phase_names = new (mtCompiler) GrowableArray<const char*>(100, mtCompiler);
       register_jfr_serializer = true;
     } else if (may_exist) {
       index = lookup_phase(phase_name);
@@ -98,8 +100,8 @@ int CompilerEvent::PhaseEvent::get_phase_id(const char* phase_name, bool may_exi
       assert((index = lookup_phase(phase_name)) == -1, "phase name \"%s\" already registered: %d", phase_name, index);
     }
 
-    index = phase_names->length();
-    phase_names->append(use_strdup ? strdup(phase_name) : phase_name);
+    index = _phase_names->length();
+    _phase_names->append(use_strdup ? os::strdup(phase_name, mtCompiler) : phase_name);
   }
   if (register_jfr_serializer) {
     JfrSerializer::register_serializer(TYPE_COMPILERPHASETYPE, false, new CompilerPhaseTypeConstant());
@@ -114,7 +116,26 @@ int CompilerEvent::PhaseEvent::get_phase_id(const char* phase_name, bool may_exi
   return index;
 }
 
-void CompilerEvent::CompilationEvent::post(EventCompilation& event, int compile_id, CompilerType compiler_type, Method* method, int compile_level, bool success, bool is_osr, int code_size, int inlined_bytecodes) {
+// As part of event commit, a Method* is tagged as a function of an epoch.
+// Epochs evolve during safepoints. To ensure the event is tagged in the correct epoch,
+// that is, to avoid a race, the thread will participate in the safepoint protocol
+// by doing the commit while the thread is _thread_in_vm.
+template <typename EventType>
+static inline void commit(EventType& event) {
+  JavaThread* thread = JavaThread::current();
+  JavaThreadState state = thread->thread_state();
+  if (state == _thread_in_native) {
+    ThreadInVMfromNative transition(thread);
+    event.commit();
+  } else {
+    assert(state == _thread_in_vm, "coming from wrong thread state %d", state);
+    event.commit();
+  }
+ }
+
+void CompilerEvent::CompilationEvent::post(EventCompilation& event, int compile_id, CompilerType compiler_type, Method* method,
+    int compile_level, bool success, bool is_osr, int code_size,
+    int inlined_bytecodes, size_t arenaBytes) {
   event.set_compileId(compile_id);
   event.set_compiler(compiler_type);
   event.set_method(method);
@@ -123,7 +144,8 @@ void CompilerEvent::CompilationEvent::post(EventCompilation& event, int compile_
   event.set_isOsr(is_osr);
   event.set_codeSize(code_size);
   event.set_inlinedBytes(inlined_bytecodes);
-  event.commit();
+  event.set_arenaBytes(arenaBytes);
+  commit(event);
 }
 
 void CompilerEvent::CompilationFailureEvent::post(EventCompilationFailure& event, int compile_id, const char* reason) {
@@ -147,7 +169,7 @@ void CompilerEvent::InlineEvent::post(EventCompilerInlining& event, int compile_
   event.set_succeeded(success);
   event.set_message(msg);
   event.set_bci(bci);
-  event.commit();
+  commit(event);
 }
 
 void CompilerEvent::InlineEvent::post(EventCompilerInlining& event, int compile_id, Method* caller, Method* callee, bool success, const char* msg, int bci) {

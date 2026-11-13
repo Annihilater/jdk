@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -197,6 +197,7 @@ public class ImageReadParam extends IIOParam {
     public ImageReadParam() {}
 
     // Comment inherited
+    @Override
     public void setDestinationType(ImageTypeSpecifier destinationType) {
         super.setDestinationType(destinationType);
         setDestination(null);
@@ -272,7 +273,7 @@ public class ImageReadParam extends IIOParam {
      * @param destinationBands an array of integer band indices to be
      * used.
      *
-     * @exception IllegalArgumentException if {@code destinationBands}
+     * @throws IllegalArgumentException if {@code destinationBands}
      * contains a negative or duplicate value.
      *
      * @see #getDestinationBands
@@ -360,9 +361,9 @@ public class ImageReadParam extends IIOParam {
      * @param size a {@code Dimension} indicating the desired
      * width and height.
      *
-     * @exception IllegalArgumentException if either the width or the
+     * @throws IllegalArgumentException if either the width or the
      * height is negative or 0.
-     * @exception UnsupportedOperationException if image resizing
+     * @throws UnsupportedOperationException if image resizing
      * is not supported by this plug-in.
      *
      * @see #getSourceRenderSize
@@ -433,7 +434,7 @@ public class ImageReadParam extends IIOParam {
      * @param minPass the index of the first pass to be decoded.
      * @param numPasses the maximum number of passes to be decoded.
      *
-     * @exception IllegalArgumentException if {@code minPass} is
+     * @throws IllegalArgumentException if {@code minPass} is
      * negative, {@code numPasses} is negative or 0, or
      * {@code numPasses} is smaller than
      * {@code Integer.MAX_VALUE} but

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,8 +22,8 @@
  *
  */
 
-#ifndef SHARE_VM_JFR_RECORDER_REPOSITORY_JFRRCHUNK_HPP
-#define SHARE_VM_JFR_RECORDER_REPOSITORY_JFRRCHUNK_HPP
+#ifndef SHARE_JFR_RECORDER_REPOSITORY_JFRCHUNK_HPP
+#define SHARE_JFR_RECORDER_REPOSITORY_JFRCHUNK_HPP
 
 #include "jfr/utilities/jfrAllocation.hpp"
 
@@ -34,6 +34,8 @@ const u1 PAD = 0;
 class JfrChunk : public JfrCHeapObj {
   friend class JfrChunkWriter;
   friend class JfrChunkHeadWriter;
+ public:
+   static jlong nanos_now();
  private:
   char* _path;
   int64_t _start_ticks;
@@ -91,4 +93,4 @@ class JfrChunk : public JfrCHeapObj {
   u1 next_generation() const;
 };
 
-#endif // SHARE_VM_JFR_RECORDER_REPOSITORY_JFRRCHUNK_HPP
+#endif // SHARE_JFR_RECORDER_REPOSITORY_JFRCHUNK_HPP

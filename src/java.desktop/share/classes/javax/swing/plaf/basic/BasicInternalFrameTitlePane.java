@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -185,6 +185,9 @@ public class BasicInternalFrameTitlePane extends JComponent
     private String restoreButtonToolTip;
     private String maxButtonToolTip;
     private Handler handler;
+
+    private static final String FRAME_TYPE = "JInternalFrame.frameType";
+    private static final String OPTION_DIALOG = "optionDialog";
 
     /**
      * Constructs a new instance of {@code BasicInternalFrameTitlePane}.
@@ -440,13 +443,17 @@ public class BasicInternalFrameTitlePane extends JComponent
         return menuBar;
     }
 
+    private boolean isOptionDialog() {
+        return OPTION_DIALOG.equals(frame.getClientProperty(FRAME_TYPE));
+    }
+
     /**
      * Shows system menu.
      */
     protected void showSystemMenu(){
-        //      windowMenu.setPopupMenuVisible(true);
-      //      windowMenu.setVisible(true);
-      windowMenu.doClick();
+        if (!isOptionDialog()) {
+            windowMenu.doClick();
+        }
     }
 
     public void paintComponent(Graphics g)  {
@@ -528,12 +535,7 @@ public class BasicInternalFrameTitlePane extends JComponent
     protected void postClosingEvent(JInternalFrame frame) {
         InternalFrameEvent e = new InternalFrameEvent(
             frame, InternalFrameEvent.INTERNAL_FRAME_CLOSING);
-        // Try posting event, unless there's a SecurityManager.
-        try {
-            Toolkit.getDefaultToolkit().getSystemEventQueue().postEvent(e);
-        } catch (SecurityException se) {
-            frame.dispatchEvent(e);
-        }
+        Toolkit.getDefaultToolkit().getSystemEventQueue().postEvent(e);
     }
 
     /**
@@ -908,7 +910,9 @@ public class BasicInternalFrameTitlePane extends JComponent
 
         public void actionPerformed(ActionEvent e) {
             if (show) {
-                windowMenu.doClick();
+                if (!isOptionDialog()) {
+                    windowMenu.doClick();
+                }
             } else {
                 windowMenu.setVisible(false);
             }

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2016 SAP SE. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,6 @@
 #ifndef CPU_S390_FRAME_S390_HPP
 #define CPU_S390_FRAME_S390_HPP
 
-#include "runtime/synchronizer.hpp"
-
   //  C frame layout on ZARCH_64.
   //
   //  In this figure the stack grows upwards, while memory grows
@@ -49,7 +47,7 @@
   //    0       [ABI_160]
   //
   //  ABI_160:
-  //    0       [ABI_16]
+  //    0       [Z_COMMON_ABI]
   //    16      CARG_1: spill slot for outgoing arg 1. used by next callee.
   //    24      CARG_2: spill slot for outgoing arg 2. used by next callee.
   //    32      CARG_3: spill slot for outgoing arg 3. used by next callee.
@@ -63,7 +61,7 @@
   //    152     CFARG_4: spill slot for outgoing fp arg 4. used by next callee.
   //    160     [REMAINING CARGS]
   //
-  //  ABI_16:
+  //  Z_COMMON_ABI:
   //    0       callers_sp
   //    8       return_pc
 
@@ -78,31 +76,37 @@
      log_2_of_alignment_in_bits = 6
   } frame_constants;
 
-  struct z_abi_16 {
+  // Common ABI. On top of all frames, C and Java.
+  // Note: return_pc is only valid for Java calls.
+  // Calls following the native convention would use
+  // z_abi_160_base::gpr14 to save their return pc.
+  struct z_common_abi {
     uint64_t callers_sp;
     uint64_t return_pc;
   };
 
   enum {
-    z_abi_16_size = sizeof(z_abi_16)
+    z_common_abi_size = sizeof(z_common_abi)
   };
 
-  #define _z_abi16(_component) \
-          (offset_of(frame::z_abi_16, _component))
+  #define _z_common_abi(_component) \
+          (offset_of(frame::z_common_abi, _component))
+
+  // Z_NATIVE_ABI for native C frames.
+  struct z_native_abi: z_common_abi {
+    // Nothing to add here!
+  };
 
   // ABI_160:
 
-  // REMARK: This structure should reflect the "minimal" ABI frame
-  // layout, but it doesn't. There is an extra field at the end of the
+  // REMARK: z_abi_160_base structure reflect the "minimal" ABI frame
+  // layout. There is a field in the z_abi_160
   // structure that marks the area where arguments are passed, when
   // the argument registers "overflow". Thus, sizeof(z_abi_160)
-  // doesn't yield the expected (and desired) result. Therefore, as
-  // long as we do not provide extra infrastructure, one should use
-  // either z_abi_160_size, or _z_abi(remaining_cargs) instead of
-  // sizeof(...).
-  struct z_abi_160 {
-    uint64_t callers_sp;
-    uint64_t return_pc;
+  // doesn't yield the expected (and desired) result.
+  // Therefore, please use sizeof(z_abi_160_base) or
+  // the enum value z_abi_160_size to find out the size of the ABI structure.
+  struct z_abi_160_base : z_native_abi {
     uint64_t carg_1;
     uint64_t carg_2;
     uint64_t carg_3;
@@ -121,11 +125,16 @@
     uint64_t cfarg_2;
     uint64_t cfarg_3;
     uint64_t cfarg_4;
+  };
+
+  struct z_abi_160: z_abi_160_base {
     uint64_t remaining_cargs;
   };
 
   enum {
-    z_abi_160_size = 160
+    z_native_abi_size = sizeof(z_native_abi),
+    z_abi_160_base_size = sizeof(z_abi_160_base),
+    z_abi_160_size = sizeof(z_abi_160_base)
   };
 
   #define _z_abi(_component) \
@@ -159,6 +168,10 @@
           (-frame::z_spill_nonvolatiles_size + offset_of(frame::z_spill_nonvolatiles, _component))
 
   // Frame layout for the Java template interpreter on z/Architecture.
+  //
+  // We differentiate between TOP and PARENT frames.
+  // TOP frames allow for calling native C code.
+  // A TOP frame is trimmed to a PARENT frame when calling a Java method.
   //
   // In these figures the stack grows upwards, while memory grows
   // downwards. Square brackets denote regions possibly larger than
@@ -252,13 +265,14 @@
 
  public:
 
-  // PARENT_IJAVA_FRAME_ABI
+  // ABI for every Java frame, compiled and interpreted
 
-  struct z_parent_ijava_frame_abi : z_abi_16 {
+  struct z_java_abi : z_common_abi {
+    // Nothing to add here!
   };
 
-  enum {
-    z_parent_ijava_frame_abi_size = sizeof(z_parent_ijava_frame_abi)
+  struct z_parent_ijava_frame_abi : z_java_abi {
+    // Nothing to add here!
   };
 
   #define _z_parent_ijava_frame_abi(_component) \
@@ -270,6 +284,8 @@
   };
 
   enum {
+    z_java_abi_size = sizeof(z_java_abi),
+    z_parent_ijava_frame_abi_size = sizeof(z_parent_ijava_frame_abi),
     z_top_ijava_frame_abi_size = sizeof(z_top_ijava_frame_abi)
   };
 
@@ -318,6 +334,10 @@
 #define _z_ijava_state_neg(_component) \
          (int) (-frame::z_ijava_state_size + offset_of(frame::z_ijava_state, _component))
 
+// Frame slot index relative to fp
+#define _z_ijava_idx(_component) \
+        (_z_ijava_state_neg(_component) >> LogBytesPerWord)
+
   // ENTRY_FRAME
 
   struct z_entry_frame_locals {
@@ -359,17 +379,8 @@
   //          [monitor] (optional)
   //          [in_preserve] added / removed by prolog / epilog
 
- public:
-
-   struct z_top_jit_abi_32 {
-     uint64_t callers_sp;
-     uint64_t return_pc;
-     uint64_t toc;
-     uint64_t tmp;
-   };
-
-  #define _z_top_jit_abi(_component) \
-          (offset_of(frame::z_top_jit_abi_32, _component))
+  // For JIT frames we don't differentiate between TOP and PARENT frames.
+  // Runtime calls go through stubs which push a new frame.
 
   struct jit_monitor {
         uint64_t monitor[1];
@@ -380,7 +391,7 @@
     // nothing to add here!
   };
 
-  struct jit_out_preserve : z_top_jit_abi_32 {
+  struct jit_out_preserve : z_java_abi {
     // Nothing to add here!
   };
 
@@ -403,7 +414,7 @@
 
   // C2I adapter frames:
   //
-  // STACK (interpreted called from compiled, on entry to frame manager):
+  // STACK (interpreted called from compiled, on entry to template interpreter):
   //
   //       [TOP_C2I_FRAME]
   //       [JIT_FRAME]
@@ -435,6 +446,14 @@
 
  private:
 
+
+ #ifdef ASSERT
+  enum special_backlink_values : uint64_t {
+    NOT_FULLY_INITIALIZED = 0xDEADBEEF8
+  };
+  bool is_fully_initialized()       const { return (uint64_t)_fp != NOT_FULLY_INITIALIZED; }
+#endif // ASSERT
+
   //  STACK:
   //            ...
   //            [THIS_FRAME]             <-- this._sp (stack pointer for this frame)
@@ -445,10 +464,16 @@
   // NOTE: Stack pointer is now held in the base class, so remove it from here.
 
   // Needed by deoptimization.
-  intptr_t* _unextended_sp;
+  union {
+    intptr_t* _unextended_sp;
+    int _offset_unextended_sp; // for use in stack-chunk frames
+  };
 
   // Frame pointer for this frame.
-  intptr_t* _fp;
+  union {
+    intptr_t* _fp;  // frame pointer
+    int _offset_fp; // relative frame pointer for use in stack-chunk frames
+  };
 
  public:
 
@@ -456,57 +481,63 @@
 
   // Accessors
 
-  inline intptr_t* fp() const { return _fp; }
+  inline intptr_t* fp() const { assert_absolute(); return _fp; }
+  void set_fp(intptr_t* newfp)  { _fp = newfp; }
+  int offset_fp() const         { assert_offset();  return _offset_fp; }
+  void set_offset_fp(int value) { assert_on_heap(); _offset_fp = value; }
+
+  // Mark a frame as not fully initialized. Must not be used for frames in the valid back chain.
+  void mark_not_fully_initialized() const { DEBUG_ONLY(own_abi()->callers_sp = NOT_FULLY_INITIALIZED;)  }
+
+  enum class kind {
+    unknown,    // The frame's pc is not necessarily in the CodeCache.
+                // CodeCache::find_blob_fast() can yield wrong results here and must not be used.
+    code_blob,  // The frame's pc is known to be in the CodeCache but not likely in an nmethod.
+                // CodeCache::find_blob_fast() is correct but not faster.
+    nmethod     // This frame is likely from an nmethod.
+                // CodeCache lookup is optimized via NativePostCallNop payload.
+  };
 
  private:
 
-  inline void find_codeblob_and_set_pc_and_deopt_state(address pc);
-
- // Constructors
+  // Initialize frame members (_pc and _sp must be given)
+  inline void setup(kind knd);
 
  public:
-  inline frame(intptr_t* sp);
+
+  // Constructors
+  inline frame(intptr_t* sp, intptr_t* fp, address pc);
   // To be used, if sp was not extended to match callee's calling convention.
-  inline frame(intptr_t* sp, address pc);
-  inline frame(intptr_t* sp, address pc, intptr_t* unextended_sp);
+  inline frame(intptr_t* sp, address pc, intptr_t* unextended_sp = nullptr, intptr_t* fp = nullptr, CodeBlob* cb = nullptr);
+  inline frame(intptr_t* sp, address pc, kind knd);
+  inline frame(intptr_t* sp, intptr_t* unextended_sp, intptr_t* fp, address pc, CodeBlob* cb, const ImmutableOopMap* oop_map, bool on_heap);
+  inline frame(intptr_t* sp, intptr_t* unextended_sp, intptr_t* fp, address pc, CodeBlob* cb, const ImmutableOopMap* oop_map = nullptr);
 
   // Access frame via stack pointer.
   inline intptr_t* sp_addr_at(int index) const  { return &sp()[index]; }
   inline intptr_t  sp_at(     int index) const  { return *sp_addr_at(index); }
 
   // Access ABIs.
-  inline z_abi_16*  own_abi()     const { return (z_abi_16*) sp(); }
+  inline z_common_abi*  own_abi()     const { return (z_common_abi*) sp(); }
   inline z_abi_160* callers_abi() const { return (z_abi_160*) fp(); }
 
  private:
-
-  intptr_t* compiled_sender_sp(CodeBlob* cb) const;
-  address*  compiled_sender_pc_addr(CodeBlob* cb) const;
-
   address* sender_pc_addr(void) const;
 
  public:
-
-  // Additional interface for interpreter frames:
-  static int interpreter_frame_interpreterstate_size_in_bytes();
-  static int interpreter_frame_monitor_size_in_bytes();
-
+  template <typename RegisterMapT>
+  static void update_map_with_saved_link(RegisterMapT* map, intptr_t** link_addr);
 
   // template interpreter state
   inline z_ijava_state* ijava_state_unchecked() const;
 
- private:
-
+ public:
   inline z_ijava_state* ijava_state() const;
 
-  // Where z_ijava_state.monitors is saved.
-  inline BasicObjectLock**  interpreter_frame_monitors_addr() const;
+  inline intptr_t* interpreter_frame_esp() const;
   // Where z_ijava_state.esp is saved.
-  inline intptr_t** interpreter_frame_esp_addr() const;
-
- public:
+  inline void interpreter_frame_set_esp(intptr_t* esp);
   inline intptr_t* interpreter_frame_top_frame_sp();
-  inline void interpreter_frame_set_tos_address(intptr_t* x);
   inline void interpreter_frame_set_top_frame_sp(intptr_t* top_frame_sp);
   inline void interpreter_frame_set_sender_sp(intptr_t* sender_sp);
 #ifdef ASSERT
@@ -518,6 +549,8 @@
   // Next two functions read and write z_ijava_state.monitors.
  private:
   inline BasicObjectLock* interpreter_frame_monitors() const;
+
+  // Where z_ijava_state.monitors is saved.
   inline void interpreter_frame_set_monitors(BasicObjectLock* monitors);
 
  public:
@@ -542,16 +575,23 @@
                          unsigned long flags, int max_frames = 0);
 
   enum {
-    // This enum value specifies the offset from the pc remembered by
-    // call instructions to the location where control returns to
-    // after a normal return. Most architectures remember the return
-    // location directly, i.e. the offset is zero. This is the case
-    // for z/Architecture, too.
-    //
-    // Normal return address is the instruction following the branch.
-    pc_return_offset =  0,
+    // size, in words, of frame metadata (e.g. pc and link)
+    metadata_words           = sizeof(z_java_abi) >> LogBytesPerWord,
+    metadata_words_at_bottom = 0,
+    metadata_words_at_top    = sizeof(z_java_abi) >> LogBytesPerWord,
+    // in bytes
+    frame_alignment          = 8,
+    // size, in words, of maximum shift in frame position due to alignment
+    align_wiggle             =  0,
+    // This is wrong and unimplemented
+    sender_sp_offset         =  0
   };
 
-  static jint interpreter_frame_expression_stack_direction() { return -1; }
+  // returns the sending frame, without applying any barriers
+  inline frame sender_raw(RegisterMap* map) const;
+
+  intptr_t* repair_sender_sp(intptr_t* sender_sp, intptr_t** saved_fp_addr) const;
+  static intptr_t* repair_sender_sp(nmethod* nm, intptr_t* sp, intptr_t** saved_fp_addr);
+  bool was_augmented_on_entry(int& real_size) const;
 
 #endif // CPU_S390_FRAME_S390_HPP

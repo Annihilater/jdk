@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,18 +32,24 @@
 
 class JvmtiEnv;
 class JvmtiTagMapTable;
-class JvmtiTagMapEntryClosure;
+class JvmtiFlatTagMapTable;
+class JvmtiTagMapKeyClosure;
+class JvmtiHeapwalkObject;
 
-class JvmtiTagMap :  public CHeapObj<mtInternal> {
+class JvmtiTagMap :  public CHeapObj<mtServiceability> {
  private:
 
   JvmtiEnv*             _env;                       // the jvmti environment
-  Mutex                 _lock;                      // lock for this tag map
+  Monitor               _lock;                      // lock for this tag map
   JvmtiTagMapTable*     _hashmap;                   // the hashmap for tags
-  bool                  _needs_rehashing;
+  JvmtiFlatTagMapTable* _flat_hashmap;
+
   bool                  _needs_cleaning;
+  bool                  _posting_events;
 
   static bool           _has_object_free_events;
+
+  bool                  _converting_flat_object;
 
   // create a tag map
   JvmtiTagMap(JvmtiEnv* env);
@@ -51,22 +57,25 @@ class JvmtiTagMap :  public CHeapObj<mtInternal> {
   // accessors
   inline JvmtiEnv* env() const              { return _env; }
 
-  void check_hashmap(bool post_events);
+  // moves entries from _flat_hashmap to _hashmap
+  void convert_flat_object_entries();
 
-  void entry_iterate(JvmtiTagMapEntryClosure* closure);
-  void post_dead_objects_on_vm_thread();
+ public:
+  // for internal use
+  jlong find(const JvmtiHeapwalkObject& obj) const;
+  void add(const JvmtiHeapwalkObject& obj, jlong tag);
+  void remove(const JvmtiHeapwalkObject& obj);
 
  public:
   // indicates if this tag map is locked
-  bool is_locked()                          { return lock()->is_locked(); }
-  inline Mutex* lock()                      { return &_lock; }
-
-  JvmtiTagMapTable* hashmap() { return _hashmap; }
+  bool is_locked() const                    { return lock()->is_locked(); }
+  inline const Monitor* lock() const        { return &_lock; }
+  inline Monitor* lock()                    { return &_lock; }
 
   // returns true if the hashmaps are empty
-  bool is_empty();
+  bool is_empty() const;
 
-  // return tag for the given environment
+  // return tag map for the given environment
   static JvmtiTagMap* tag_map_for(JvmtiEnv* env);
 
   // destroy tag map
@@ -109,17 +118,17 @@ class JvmtiTagMap :  public CHeapObj<mtInternal> {
                                    jint* count_ptr, jobject** object_result_ptr,
                                    jlong** tag_result_ptr);
 
+  void remove_and_post_dead_objects();
+  void remove_dead_entries(GrowableArray<jlong>* objects);
+  void remove_dead_entries_locked(GrowableArray<jlong>* objects);
+  void post_dead_objects(GrowableArray<jlong>* const objects);
 
-  void remove_dead_entries(bool post_object_free);
-  void remove_dead_entries_locked(bool post_object_free);
-
-  static void check_hashmaps_for_heapwalk();
-  static void set_needs_rehashing() NOT_JVMTI_RETURN;
+  static void check_hashmaps_for_heapwalk(GrowableArray<jlong>* objects);
   static void set_needs_cleaning() NOT_JVMTI_RETURN;
   static void gc_notification(size_t num_dead_entries) NOT_JVMTI_RETURN;
 
   void flush_object_free_events();
-  void clear();  // Clear tagmap table after the env is disposed.
+  void clear();  // Clear hash tables after the env is disposed.
 
   // For ServiceThread
   static void flush_all_object_free_events() NOT_JVMTI_RETURN;

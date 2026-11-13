@@ -22,11 +22,7 @@
  *
  */
 
-#include "precompiled.hpp"
-#include "gc/shenandoah/heuristics/shenandoahAdaptiveHeuristics.hpp"
-#include "gc/shenandoah/heuristics/shenandoahAggressiveHeuristics.hpp"
-#include "gc/shenandoah/heuristics/shenandoahCompactHeuristics.hpp"
-#include "gc/shenandoah/heuristics/shenandoahStaticHeuristics.hpp"
+#include "gc/shenandoah/heuristics/shenandoahHeuristics.hpp"
 #include "gc/shenandoah/mode/shenandoahSATBMode.hpp"
 #include "logging/log.hpp"
 #include "logging/logTag.hpp"
@@ -35,36 +31,23 @@
 
 void ShenandoahSATBMode::initialize_flags() const {
   if (ClassUnloading) {
-    FLAG_SET_DEFAULT(ShenandoahSuspendibleWorkers, true);
     FLAG_SET_DEFAULT(VerifyBeforeExit, false);
   }
 
   SHENANDOAH_ERGO_ENABLE_FLAG(ExplicitGCInvokesConcurrent);
-  SHENANDOAH_ERGO_ENABLE_FLAG(ShenandoahImplicitGCInvokesConcurrent);
 
   // Final configuration checks
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahLoadRefBarrier);
-  SHENANDOAH_CHECK_FLAG_UNSET(ShenandoahIUBarrier);
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahSATBBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahCASBarrier);
   SHENANDOAH_CHECK_FLAG_SET(ShenandoahCloneBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahNMethodBarrier);
-  SHENANDOAH_CHECK_FLAG_SET(ShenandoahStackWatermarkBarrier);
-}
+  SHENANDOAH_CHECK_FLAG_UNSET(ShenandoahCardBarrier);
 
-ShenandoahHeuristics* ShenandoahSATBMode::initialize_heuristics() const {
-  if (ShenandoahGCHeuristics == NULL) {
-    vm_exit_during_initialization("Unknown -XX:ShenandoahGCHeuristics option (null)");
+  // TLAB sizing policy makes resizing decisions before each GC cycle. It averages
+  // historical data, assigning more recent data the weight according to TLABAllocationWeight.
+  // Current default is good for generational collectors that run frequent young GCs.
+  // With Shenandoah, GC cycles are much less frequent, so we need sizing policy
+  // to converge faster over smaller number of resizing decisions.
+  if (FLAG_IS_DEFAULT(TLABAllocationWeight)) {
+    FLAG_SET_DEFAULT(TLABAllocationWeight, 90);
   }
-  if (strcmp(ShenandoahGCHeuristics, "aggressive") == 0) {
-    return new ShenandoahAggressiveHeuristics();
-  } else if (strcmp(ShenandoahGCHeuristics, "static") == 0) {
-    return new ShenandoahStaticHeuristics();
-  } else if (strcmp(ShenandoahGCHeuristics, "adaptive") == 0) {
-    return new ShenandoahAdaptiveHeuristics();
-  } else if (strcmp(ShenandoahGCHeuristics, "compact") == 0) {
-    return new ShenandoahCompactHeuristics();
-  }
-  vm_exit_during_initialization("Unknown -XX:ShenandoahGCHeuristics option");
-  return NULL;
 }

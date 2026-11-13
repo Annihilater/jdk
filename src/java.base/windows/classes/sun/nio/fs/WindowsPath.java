@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -163,11 +163,6 @@ class WindowsPath implements Path {
 
     // use this message when throwing exceptions
     String getPathForExceptionMessage() {
-        return path;
-    }
-
-    // use this path for permission checks
-    String getPathForPermissionCheck() {
         return path;
     }
 
@@ -494,100 +489,94 @@ class WindowsPath implements Path {
     @Override
     public WindowsPath normalize() {
         final int count = getNameCount();
-        if (count == 0 || isEmpty())
+        if (count == 0 || isEmpty()) {
             return this;
+        }
 
-        boolean[] ignore = new boolean[count];      // true => ignore name
-        int remaining = count;                      // number of names remaining
-
-        // multiple passes to eliminate all occurrences of "." and "name/.."
-        int prevRemaining;
-        do {
-            prevRemaining = remaining;
-            int prevName = -1;
-            for (int i=0; i<count; i++) {
-                if (ignore[i])
-                    continue;
-
-                String name = elementAsString(i);
-
-                // not "." or ".."
-                if (name.length() > 2) {
-                    prevName = i;
-                    continue;
+        // find the first "." or ".." name element
+        int first = 0;
+        for (; first < count; first++) {
+            int start = offsets[first];
+            if (path.charAt(start) == '.') {
+                int len = (first == (count - 1))
+                        ? (path.length() - start)
+                        : (offsets[first + 1] - start - 1);
+                if (len == 1 || (len == 2 && path.charAt(start + 1) == '.')) {
+                    break;
                 }
+            }
+        }
+        if (first == count) {
+            return this;    // no "." or ".." name element
+        }
 
-                // "." or something else
-                if (name.length() == 1) {
-                    // ignore "."
-                    if (name.charAt(0) == '.') {
-                        ignore[i] = true;
-                        remaining--;
-                    } else {
-                        prevName = i;
+        int[] names = new int[count];    // indices of remaining name elements
+        int remaining = first;           // number of name elements remaining
+        boolean ignoreLeadingDotDot = isAbsolute()
+                || type == WindowsPathType.DIRECTORY_RELATIVE;
+
+        // name elements before the first "." or ".."
+        for (int i = 0; i < first; i++) {
+            names[i] = i;
+        }
+
+        // process name elements from the first "." or ".."
+        for (int i = first; i < count; i++) {
+            int start = offsets[i];
+            int len = (i == (count - 1))
+                    ? (path.length() - start)
+                    : (offsets[i + 1] - start - 1);
+            boolean keep = true;
+            if (path.charAt(start) == '.') {
+                if (len == 1) {
+                    keep = false;
+                } else if (len == 2 && path.charAt(start + 1) == '.') {
+                    if (remaining > 0) {
+                        int previous = names[remaining - 1];
+                        int previousStart = offsets[previous];
+                        int previousLength = offsets[previous + 1] - previousStart - 1;
+                        if ((previousLength != 2)
+                                || (path.charAt(previousStart) != '.')
+                                || (path.charAt(previousStart + 1) != '.')) {
+                            remaining--;  // cancel previous
+                            keep = false;
+                        }
                     }
-                    continue;
-                }
-
-                // not ".."
-                if (name.charAt(0) != '.' || name.charAt(1) != '.') {
-                    prevName = i;
-                    continue;
-                }
-
-                // ".." found
-                if (prevName >= 0) {
-                    // name/<ignored>/.. found so mark name and ".." to be
-                    // ignored
-                    ignore[prevName] = true;
-                    ignore[i] = true;
-                    remaining = remaining - 2;
-                    prevName = -1;
-                } else {
-                    // Cases:
-                    //    C:\<ignored>\..
-                    //    \\server\\share\<ignored>\..
-                    //    \<ignored>..
-                    if (isAbsolute() || type == WindowsPathType.DIRECTORY_RELATIVE) {
-                        boolean hasPrevious = false;
-                        for (int j=0; j<i; j++) {
-                            if (!ignore[j]) {
-                                hasPrevious = true;
-                                break;
-                            }
-                        }
-                        if (!hasPrevious) {
-                            // all proceeding names are ignored
-                            ignore[i] = true;
-                            remaining--;
-                        }
+                    if (ignoreLeadingDotDot) {
+                        keep = false;
                     }
                 }
             }
-        } while (prevRemaining > remaining);
+            if (keep) {
+                names[remaining++] = i;
+            }
+        }
 
         // no redundant names
-        if (remaining == count)
+        if (remaining == count) {
             return this;
+        }
 
         // corner case - all names removed
         if (remaining == 0) {
             return root.isEmpty() ? emptyPath() : getRoot();
         }
 
-        // re-constitute the path from the remaining names.
+        // copy names into result
         StringBuilder result = new StringBuilder();
-        if (root != null)
+        if (root != null) {
             result.append(root);
-        for (int i=0; i<count; i++) {
-            if (!ignore[i]) {
-                result.append(getName(i));
-                result.append("\\");
-            }
+        }
+        for (int i = 0; i < remaining; i++) {
+            int name = names[i];
+            int start = offsets[name];
+            int end = (name == (count - 1)) ? path.length() : (offsets[name + 1] - 1);
+            result.append(path, start, end);
+            result.append("\\");
         }
 
         // drop trailing slash in result
-        result.setLength(result.length()-1);
+        result.setLength(result.length() - 1);
         return createFromNormalizedPath(getFileSystem(), result.toString());
     }
 
@@ -704,11 +693,9 @@ class WindowsPath implements Path {
         if (beginIndex >= endIndex)
             throw new IllegalArgumentException();
 
-        StringBuilder sb = new StringBuilder();
+        StringJoiner sb = new StringJoiner("\\");
         for (int i = beginIndex; i < endIndex; i++) {
-            sb.append(elementAsString(i));
-            if (i != (endIndex-1))
-                sb.append("\\");
+            sb.add(elementAsString(i));
         }
         return new WindowsPath(getFileSystem(), WindowsPathType.RELATIVE, "", sb.toString());
     }
@@ -814,10 +801,7 @@ class WindowsPath implements Path {
 
     @Override
     public boolean equals(Object obj) {
-        if (obj instanceof WindowsPath path) {
-            return compareTo(path) == 0;
-        }
-        return false;
+        return obj instanceof WindowsPath other && compareTo(other) == 0;
     }
 
     @Override
@@ -825,7 +809,7 @@ class WindowsPath implements Path {
         // OK if two or more threads compute hash
         int h = hash;
         if (h == 0) {
-            for (int i = 0; i< path.length(); i++) {
+            for (int i = 0; i < path.length(); i++) {
                 h = 31*h + Character.toUpperCase(path.charAt(i));
             }
             hash = h;
@@ -895,30 +879,6 @@ class WindowsPath implements Path {
         }
     }
 
-    void checkRead() {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            sm.checkRead(getPathForPermissionCheck());
-        }
-    }
-
-    void checkWrite() {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            sm.checkWrite(getPathForPermissionCheck());
-        }
-    }
-
-    void checkDelete() {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            sm.checkDelete(getPathForPermissionCheck());
-        }
-    }
-
     @Override
     public URI toUri() {
         return WindowsUriSupport.toUri(this);
@@ -929,13 +889,6 @@ class WindowsPath implements Path {
         if (isAbsolute())
             return this;
 
-        // permission check as per spec
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            sm.checkPropertyAccess("user.dir");
-        }
-
         try {
             return createFromNormalizedPath(getFileSystem(), getAbsolutePath());
         } catch (WindowsException x) {
@@ -945,7 +898,6 @@ class WindowsPath implements Path {
 
     @Override
     public WindowsPath toRealPath(LinkOption... options) throws IOException {
-        checkRead();
         String rp = WindowsLinkSupport.getRealPath(this, Util.followLinks(options));
         return createFromNormalizedPath(getFileSystem(), rp);
     }
@@ -960,31 +912,6 @@ class WindowsPath implements Path {
             throw new NullPointerException();
         if (!(watcher instanceof WindowsWatchService))
             throw new ProviderMismatchException();
-
-        // When a security manager is set then we need to make a defensive
-        // copy of the modifiers and check for the Windows specific FILE_TREE
-        // modifier. When the modifier is present then check that permission
-        // has been granted recursively.
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            boolean watchSubtree = false;
-            final int ml = modifiers.length;
-            if (ml > 0) {
-                modifiers = Arrays.copyOf(modifiers, ml);
-                int i=0;
-                while (i < ml) {
-                    if (ExtendedOptions.FILE_TREE.matches(modifiers[i++])) {
-                        watchSubtree = true;
-                        break;
-                    }
-                }
-            }
-            String s = getPathForPermissionCheck();
-            sm.checkRead(s);
-            if (watchSubtree)
-                sm.checkRead(s + "\\-");
-        }
 
         return ((WindowsWatchService)watcher).register(this, events, modifiers);
     }

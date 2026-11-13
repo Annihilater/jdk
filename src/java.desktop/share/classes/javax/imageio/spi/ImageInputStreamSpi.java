@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2004, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,9 +79,9 @@ public abstract class ImageInputStreamSpi extends IIOServiceProvider {
      * legal object type for use by the
      * {@code createInputStreamInstance} method.
      *
-     * @exception IllegalArgumentException if {@code vendorName}
+     * @throws IllegalArgumentException if {@code vendorName}
      * is {@code null}.
-     * @exception IllegalArgumentException if {@code version}
+     * @throws IllegalArgumentException if {@code version}
      * is {@code null}.
      */
     public ImageInputStreamSpi(String vendorName,
@@ -113,7 +113,7 @@ public abstract class ImageInputStreamSpi extends IIOServiceProvider {
      * Returns {@code true} if the {@code ImageInputStream}
      * implementation associated with this service provider can
      * optionally make use of a cache file for improved performance
-     * and/or memory footrprint.  If {@code false}, the value of
+     * and/or memory footprint.  If {@code false}, the value of
      * the {@code useCache} argument to
      * {@code createInputStreamInstance} will be ignored.
      *
@@ -159,12 +159,12 @@ public abstract class ImageInputStreamSpi extends IIOServiceProvider {
      *
      * @return an {@code ImageInputStream} instance.
      *
-     * @exception IllegalArgumentException if {@code input} is
+     * @throws IllegalArgumentException if {@code input} is
      * not an instance of the correct class or is {@code null}.
-     * @exception IllegalArgumentException if a cache file is needed
+     * @throws IllegalArgumentException if a cache file is needed
      * but {@code cacheDir} is non-{@code null} and is not a
      * directory.
-     * @exception IOException if a cache file is needed but cannot be
+     * @throws IOException if a cache file is needed but cannot be
      * created.
      *
      * @see #getInputClass
@@ -187,9 +187,9 @@ public abstract class ImageInputStreamSpi extends IIOServiceProvider {
      *
      * @return an {@code ImageInputStream} instance.
      *
-     * @exception IllegalArgumentException if {@code input} is
+     * @throws IllegalArgumentException if {@code input} is
      * not an instance of the correct class or is {@code null}.
-     * @exception IOException if a cache file is needed but cannot be
+     * @throws IOException if a cache file is needed but cannot be
      * created.
      *
      * @see #getInputClass()

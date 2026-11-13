@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,12 @@
  */
 package jdk.internal.vm;
 
+import jdk.internal.access.SharedSecrets;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Properties;
 import java.util.Set;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
-import java.util.jar.Attributes;
 
 /*
  * Support class used by JVMTI and VM attach mechanism.
@@ -38,6 +37,7 @@ import java.util.jar.Attributes;
 public class VMSupport {
 
     private static Properties agentProps = null;
+
     /**
      * Returns the agent properties.
      */
@@ -51,13 +51,20 @@ public class VMSupport {
     private static native Properties initAgentProperties(Properties props);
 
     /**
-     * Write the given properties list to a byte array and return it. Properties with
-     * a key or value that is not a String is filtered out. The stream written to the byte
-     * array is ISO 8859-1 encoded.
+     * Writes the given properties list to a byte array and return it. The stream written
+     * to the byte array is ISO 8859-1 encoded.
      */
     private static byte[] serializePropertiesToByteArray(Properties p) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(4096);
+        p.store(out, null);
+        return out.toByteArray();
+    }
 
+    /**
+     * @return a Properties object containing only the entries in {@code p}
+     *          whose key and value are both Strings
+     */
+    private static Properties onlyStrings(Properties p) {
         Properties props = new Properties();
 
         // stringPropertyNames() returns a snapshot of the property keys
@@ -66,17 +73,20 @@ public class VMSupport {
             String value = p.getProperty(key);
             props.put(key, value);
         }
-
-        props.store(out, null);
-        return out.toByteArray();
+        return props;
     }
 
     public static byte[] serializePropertiesToByteArray() throws IOException {
-        return serializePropertiesToByteArray(System.getProperties());
+        return serializePropertiesToByteArray(onlyStrings(System.getProperties()));
+    }
+
+    public static byte[] serializeSecurityPropertiesToByteArray() throws IOException {
+        Properties p = SharedSecrets.getJavaSecurityPropertiesAccess().getCurrentProperties();
+        return serializePropertiesToByteArray(onlyStrings(p));
     }
 
     public static byte[] serializeAgentPropertiesToByteArray() throws IOException {
-        return serializePropertiesToByteArray(getAgentProperties());
+        return serializePropertiesToByteArray(onlyStrings(getAgentProperties()));
     }
 
     /*

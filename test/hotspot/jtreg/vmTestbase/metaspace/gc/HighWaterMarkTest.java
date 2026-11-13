@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,6 @@
 package metaspace.gc;
 
 import java.util.Arrays;
-import vm.share.VMRuntimeEnvUtils;
 
 /**
  * Test metaspace ergonomic.
@@ -61,7 +60,12 @@ import vm.share.VMRuntimeEnvUtils;
  * If it is less than MinMetaspaceFreeRatio, the high-water mark will be raised.
  * </pre>
  */
-public class HighWaterMarkTest extends FirstGCTest {
+public class HighWaterMarkTest extends MetaspaceBaseGC {
+
+    @Override
+    protected String getPoolName() {
+        return "Metaspace";
+    }
 
     public static void main(String... args) {
         new HighWaterMarkTest().run(args);
@@ -153,7 +157,7 @@ public class HighWaterMarkTest extends FirstGCTest {
         int maxAttempts = 10_000;
 
         // in between metaspaceSize and maxMetaspaceSize
-        // no OOM is exepcted.
+        // no OOM is expected.
         long committedLevel = (metaspaceSize + maxMetaspaceSize) / 2;
 
         while (getCommitted() < committedLevel && attempts < maxAttempts) {

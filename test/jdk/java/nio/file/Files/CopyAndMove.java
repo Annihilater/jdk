@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,8 @@
  */
 
 /* @test
- * @bug 4313887 6838333 6917021 7006126 6950237 8006645 8201407
+ * @bug 4313887 6838333 6917021 7006126 6950237 8006645 8073061 8201407 8264744
+ *      8267820
  * @summary Unit test for java.nio.file.Files copy and move methods (use -Dseed=X to set PRNG seed)
  * @library .. /test/lib
  * @build jdk.test.lib.Platform jdk.test.lib.RandomFactory
@@ -35,8 +36,8 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.file.*;
 import static java.nio.file.Files.*;
-import static java.nio.file.StandardCopyOption.*;
 import static java.nio.file.LinkOption.*;
+import static java.nio.file.StandardCopyOption.*;
 import java.nio.file.attribute.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -44,9 +45,22 @@ import jdk.test.lib.Platform;
 import jdk.test.lib.RandomFactory;
 
 public class CopyAndMove {
+    private static final String FAT32_TYPE;
+    static {
+        if (Platform.isLinux())
+            FAT32_TYPE = "vfat";
+        else if (Platform.isOSX())
+            FAT32_TYPE = "msdos";
+        else if (Platform.isWindows())
+            FAT32_TYPE = "FAT32";
+        else
+            FAT32_TYPE = "unknown";
+    }
+
     static final Random rand = RandomFactory.getRandom();
     static boolean heads() { return rand.nextBoolean(); }
     private static boolean testPosixAttributes = false;
+    private static boolean targetVolumeIsFAT32 = false;
 
     public static void main(String[] args) throws Exception {
         Path dir1 = TestUtil.createTemporaryDirectory();
@@ -56,18 +70,38 @@ public class CopyAndMove {
             FileStore fileStore1 = getFileStore(dir1);
             printDirInfo("dir1", dir1, fileStore1);
             testPosixAttributes = fileStore1.supportsFileAttributeView("posix");
-            testCopyFileToFile(dir1, dir1, TestUtil.supportsLinks(dir1));
-            testMove(dir1, dir1, TestUtil.supportsLinks(dir1));
+            testCopyFileToFile(dir1, dir1, TestUtil.supportsSymbolicLinks(dir1));
+            testMove(dir1, dir1, TestUtil.supportsSymbolicLinks(dir1));
 
-            // Different directories. Use test.dir if possible as it might be
-            // a different volume/file system and so improve test coverage.
+            // Use test.dir to define second directory if possible as it might
+            // be a different volume/file system and so improve test coverage.
             String testDir = System.getProperty("test.dir", ".");
             Path dir2 = TestUtil.createTemporaryDirectory(testDir);
+            FileStore fileStore2 = getFileStore(dir2);
+            targetVolumeIsFAT32 = fileStore2.type().equals(FAT32_TYPE);
+
+            printDirInfo("dir2", dir2, fileStore2);
+
+            // If different type (format) from dir1, re-do same directory tests
+            if (!fileStore1.type().equals(fileStore2.type())) {
+                try {
+                    testPosixAttributes =
+                        fileStore2.supportsFileAttributeView("posix");
+                    testCopyFileToFile(dir2, dir2, TestUtil.supportsSymbolicLinks(dir2));
+                    testMove(dir2, dir2, TestUtil.supportsSymbolicLinks(dir2));
+                } finally {
+                    TestUtil.removeAll(dir2);
+                }
+            }
+
+            // Different directories.
             try {
+                // Recreate dir2 if it was removed above
+                if (notExists(dir2)) {
+                    dir2 = TestUtil.createTemporaryDirectory(testDir);
+                }
                 boolean testSymbolicLinks =
-                    TestUtil.supportsLinks(dir1) && TestUtil.supportsLinks(dir2);
-                FileStore fileStore2 = getFileStore(dir2);
-                printDirInfo("dir2", dir2, fileStore2);
+                    TestUtil.supportsSymbolicLinks(dir1) && TestUtil.supportsSymbolicLinks(dir2);
                 testPosixAttributes = fileStore1.supportsFileAttributeView("posix") &&
                                       fileStore2.supportsFileAttributeView("posix");
                 testCopyFileToFile(dir1, dir2, testSymbolicLinks);
@@ -79,6 +113,7 @@ public class CopyAndMove {
             // Target is location associated with custom provider
             Path dir3 = PassThroughFileSystem.create().getPath(dir1.toString());
             FileStore fileStore3 = getFileStore(dir3);
+            targetVolumeIsFAT32 = false;
             printDirInfo("dir3", dir3, fileStore3);
             testPosixAttributes = fileStore1.supportsFileAttributeView("posix") &&
                                   fileStore3.supportsFileAttributeView("posix");
@@ -103,49 +138,67 @@ public class CopyAndMove {
                                      BasicFileAttributes attrs2)
     {
         // check file type
-        assertTrue(attrs1.isRegularFile() == attrs2.isRegularFile());
-        assertTrue(attrs1.isDirectory() == attrs2.isDirectory());
-        assertTrue(attrs1.isSymbolicLink() == attrs2.isSymbolicLink());
-        assertTrue(attrs1.isOther() == attrs2.isOther());
+        assertEquals(attrs1.isRegularFile(), attrs2.isRegularFile());
+        assertEquals(attrs1.isDirectory(), attrs2.isDirectory());
+        assertEquals(attrs1.isSymbolicLink(), attrs2.isSymbolicLink());
+        assertEquals(attrs1.isOther(), attrs2.isOther());
 
         // check last modified time if not a symbolic link
         if (!attrs1.isSymbolicLink()) {
             long time1 = attrs1.lastModifiedTime().to(TimeUnit.SECONDS);
             long time2 = attrs2.lastModifiedTime().to(TimeUnit.SECONDS);
+            long delta = Math.abs(Math.subtractExact(time1, time2));
 
-            if (time1 != time2) {
-                System.err.format("File time for %s is %s\n", attrs1.fileKey(), attrs1.lastModifiedTime());
-                System.err.format("File time for %s is %s\n", attrs2.fileKey(), attrs2.lastModifiedTime());
+            // FAT32 volumes have a time stamp resolution of 2 seconds for
+            // last modified time (write time)
+            if ((delta != 0 && !targetVolumeIsFAT32) || delta > 2) {
+                System.err.format("File time for %s is %s\n",
+                                  attrs1.fileKey(), attrs1.lastModifiedTime());
+                System.err.format("File time for %s is %s\n",
+                                  attrs2.fileKey(), attrs2.lastModifiedTime());
                 assertTrue(false);
             }
         }
 
         // check size
         if (attrs1.isRegularFile())
-            assertTrue(attrs1.size() == attrs2.size());
+            assertEquals(attrs1.size(), attrs2.size());
+    }
+
+    static void setWindowsLinkAttributes(Path link) throws IOException {
+        // Set the timestamp to 2000-01-01T00:00:00Z.
+        FileTime time = FileTime.from(946684800, TimeUnit.SECONDS);
+
+        BasicFileAttributeView basicView =
+            getFileAttributeView(link, BasicFileAttributeView.class, NOFOLLOW_LINKS);
+        basicView.setTimes(/* mtime */ time, /* atime */ null, /* creation */ time);
+
+        DosFileAttributeView dosView =
+            getFileAttributeView(link, DosFileAttributeView.class, NOFOLLOW_LINKS);
+        dosView.setHidden(true);
     }
 
     static void checkPosixAttributes(PosixFileAttributes attrs1,
                                      PosixFileAttributes attrs2)
     {
-        assertTrue(attrs1.permissions().equals(attrs2.permissions()),
+        assertEquals(attrs1.permissions(), attrs2.permissions(),
             "permissions%n1 (%d): %s%n2 (%d): %s%n%n",
              attrs1.permissions().size(), attrs1.permissions(),
              attrs2.permissions().size(), attrs2.permissions());
-        assertTrue(attrs1.owner().equals(attrs2.owner()),
+        assertEquals(attrs1.owner(), attrs2.owner(),
              "owner%n1: %s%n2: %s%n%n", attrs1.owner(), attrs2.owner());
-        assertTrue(attrs1.group().equals(attrs2.group()),
+        assertEquals(attrs1.group(), attrs2.group(),
              "group%n1: %s%n2: %s%n%n", attrs1.group(), attrs2.group());
     }
 
     static void checkDosAttributes(DosFileAttributes attrs1,
                                    DosFileAttributes attrs2)
     {
-        assertTrue(attrs1.isReadOnly() == attrs2.isReadOnly(),
+        assertEquals(attrs1.isReadOnly(), attrs2.isReadOnly(),
             "isReadOnly%n1: %s%n2: %s%n%n", attrs1.isReadOnly(), attrs2.isReadOnly());
-        assertTrue(attrs1.isHidden() == attrs2.isHidden(),
+        assertEquals(attrs1.isHidden(), attrs2.isHidden(),
             "isHidden%n1: %s%n2: %s%n%n", attrs1.isHidden(), attrs2.isHidden());
-        assertTrue(attrs1.isSystem() == attrs2.isSystem(),
+        assertEquals(attrs1.isSystem(), attrs2.isSystem(),
             "isSystem%n1: %s%n2: %s%n%n", attrs1.isSystem(), attrs2.isSystem());
     }
 
@@ -157,7 +210,7 @@ public class CopyAndMove {
             ByteBuffer bb1 = attrs1.get(name);
             ByteBuffer bb2 = attrs2.get(name);
             assertTrue(bb2 != null);
-            assertTrue(bb1.equals(bb2));
+            assertEquals(bb1, bb2);
         }
     }
 
@@ -171,7 +224,7 @@ public class CopyAndMove {
             int size = view.size(name);
             ByteBuffer bb = ByteBuffer.allocate(size);
             int n = view.read(name, bb);
-            assertTrue(n == size);
+            assertEquals(n, size);
             bb.flip();
             result.put(name, bb);
         }
@@ -216,7 +269,7 @@ public class CopyAndMove {
 
         // move file
         Path result = move(source, target, options);
-        assertTrue(result == target);
+        assertEquals(result, target);
 
         // verify source does not exist
         assertTrue(notExists(source));
@@ -269,7 +322,7 @@ public class CopyAndMove {
     /**
      * Tests all possible ways to invoke move
      */
-    static void testMove(Path dir1, Path dir2, boolean supportsLinks)
+    static void testMove(Path dir1, Path dir2, boolean supportsSymbolicLinks)
         throws IOException
     {
         Path source, target, entry;
@@ -491,7 +544,7 @@ public class CopyAndMove {
         /**
          * Test: Move symbolic link to file, target does not exist
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             Path tmp = createSourceFile(dir1);
             source = dir1.resolve("link");
             createSymbolicLink(source, tmp);
@@ -504,7 +557,7 @@ public class CopyAndMove {
         /**
          * Test: Move symbolic link to directory, target does not exist
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("link");
             createSymbolicLink(source, dir2);
             target = getTargetFile(dir2);
@@ -515,7 +568,7 @@ public class CopyAndMove {
         /**
          * Test: Move broken symbolic link, target does not exists
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             Path tmp = Paths.get("doesnotexist");
             source = dir1.resolve("link");
             createSymbolicLink(source, tmp);
@@ -527,7 +580,7 @@ public class CopyAndMove {
         /**
          * Test: Move symbolic link, target exists
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("link");
             createSymbolicLink(source, dir2);
             target = getTargetFile(dir2);
@@ -544,7 +597,7 @@ public class CopyAndMove {
         /**
          * Test: Move regular file, target exists
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("link");
             createSymbolicLink(source, dir2);
             target = getTargetFile(dir2);
@@ -556,7 +609,7 @@ public class CopyAndMove {
         /**
          * Test: move symbolic link, target exists and is empty directory
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("link");
             createSymbolicLink(source, dir2);
             target = getTargetFile(dir2);
@@ -568,7 +621,7 @@ public class CopyAndMove {
         /**
          * Test: symbolic link, target exists and is non-empty directory
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("link");
             createSymbolicLink(source, dir2);
             target = getTargetFile(dir2);
@@ -588,7 +641,7 @@ public class CopyAndMove {
         /**
          * Test atomic move of symbolic link (same file store)
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("link");
             createSymbolicLink(source, dir1);
             target = getTargetFile(dir2);
@@ -637,12 +690,74 @@ public class CopyAndMove {
         delete(source);
     }
 
+    static void checkTargetAttributes(Path source, Path target,
+                                      BasicFileAttributes sourceAttrs)
+        throws IOException
+    {
+        checkBasicAttributes(sourceAttrs,
+            readAttributes(target, BasicFileAttributes.class));
+
+        // check POSIX attributes are copied
+        if (!Platform.isWindows() && testPosixAttributes) {
+            checkPosixAttributes(
+                readAttributes(source, PosixFileAttributes.class),
+                readAttributes(target, PosixFileAttributes.class));
+        }
+
+        // verify other attributes when same provider
+        if (source.getFileSystem().provider() == target.getFileSystem().provider()) {
+            // check DOS attributes are copied
+            if (Platform.isWindows()) {
+                checkDosAttributes(
+                    readAttributes(source, DosFileAttributes.class),
+                    readAttributes(target, DosFileAttributes.class));
+            }
+
+            // check named attributes are copied
+            if (getFileStore(source).supportsFileAttributeView("xattr") &&
+                getFileStore(target).supportsFileAttributeView("xattr"))
+            {
+                checkUserDefinedFileAttributes(readUserDefinedFileAttributes(source),
+                                               readUserDefinedFileAttributes(target));
+            }
+        }
+    }
+
+    static void checkSymLinkAttributes(Path source, Path target,
+                                       BasicFileAttributes sourceAttrs)
+        throws IOException
+    {
+        assertTrue(sourceAttrs.isSymbolicLink());
+
+        BasicFileAttributes targetAttrs =
+            readAttributes(target, BasicFileAttributes.class, NOFOLLOW_LINKS);
+        checkBasicAttributes(sourceAttrs, targetAttrs);
+
+        // verify other attributes when same provider and on Windows
+        if (Platform.isWindows() && source.getFileSystem().provider() ==
+                target.getFileSystem().provider()) {
+            // check that timestamps on the source are retained for the target
+            FileTime srcCreationTime = sourceAttrs.creationTime();
+            FileTime tgtCreationTime = targetAttrs.creationTime();
+            assertEquals(srcCreationTime, tgtCreationTime);
+
+            FileTime srcModTime = sourceAttrs.lastModifiedTime();
+            FileTime tgtModTime = targetAttrs.lastModifiedTime();
+            assertEquals(srcModTime, tgtModTime);
+
+            // check DOS attributes are copied
+            checkDosAttributes(
+                readAttributes(source, DosFileAttributes.class, NOFOLLOW_LINKS),
+                readAttributes(target, DosFileAttributes.class, NOFOLLOW_LINKS));
+        }
+    }
+
     // copy source to target with verification
     static void copyAndVerify(Path source, Path target, CopyOption... options)
         throws IOException
     {
         Path result = copy(source, target, options);
-        assertTrue(result == target);
+        assertEquals(result, target);
 
         // get attributes of source and target file to verify copy
         boolean followLinks = true;
@@ -661,42 +776,18 @@ public class CopyAndMove {
 
         // check hash if regular file
         if (basicAttributes.isRegularFile())
-            assertTrue(computeHash(source) == computeHash(target));
+            assertEquals(computeHash(source), computeHash(target));
 
         // check link target if symbolic link
         if (basicAttributes.isSymbolicLink())
-            assert(readSymbolicLink(source).equals(readSymbolicLink(target)));
+            assertEquals(readSymbolicLink(source), readSymbolicLink(target));
 
         // check that attributes are copied
-        if (copyAttributes && followLinks) {
-            checkBasicAttributes(basicAttributes,
-                readAttributes(source, BasicFileAttributes.class, linkOptions));
-
-            // verify other attributes when same provider
-            if (source.getFileSystem().provider() == target.getFileSystem().provider()) {
-
-                // check POSIX attributes are copied
-                if (!Platform.isWindows() && testPosixAttributes) {
-                    checkPosixAttributes(
-                        readAttributes(source, PosixFileAttributes.class, linkOptions),
-                        readAttributes(target, PosixFileAttributes.class, linkOptions));
-                }
-
-                // check DOS attributes are copied
-                if (Platform.isWindows()) {
-                    checkDosAttributes(
-                        readAttributes(source, DosFileAttributes.class, linkOptions),
-                        readAttributes(target, DosFileAttributes.class, linkOptions));
-                }
-
-                // check named attributes are copied
-                if (followLinks &&
-                    getFileStore(source).supportsFileAttributeView("xattr") &&
-                    getFileStore(target).supportsFileAttributeView("xattr"))
-                {
-                    checkUserDefinedFileAttributes(readUserDefinedFileAttributes(source),
-                                                   readUserDefinedFileAttributes(target));
-                }
+        if (copyAttributes) {
+            if (followLinks) {
+                checkTargetAttributes(source, target, basicAttributes);
+            } else if (basicAttributes.isSymbolicLink()) {
+                checkSymLinkAttributes(source, target, basicAttributes);
             }
         }
     }
@@ -704,7 +795,7 @@ public class CopyAndMove {
     /**
      * Tests all possible ways to invoke copy to copy a file to a file
      */
-    static void testCopyFileToFile(Path dir1, Path dir2, boolean supportsLinks)
+    static void testCopyFileToFile(Path dir1, Path dir2, boolean supportsSymbolicLinks)
         throws IOException
     {
         Path source, target, link, entry;
@@ -796,6 +887,25 @@ public class CopyAndMove {
         delete(source);
         delete(target);
 
+
+        /**
+         * Test: ensure target not deleted if source permissions are zero
+         */
+        source = createSourceFile(dir1);
+        if (getFileStore(source).supportsFileAttributeView("posix")) {
+            Files.setPosixFilePermissions(source, Set.of());
+            target = getTargetFile(dir2);
+            createFile(target);
+            try {
+                Files.copy(source, target, REPLACE_EXISTING);
+                throw new RuntimeException("AccessDeniedException not thrown");
+            } catch (AccessDeniedException expected) {
+            }
+            if (!Files.exists(target))
+                throw new RuntimeException("target deleted");
+            delete(target);
+        }
+        delete(source);
 
         // -- directory --
 
@@ -889,10 +999,10 @@ public class CopyAndMove {
         /**
          * Test: Follow link
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = createSourceFile(dir1);
             link = dir1.resolve("link");
-            createSymbolicLink(link, source);
+            createSymbolicLink(link, source.getFileName());
             target = getTargetFile(dir2);
             copyAndVerify(link, target);
             delete(link);
@@ -902,7 +1012,7 @@ public class CopyAndMove {
         /**
          * Test: Copy link (to file)
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = createSourceFile(dir1);
             link = dir1.resolve("link");
             createSymbolicLink(link, source);
@@ -913,9 +1023,26 @@ public class CopyAndMove {
         }
 
         /**
+         * Test: Copy link + attributes
+         */
+        if (supportsSymbolicLinks) {
+            source = createSourceFile(dir1);
+            link = dir1.resolve("link");
+            createSymbolicLink(link, source);
+            if (Platform.isWindows()) {
+                setWindowsLinkAttributes(link);
+            }
+
+            target = getTargetFile(dir2);
+            copyAndVerify(link, target, NOFOLLOW_LINKS, COPY_ATTRIBUTES);
+            delete(link);
+            delete(source);
+        }
+
+        /**
          * Test: Copy link (to directory)
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             source = dir1.resolve("mydir");
             createDirectory(source);
             link = dir1.resolve("link");
@@ -927,9 +1054,27 @@ public class CopyAndMove {
         }
 
         /**
+         * Test: Copy link to directory + attributes
+         */
+        if (supportsSymbolicLinks) {
+            source = dir1.resolve("mydir");
+            createDirectory(source);
+            link = dir1.resolve("link");
+            createSymbolicLink(link, source);
+            if (Platform.isWindows()) {
+                setWindowsLinkAttributes(link);
+            }
+
+            target = getTargetFile(dir2);
+            copyAndVerify(link, target, NOFOLLOW_LINKS, COPY_ATTRIBUTES);
+            delete(link);
+            delete(source);
+        }
+
+        /**
          * Test: Copy broken link
          */
-        if (supportsLinks) {
+        if (supportsSymbolicLinks) {
             assertTrue(notExists(source));
             link = dir1.resolve("link");
             createSymbolicLink(link, source);
@@ -941,7 +1086,7 @@ public class CopyAndMove {
         /**
          * Test: Copy link to UNC (Windows only)
          */
-        if (supportsLinks && Platform.isWindows()) {
+        if (supportsSymbolicLinks && Platform.isWindows()) {
             Path unc = Paths.get("\\\\rialto\\share\\file");
             link = dir1.resolve("link");
             createSymbolicLink(link, unc);
@@ -1008,7 +1153,7 @@ public class CopyAndMove {
         }
         Path tmpdir = createTempDirectory("blah");
         try {
-            if (TestUtil.supportsLinks(tmpdir)) {
+            if (TestUtil.supportsSymbolicLinks(tmpdir)) {
                 Path link = createSymbolicLink(tmpdir.resolve("link"),
                                                   tmpdir.resolve("target"));
                 try {
@@ -1063,9 +1208,9 @@ public class CopyAndMove {
                 } else {
                     n = copy(in, target);
                 }
-                assertTrue(in.read() == -1);   // EOF
-                assertTrue(n == size);
-                assertTrue(size(target) == size);
+                assertEquals(in.read(), -1);   // EOF
+                assertEquals(n, size);
+                assertEquals(size(target), size);
             } finally {
                 in.close();
             }
@@ -1113,15 +1258,15 @@ public class CopyAndMove {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
 
             long n = copy(source, out);
-            assertTrue(n == size);
-            assertTrue(out.size() == size);
+            assertEquals(n, size);
+            assertEquals(out.size(), size);
 
             byte[] read = out.toByteArray();
             assertTrue(Arrays.equals(read, b));
 
             // check output stream is open
             out.write(0);
-            assertTrue(out.size() == size+1);
+            assertEquals(out.size(), size+1);
         } finally {
             delete(source);
         }
@@ -1136,6 +1281,25 @@ public class CopyAndMove {
         if (!value) {
             System.err.format(format, args);
             throw new RuntimeException("Assertion failed");
+        }
+    }
+
+    static void assertEquals(long lhs, long rhs) {
+        if (lhs != rhs) {
+            throw new RuntimeException("assertEquals: " + lhs + " != " + rhs);
+        }
+    }
+
+    static void assertEquals(Object lhs, Object rhs) {
+        assertEquals(lhs, rhs, null);
+    }
+
+    static void assertEquals(Object lhs, Object rhs, String format, Object... args) {
+        if (!Objects.equals(lhs, rhs)) {
+            String msg = format == null
+                ? "assertEquals: " + Objects.toString(lhs) + " != " + Objects.toString(rhs)
+                : String.format(format, args);
+            throw new RuntimeException(msg);
         }
     }
 

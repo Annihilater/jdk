@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,20 +22,30 @@
  *
  */
 
-#include "precompiled.hpp"
-#include "jvm_io.h"
+#include "cds/aotMetaspace.hpp"
+#include "cds/cds_globals.hpp"
+#include "cds/cdsConfig.hpp"
 #include "compiler/compilerDefinitions.hpp"
+#include "jvm_io.h"
 #include "runtime/arguments.hpp"
+#include "runtime/globals_extension.hpp"
+#include "runtime/os.hpp"
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
+#include "utilities/ostream.hpp"
 
 const char* Abstract_VM_Version::_s_vm_release = Abstract_VM_Version::vm_release();
 const char* Abstract_VM_Version::_s_internal_vm_info_string = Abstract_VM_Version::internal_vm_info_string();
 
 uint64_t Abstract_VM_Version::_features = 0;
 const char* Abstract_VM_Version::_features_string = "";
+const char* Abstract_VM_Version::_cpu_info_string = "";
+uint64_t Abstract_VM_Version::_cpu_features = 0;
+uint64_t Abstract_VM_Version::_cpu_features_disabled_by_aot_cache = 0;
 
+#ifndef SUPPORTS_NATIVE_CX8
 bool Abstract_VM_Version::_supports_cx8 = false;
+#endif
 bool Abstract_VM_Version::_supports_atomic_getset4 = false;
 bool Abstract_VM_Version::_supports_atomic_getset8 = false;
 bool Abstract_VM_Version::_supports_atomic_getadd4 = false;
@@ -72,6 +82,14 @@ VirtualizationType Abstract_VM_Version::_detected_virtualization = NoDetectedVir
 
 #ifndef DEBUG_LEVEL
   #error DEBUG_LEVEL must be defined
+#endif
+
+#ifndef HOTSPOT_BUILD_TIME
+  #error HOTSPOT_BUILD_TIME must be defined
+#endif
+
+#ifndef JVM_VARIANT
+  #error JVM_VARIANT must be defined
 #endif
 
 #define VM_RELEASE HOTSPOT_VERSION_STRING
@@ -112,42 +130,43 @@ const char* Abstract_VM_Version::vm_name() {
   return VMNAME;
 }
 
+#ifndef VENDOR_PADDING
+# define VENDOR_PADDING 64
+#endif
+#ifndef VENDOR
+# define VENDOR  "Oracle Corporation"
+#endif
+
+static const char vm_vendor_string[sizeof(VENDOR) < VENDOR_PADDING ? VENDOR_PADDING : sizeof(VENDOR)] = VENDOR;
 
 const char* Abstract_VM_Version::vm_vendor() {
-#ifdef VENDOR
-  return VENDOR;
-#else
-  return "Oracle Corporation";
-#endif
+  return vm_vendor_string;
 }
 
 
+// The VM info string should be a constant, but its value cannot be finalized until after VM arguments
+// have been fully processed. The result is C-heap allocated, and should be freed by the caller.
 const char* Abstract_VM_Version::vm_info_string() {
+  stringStream ss;
   switch (Arguments::mode()) {
-    case Arguments::_int:
-      return UseSharedSpaces ? "interpreted mode, sharing" : "interpreted mode";
-    case Arguments::_mixed:
-      if (UseSharedSpaces) {
-        if (CompilationModeFlag::quick_only()) {
-          return "mixed mode, emulated-client, sharing";
-        } else {
-          return "mixed mode, sharing";
-         }
-      } else {
-        if (CompilationModeFlag::quick_only()) {
-          return "mixed mode, emulated-client";
-        } else {
-          return "mixed mode";
-        }
-      }
-    case Arguments::_comp:
-      if (CompilationModeFlag::quick_only()) {
-         return UseSharedSpaces ? "compiled mode, emulated-client, sharing" : "compiled mode, emulated-client";
-      }
-      return UseSharedSpaces ? "compiled mode, sharing" : "compiled mode";
+  case Arguments::_int:   ss.print("%s", "interpreted mode"); break;
+  case Arguments::_mixed: ss.print("%s", "mixed mode"); break;
+  case Arguments::_comp:  ss.print("%s", "compiled mode"); break;
+  default: ShouldNotReachHere();
   }
-  ShouldNotReachHere();
-  return "";
+
+  if (is_vm_statically_linked()) {
+    ss.print("%s", ", static");
+  }
+  if (CDSConfig::is_dumping_aot_configuration()) {
+    ss.print("%s", ", aot training");
+  } else if (CDSConfig::is_dumping_aot_cache()) {
+    ss.print("%s", ", aot assembly");
+  } else if (CDSConfig::is_using_archive()) {
+    ss.print("%s", CDSConfig::new_aot_flags_used() ? ", aot production" : ", sharing");
+  }
+
+  return ss.as_string(/*c_heap=*/true);
 }
 
 // NOTE: do *not* use stringStream. this function is called by
@@ -155,13 +174,6 @@ const char* Abstract_VM_Version::vm_info_string() {
 //       stringStream cannot get resource allocated and will SEGV.
 const char* Abstract_VM_Version::vm_release() {
   return VM_RELEASE;
-}
-
-// NOTE: do *not* use stringStream. this function is called by
-//       fatal error handlers. if the crash is in native thread,
-//       stringStream cannot get resource allocated and will SEGV.
-const char* Abstract_VM_Version::jre_release_version() {
-  return VERSION_STRING;
 }
 
 #define OS       LINUX_ONLY("linux")             \
@@ -181,9 +193,8 @@ const char* Abstract_VM_Version::jre_release_version() {
 #else
 #define CPU      AARCH64_ONLY("aarch64")         \
                  AMD64_ONLY("amd64")             \
-                 IA32_ONLY("x86")                \
-                 IA64_ONLY("ia64")               \
-                 S390_ONLY("s390")
+                 S390_ONLY("s390")               \
+                 RISCV64_ONLY("riscv64")
 #endif // !ZERO
 #endif // !CPU
 
@@ -191,22 +202,14 @@ const char *Abstract_VM_Version::vm_platform_string() {
   return OS "-" CPU;
 }
 
-const char* Abstract_VM_Version::internal_vm_info_string() {
-  #ifndef HOTSPOT_BUILD_USER
-    #define HOTSPOT_BUILD_USER unknown
-  #endif
+const char* Abstract_VM_Version::vm_variant() {
+  return JVM_VARIANT;
+}
 
+const char* Abstract_VM_Version::internal_vm_info_string() {
   #ifndef HOTSPOT_BUILD_COMPILER
     #ifdef _MSC_VER
-      #if _MSC_VER == 1600
-        #define HOTSPOT_BUILD_COMPILER "MS VC++ 10.0 (VS2010)"
-      #elif _MSC_VER == 1700
-        #define HOTSPOT_BUILD_COMPILER "MS VC++ 11.0 (VS2012)"
-      #elif _MSC_VER == 1800
-        #define HOTSPOT_BUILD_COMPILER "MS VC++ 12.0 (VS2013)"
-      #elif _MSC_VER == 1900
-        #define HOTSPOT_BUILD_COMPILER "MS VC++ 14.0 (VS2015)"
-      #elif _MSC_VER == 1911
+      #if _MSC_VER == 1911
         #define HOTSPOT_BUILD_COMPILER "MS VC++ 15.3 (VS2017)"
       #elif _MSC_VER == 1912
         #define HOTSPOT_BUILD_COMPILER "MS VC++ 15.5 (VS2017)"
@@ -238,6 +241,38 @@ const char* Abstract_VM_Version::internal_vm_info_string() {
         #define HOTSPOT_BUILD_COMPILER "MS VC++ 16.8 / 16.9 (VS2019)"
       #elif _MSC_VER == 1929
         #define HOTSPOT_BUILD_COMPILER "MS VC++ 16.10 / 16.11 (VS2019)"
+      #elif _MSC_VER == 1930
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.0 (VS2022)"
+      #elif _MSC_VER == 1931
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.1 (VS2022)"
+      #elif _MSC_VER == 1932
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.2 (VS2022)"
+      #elif _MSC_VER == 1933
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.3 (VS2022)"
+      #elif _MSC_VER == 1934
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.4 (VS2022)"
+      #elif _MSC_VER == 1935
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.5 (VS2022)"
+      #elif _MSC_VER == 1936
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.6 (VS2022)"
+      #elif _MSC_VER == 1937
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.7 (VS2022)"
+      #elif _MSC_VER == 1938
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.8 (VS2022)"
+      #elif _MSC_VER == 1939
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.9 (VS2022)"
+      #elif _MSC_VER == 1940
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.10 (VS2022)"
+      #elif _MSC_VER == 1941
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.11 (VS2022)"
+      #elif _MSC_VER == 1942
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.12 (VS2022)"
+      #elif _MSC_VER == 1943
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.13 (VS2022)"
+      #elif _MSC_VER == 1944
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 17.14 (VS2022)"
+      #elif _MSC_VER == 1950
+        #define HOTSPOT_BUILD_COMPILER "MS VC++ 18.0 (VS2026)"
       #else
         #define HOTSPOT_BUILD_COMPILER "unknown MS VC++:" XSTR(_MSC_VER)
       #endif
@@ -266,22 +301,14 @@ const char* Abstract_VM_Version::internal_vm_info_string() {
     #define LIBC_STR ""
   #endif
 
-  #ifndef HOTSPOT_BUILD_TIME
-    #define HOTSPOT_BUILD_TIME __DATE__ " " __TIME__
-  #endif
-
   #define INTERNAL_VERSION_SUFFIX VM_RELEASE ")" \
          " for " OS "-" CPU FLOAT_ARCH_STR LIBC_STR \
          " JRE (" VERSION_STRING "), built on " HOTSPOT_BUILD_TIME \
-         " by " XSTR(HOTSPOT_BUILD_USER) " with " HOTSPOT_BUILD_COMPILER
+         " with " HOTSPOT_BUILD_COMPILER
 
   return strcmp(DEBUG_LEVEL, "release") == 0
       ? VMNAME " (" INTERNAL_VERSION_SUFFIX
       : VMNAME " (" DEBUG_LEVEL " " INTERNAL_VERSION_SUFFIX;
-}
-
-const char *Abstract_VM_Version::vm_build_user() {
-  return HOTSPOT_BUILD_USER;
 }
 
 const char *Abstract_VM_Version::jdk_debug_level() {
@@ -300,33 +327,17 @@ unsigned int Abstract_VM_Version::jvm_version() {
          (Abstract_VM_Version::vm_build_number() & 0xFF);
 }
 
-void Abstract_VM_Version::insert_features_names(char* buf, size_t buflen, const char* features_names[]) {
-  uint64_t features = _features;
-  uint features_names_index = 0;
-
-  while (features != 0) {
-    if (features & 1) {
-      int res = jio_snprintf(buf, buflen, ", %s", features_names[features_names_index]);
-      assert(res > 0, "not enough temporary space allocated");
-      buf += res;
-      buflen -= res;
-    }
-    features >>= 1;
-    ++features_names_index;
-  }
-}
-
 bool Abstract_VM_Version::print_matching_lines_from_file(const char* filename, outputStream* st, const char* keywords_to_match[]) {
   char line[500];
-  FILE* fp = fopen(filename, "r");
-  if (fp == NULL) {
+  FILE* fp = os::fopen(filename, "r");
+  if (fp == nullptr) {
     return false;
   }
 
   st->print_cr("Virtualization information:");
-  while (fgets(line, sizeof(line), fp) != NULL) {
+  while (fgets(line, sizeof(line), fp) != nullptr) {
     int i = 0;
-    while (keywords_to_match[i] != NULL) {
+    while (keywords_to_match[i] != nullptr) {
       if (strncmp(line, keywords_to_match[i], strlen(keywords_to_match[i])) == 0) {
         st->print("%s", line);
         break;
@@ -364,8 +375,8 @@ int Abstract_VM_Version::number_of_sockets(void) {
 const char* Abstract_VM_Version::cpu_name(void) {
   assert(_initialized, "should be initialized");
   char* tmp = NEW_C_HEAP_ARRAY_RETURN_NULL(char, CPU_TYPE_DESC_BUF_SIZE, mtTracing);
-  if (NULL == tmp) {
-    return NULL;
+  if (nullptr == tmp) {
+    return nullptr;
   }
   strncpy(tmp, _cpu_name, CPU_TYPE_DESC_BUF_SIZE);
   return tmp;
@@ -374,9 +385,22 @@ const char* Abstract_VM_Version::cpu_name(void) {
 const char* Abstract_VM_Version::cpu_description(void) {
   assert(_initialized, "should be initialized");
   char* tmp = NEW_C_HEAP_ARRAY_RETURN_NULL(char, CPU_DETAILED_DESC_BUF_SIZE, mtTracing);
-  if (NULL == tmp) {
-    return NULL;
+  if (nullptr == tmp) {
+    return nullptr;
   }
   strncpy(tmp, _cpu_desc, CPU_DETAILED_DESC_BUF_SIZE);
   return tmp;
+}
+
+void* Abstract_VM_Version::get_aot_cache_cpu_features() {
+  void* archived_cpu_features = nullptr;
+  if (UseAOTCacheCpuFeaturesOnly) {
+    archived_cpu_features = AOTMetaspace::get_archived_cpu_features();
+    if (archived_cpu_features == nullptr) {
+      // If we get nullptr, it means there is a mismatch in cpu feature size, which
+      // is handled later by verification checks in AOTCodeCache. For now silently disable this option.
+      FLAG_SET_ERGO(UseAOTCacheCpuFeaturesOnly, false);
+    }
+  }
+  return archived_cpu_features;
 }

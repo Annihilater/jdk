@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,6 +45,7 @@ class ciSymbol : public ciBaseObject {
   friend class ciMethod;
   friend class ciField;
   friend class ciObjArrayKlass;
+  friend class ciFlatArrayKlass;
 
 private:
   const vmSymbolID _sid;
@@ -52,8 +53,6 @@ private:
   ciSymbol(Symbol* s, vmSymbolID sid);
 
   DEBUG_ONLY(bool sid_ok();)
-
-  Symbol* get_symbol() const { return _symbol; }
 
   const char* type_string() { return "ciSymbol"; }
 
@@ -81,6 +80,11 @@ public:
 
   // Tests if the symbol starts with the given prefix.
   bool starts_with(const char* prefix, int len) const;
+  bool starts_with(char prefix_char) const;
+
+  // Tests if the symbol ends with the given suffix.
+  bool ends_with(const char* suffix, int len) const;
+  bool ends_with(char suffix_char) const;
 
   // Determines where the symbol contains the given substring.
   int index_of_at(int i, const char* str, int len) const;
@@ -106,6 +110,9 @@ public:
   bool equals(ciSymbol* obj) { return this->_symbol == obj->get_symbol(); }
 
   bool is_signature_polymorphic_name() const;
+
+  Symbol* get_symbol() const { return _symbol; }
+
 };
 
 #endif // SHARE_CI_CISYMBOL_HPP

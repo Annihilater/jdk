@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +29,8 @@
  * @library /test/lib
  * @modules java.base/jdk.internal.misc
  *          java.management
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/timeout=1200 -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:NativeMemoryTracking=detail MallocStressTest
  */
 
@@ -42,7 +43,7 @@ import jdk.test.lib.Platform;
 import jdk.test.lib.Utils;
 import jdk.test.lib.process.ProcessTools;
 import jdk.test.lib.process.OutputAnalyzer;
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 public class MallocStressTest {
     private static int K = 1024;
@@ -130,12 +131,33 @@ public class MallocStressTest {
 
         // All test memory allocated should be released
         output = new OutputAnalyzer(pb.start());
-        output.shouldNotContain("Test (reserved=");
+        output.shouldContain("Test (reserved=0KB, committed=0KB)");
 
         // Verify that tracking level has not been downgraded
         pb.command(new String[] { JDKToolFinder.getJDKTool("jcmd"), pid, "VM.native_memory", "statistics"});
         output = new OutputAnalyzer(pb.start());
         output.shouldNotContain("Tracking level has been downgraded due to lack of resources");
+
+        if (Platform.isDebugBuild()) {
+            String expectedCountString = output.firstMatch("\\s*Expected entry count: (\\d+)", 1);
+            String totalEntriesString = output.firstMatch("\\s*Total entries: (\\d+)", 1);
+
+            if (expectedCountString == null || totalEntriesString == null) {
+                throw new RuntimeException("Missing malloc site table entry counts in NMT statistics output");
+            }
+
+            int expectedCount = Integer.parseInt(expectedCountString);
+            int totalEntries = Integer.parseInt(totalEntriesString);
+
+            // The expected count is loaded after the total entries has accumulated (internal impl detail from hotspot).
+            // As this is a concurrent hashtable, we might have added more malloc sites.
+            // So, we're ok with the expectedCount being larger than totalEntries, but if it's *A lot* larger something
+            // really weird is going on.
+            if (expectedCount - totalEntries > 5) {
+                throw new RuntimeException("Malloc site table entry count mismatch: expected "
+                                           + expectedCount + ", walked " + totalEntries);
+            }
+        }
     }
 
     private static void sleep_wait(int n) {

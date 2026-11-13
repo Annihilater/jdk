@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@
 #include "oops/method.hpp"
 #include "runtime/handles.hpp"
 #include "runtime/javaFrameAnchor.hpp"
-#include "runtime/thread.hpp"
+#include "runtime/javaThread.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/macros.hpp"
 
@@ -57,7 +57,6 @@ class JavaCallWrapper: StackObj {
   ~JavaCallWrapper();
 
   // Accessors
-  JavaThread*      thread() const           { return _thread; }
   JNIHandleBlock*  handles() const          { return _handles; }
 
   JavaFrameAnchor* anchor(void)             { return &_anchor; }
@@ -65,10 +64,9 @@ class JavaCallWrapper: StackObj {
   JavaValue*       result() const           { return _result; }
   // GC support
   Method*          callee_method()          { return _callee_method; }
-  oop              receiver()               { return _receiver; }
   void             oops_do(OopClosure* f);
 
-  bool             is_first_frame() const   { return _anchor.last_Java_sp() == NULL; }
+  bool             is_first_frame() const   { return _anchor.last_Java_sp() == nullptr; }
 
 };
 
@@ -88,10 +86,6 @@ class JavaCallArguments : public StackObj {
   int         _size;
   int         _max_size;
   bool        _start_at_zero;      // Support late setting of receiver
-#if INCLUDE_JVMCI
-  Handle      _alternative_target; // HotSpotNmethod wrapping an nmethod whose verified entry point
-                                   // should be called instead of the normal target
-#endif
 
   void initialize() {
     // Starts at first element to support set_receiver.
@@ -127,16 +121,6 @@ class JavaCallArguments : public StackObj {
       initialize();
     }
   }
-
-#if INCLUDE_JVMCI
-  void set_alternative_target(Handle target) {
-    _alternative_target = target;
-  }
-
-  Handle alternative_target() {
-    return _alternative_target;
-  }
-#endif
 
   // The possible values for _value_state elements.
   enum {

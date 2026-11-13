@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -130,9 +130,10 @@ public class JPEGImageWriteParam extends ImageWriteParam {
      * <p> The default implementation resets the compression quality
      * to {@code 0.75F}.
      *
-     * @exception IllegalStateException if the compression mode is not
+     * @throws IllegalStateException if the compression mode is not
      * {@code MODE_EXPLICIT}.
      */
+    @Override
     public void unsetCompression() {
         if (getCompressionMode() != MODE_EXPLICIT) {
             throw new IllegalStateException
@@ -147,9 +148,10 @@ public class JPEGImageWriteParam extends ImageWriteParam {
      *
      * @return {@code false}.
      *
-     * @exception IllegalStateException if the compression mode is not
+     * @throws IllegalStateException if the compression mode is not
      * {@code MODE_EXPLICIT}.
      */
+    @Override
     public boolean isCompressionLossless() {
         if (getCompressionMode() != MODE_EXPLICIT) {
             throw new IllegalStateException
@@ -158,6 +160,7 @@ public class JPEGImageWriteParam extends ImageWriteParam {
         return false;
     }
 
+    @Override
     public String[] getCompressionQualityDescriptions() {
         if (getCompressionMode() != MODE_EXPLICIT) {
             throw new IllegalStateException
@@ -170,6 +173,7 @@ public class JPEGImageWriteParam extends ImageWriteParam {
         return qualityDescs.clone();
     }
 
+    @Override
     public float[] getCompressionQualityValues() {
         if (getCompressionMode() != MODE_EXPLICIT) {
             throw new IllegalStateException
@@ -204,7 +208,7 @@ public class JPEGImageWriteParam extends ImageWriteParam {
      * @param DCHuffmanTables An array of Huffman table objects.
      * @param ACHuffmanTables An array of Huffman table objects.
      *
-     * @exception IllegalArgumentException if any of the arguments
+     * @throws IllegalArgumentException if any of the arguments
      * is {@code null} or has more than 4 elements, or if the
      * numbers of DC and AC tables differ.
      *

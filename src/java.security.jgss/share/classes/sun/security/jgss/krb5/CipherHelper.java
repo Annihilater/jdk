@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,6 +39,7 @@ import org.ietf.jgss.*;
 import java.security.MessageDigest;
 import java.security.GeneralSecurityException;
 import java.security.NoSuchAlgorithmException;
+
 import sun.security.krb5.*;
 import sun.security.krb5.internal.crypto.Aes128Sha2;
 import sun.security.krb5.internal.crypto.Aes256Sha2;
@@ -47,6 +48,7 @@ import sun.security.krb5.internal.crypto.Aes128;
 import sun.security.krb5.internal.crypto.Aes256;
 import sun.security.krb5.internal.crypto.ArcFourHmac;
 import sun.security.krb5.internal.crypto.EType;
+import sun.security.util.ByteArrays;
 
 class CipherHelper {
 
@@ -66,9 +68,6 @@ class CipherHelper {
     // key usage for MIC tokens used by MS
     private static final int KG_USAGE_SIGN_MS = 15;
 
-    // debug flag
-    private static final boolean DEBUG = Krb5Util.DEBUG;
-
     /**
      * A zero initial vector to be used for checksum calculation and for
      * DesCbc application data encryption/decryption.
@@ -76,9 +75,10 @@ class CipherHelper {
     private static final byte[] ZERO_IV = new byte[DES_IV_SIZE];
     private static final byte[] ZERO_IV_AES = new byte[AES_IV_SIZE];
 
-    private int etype;
-    private int sgnAlg, sealAlg;
-    private byte[] keybytes;
+    private final int etype;
+    private final int sgnAlg;
+    private final int sealAlg;
+    private final byte[] keybytes;
 
     CipherHelper(EncryptionKey key) throws GSSException {
         etype = key.getEType();
@@ -134,11 +134,7 @@ class CipherHelper {
     }
 
     boolean isArcFour() {
-        boolean flag = false;
-        if (etype == EncryptedData.ETYPE_ARCFOUR_HMAC) {
-            flag = true;
-        }
-        return flag;
+        return etype == EncryptedData.ETYPE_ARCFOUR_HMAC;
     }
 
     @SuppressWarnings("fallthrough")
@@ -384,9 +380,8 @@ class CipherHelper {
 
         case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA384_192:
             try {
-                byte[] answer = Aes256Sha2.calculateChecksum(keybytes, key_usage,
+                return Aes256Sha2.calculateChecksum(keybytes, key_usage,
                         buf, 0, total);
-                return answer;
             } catch (GeneralSecurityException e) {
                 GSSException ge = new GSSException(GSSException.FAILURE, -1,
                         "Could not use AES256 signing algorithm - " +
@@ -594,34 +589,43 @@ class CipherHelper {
     // decrypt data in the new GSS tokens
     void decryptData(WrapToken_v2 token, byte[] ciphertext, int cStart,
                 int cLen, byte[] plaintext, int pStart, int key_usage)
-        throws GSSException {
+            throws GSSException {
 
-        /*
-        Krb5Token.debug("decryptData : ciphertext =  " +
-                Krb5Token.getHexBytes(ciphertext));
-        */
-
+        byte[] decrypted;
         switch (etype) {
             case EncryptedData.ETYPE_AES128_CTS_HMAC_SHA1_96:
-                    aes128Decrypt(token, ciphertext, cStart, cLen,
-                                plaintext, pStart, key_usage);
-                    break;
+                decrypted = aes128Decrypt(ciphertext, cStart, cLen, key_usage);
+                break;
             case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA1_96:
-                    aes256Decrypt(token, ciphertext, cStart, cLen,
-                                plaintext, pStart, key_usage);
-                    break;
+                decrypted = aes256Decrypt(ciphertext, cStart, cLen, key_usage);
+                break;
             case EncryptedData.ETYPE_AES128_CTS_HMAC_SHA256_128:
-                    aes128Sha2Decrypt(token, ciphertext, cStart, cLen,
-                            plaintext, pStart, key_usage);
-                    break;
+                decrypted = aes128Sha2Decrypt(ciphertext, cStart, cLen, key_usage);
+                break;
             case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA384_192:
-                    aes256Sha2Decrypt(token, ciphertext, cStart, cLen,
-                            plaintext, pStart, key_usage);
-                    break;
+                decrypted = aes256Sha2Decrypt(ciphertext, cStart, cLen, key_usage);
+                break;
             default:
-                    throw new GSSException(GSSException.FAILURE, -1,
+                throw new GSSException(GSSException.FAILURE, -1,
                         "Unsupported etype: " + etype);
-            }
+        }
+        byte[] outerHeader = token.getTokenHeader().clone();
+        outerHeader[MessageToken_v2.TOKEN_RRC_POS] = 0;
+        outerHeader[MessageToken_v2.TOKEN_RRC_POS + 1] = 0;
+        int len = decrypted.length - WrapToken_v2.CONFOUNDER_SIZE -
+                WrapToken_v2.TOKEN_HEADER_SIZE - token.getEc();
+        if (len < 0) {
+            throw new GSSException(GSSException.DEFECTIVE_TOKEN);
+        }
+        if (!ByteArrays.isEqual(
+                outerHeader,
+                0, WrapToken_v2.TOKEN_HEADER_SIZE,
+                decrypted,
+                decrypted.length - WrapToken_v2.TOKEN_HEADER_SIZE, decrypted.length)) {
+            throw new GSSException(GSSException.DEFECTIVE_TOKEN);
+        }
+        System.arraycopy(decrypted, WrapToken_v2.CONFOUNDER_SIZE,
+                plaintext, pStart, len);
     }
 
     void decryptData(WrapToken token, InputStream cipherStream, int cLen,
@@ -671,44 +675,6 @@ class CipherHelper {
         default:
             throw new GSSException(GSSException.FAILURE, -1,
                 "Unsupported seal algorithm: " + sealAlg);
-        }
-    }
-
-    void decryptData(WrapToken_v2 token, InputStream cipherStream, int cLen,
-        byte[] plaintext, int pStart, int key_usage)
-        throws GSSException, IOException {
-
-        // Read encrypted data from stream
-        byte[] ciphertext = new byte[cLen];
-        try {
-                Krb5Token.readFully(cipherStream, ciphertext, 0, cLen);
-        } catch (IOException e) {
-                GSSException ge = new GSSException(
-                    GSSException.DEFECTIVE_TOKEN, -1,
-                    "Cannot read complete token");
-                ge.initCause(e);
-                throw ge;
-        }
-        switch (etype) {
-            case EncryptedData.ETYPE_AES128_CTS_HMAC_SHA1_96:
-                    aes128Decrypt(token, ciphertext, 0, cLen,
-                                plaintext, pStart, key_usage);
-                    break;
-            case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA1_96:
-                    aes256Decrypt(token, ciphertext, 0, cLen,
-                                plaintext, pStart, key_usage);
-                    break;
-            case EncryptedData.ETYPE_AES128_CTS_HMAC_SHA256_128:
-                    aes128Sha2Decrypt(token, ciphertext, 0, cLen,
-                            plaintext, pStart, key_usage);
-                    break;
-            case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA384_192:
-                    aes256Sha2Decrypt(token, ciphertext, 0, cLen,
-                            plaintext, pStart, key_usage);
-                    break;
-            default:
-                    throw new GSSException(GSSException.FAILURE, -1,
-                        "Unsupported etype: " + etype);
         }
     }
 
@@ -831,45 +797,6 @@ class CipherHelper {
         }
     }
 
-    /*
-     * Encrypt data in the new GSS tokens
-     *
-     * Wrap Tokens (with confidentiality)
-     * { Encrypt(16-byte confounder | plaintext | 16-byte token_header) |
-     *           12-byte HMAC }
-     * where HMAC is on {16-byte confounder | plaintext | 16-byte token_header}
-     * HMAC is not encrypted; it is appended at the end.
-     */
-    int encryptData(WrapToken_v2 token, byte[] confounder, byte[] tokenHeader,
-        byte[] plaintext, int pStart, int pLen, byte[] ciphertext, int cStart,
-        int key_usage) throws GSSException {
-
-        byte[] ctext = null;
-        switch (etype) {
-            case EncryptedData.ETYPE_AES128_CTS_HMAC_SHA1_96:
-                    ctext = aes128Encrypt(confounder, tokenHeader,
-                                plaintext, pStart, pLen, key_usage);
-                    break;
-            case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA1_96:
-                    ctext = aes256Encrypt(confounder, tokenHeader,
-                                plaintext, pStart, pLen, key_usage);
-                    break;
-            case EncryptedData.ETYPE_AES128_CTS_HMAC_SHA256_128:
-                    ctext = aes128Sha2Encrypt(confounder, tokenHeader,
-                            plaintext, pStart, pLen, key_usage);
-                    break;
-            case EncryptedData.ETYPE_AES256_CTS_HMAC_SHA384_192:
-                    ctext = aes256Sha2Encrypt(confounder, tokenHeader,
-                            plaintext, pStart, pLen, key_usage);
-                    break;
-            default:
-                    throw new GSSException(GSSException.FAILURE, -1,
-                        "Unsupported etype: " + etype);
-        }
-        System.arraycopy(ctext, 0, ciphertext, cStart, ctext.length);
-        return ctext.length;
-    }
-
     // --------------------- DES methods
 
     /**
@@ -886,7 +813,7 @@ class CipherHelper {
      * @param len the length of the data
      * @throws GSSException when an error occuse in the encryption
      */
-    private byte[] getDesCbcChecksum(byte key[],
+    private byte[] getDesCbcChecksum(byte[] key,
                                      byte[] header,
                                      byte[] data, int offset, int len)
         throws GSSException {
@@ -954,14 +881,14 @@ class CipherHelper {
      * @param key the bytes for the DES key
      * @param ivBytes the initial vector bytes
      */
-    private final Cipher getInitializedDes(boolean encryptMode, byte[] key,
-                                          byte[] ivBytes)
+    private Cipher getInitializedDes(boolean encryptMode, byte[] key,
+                                     byte[] ivBytes)
         throws  GSSException  {
 
 
         try {
             IvParameterSpec iv = new IvParameterSpec(ivBytes);
-            SecretKey jceKey = (SecretKey) (new SecretKeySpec(key, "DES"));
+            SecretKey jceKey = new SecretKeySpec(key, "DES");
 
             Cipher desCipher = Cipher.getInstance("DES/CBC/NoPadding");
             desCipher.init(
@@ -986,8 +913,8 @@ class CipherHelper {
      * @param offset the offset for the encrypted data
      * @param len the length of the encrypted data
      * @param dataOutBuf the output buffer where the application data
-     * should be writte
-     * @param dataOffset the offser where the application data should
+     * should be written
+     * @param dataOffset the offset where the application data should
      * be written.
      * @throws GSSException is an error occurs while decrypting the
      * data
@@ -1077,8 +1004,8 @@ class CipherHelper {
      * read
      * @param len the length of the ciphertext data
      * @param dataOutBuf the output buffer where the application data
-     * should be writte
-     * @param dataOffset the offser where the application data should
+     * should be written
+     * @param dataOffset the offset where the application data should
      * be written.
      * @throws GSSException is an error occurs while decrypting the
      * data
@@ -1087,12 +1014,12 @@ class CipherHelper {
         InputStream is, int len, byte[] dataOutBuf, int dataOffset)
         throws GSSException, IOException {
 
-        int temp = 0;
+        int temp;
 
         Cipher des = getInitializedDes(false, key, ZERO_IV);
 
         WrapTokenInputStream truncatedInputStream =
-            new WrapTokenInputStream(is, len);
+                new WrapTokenInputStream(is, len);
         CipherInputStream cis = new CipherInputStream(truncatedInputStream,
                                                       des);
         /*
@@ -1415,14 +1342,11 @@ class CipherHelper {
         }
     }
 
-    private void aes128Decrypt(WrapToken_v2 token, byte[] ciphertext,
-        int cStart, int cLen, byte[] plaintext, int pStart, int key_usage)
-        throws GSSException {
-
-        byte[] ptext = null;
+    private byte[] aes128Decrypt(byte[] ciphertext,
+            int cStart, int cLen, int key_usage) throws GSSException {
 
         try {
-            ptext = Aes128.decryptRaw(keybytes, key_usage,
+            return Aes128.decryptRaw(keybytes, key_usage,
                         ZERO_IV_AES, ciphertext, cStart, cLen);
         } catch (GeneralSecurityException e) {
             GSSException ge = new GSSException(GSSException.FAILURE, -1,
@@ -1430,36 +1354,13 @@ class CipherHelper {
             ge.initCause(e);
             throw ge;
         }
-
-        /*
-        Krb5Token.debug("\naes128Decrypt in: " +
-            Krb5Token.getHexBytes(ciphertext, cStart, cLen));
-        Krb5Token.debug("\naes128Decrypt plain: " +
-            Krb5Token.getHexBytes(ptext));
-        Krb5Token.debug("\naes128Decrypt ptext: " +
-            Krb5Token.getHexBytes(ptext));
-        */
-
-        // Strip out confounder and token header
-        int len = ptext.length - WrapToken_v2.CONFOUNDER_SIZE -
-                        WrapToken_v2.TOKEN_HEADER_SIZE;
-        System.arraycopy(ptext, WrapToken_v2.CONFOUNDER_SIZE,
-                                plaintext, pStart, len);
-
-        /*
-        Krb5Token.debug("\naes128Decrypt plaintext: " +
-            Krb5Token.getHexBytes(plaintext, pStart, len));
-        */
     }
 
-    private void aes128Sha2Decrypt(WrapToken_v2 token, byte[] ciphertext,
-            int cStart, int cLen, byte[] plaintext, int pStart, int key_usage)
-            throws GSSException {
-
-        byte[] ptext = null;
+    private byte[] aes128Sha2Decrypt(byte[] ciphertext,
+            int cStart, int cLen, int key_usage) throws GSSException {
 
         try {
-            ptext = Aes128Sha2.decryptRaw(keybytes, key_usage,
+            return Aes128Sha2.decryptRaw(keybytes, key_usage,
                     ZERO_IV_AES, ciphertext, cStart, cLen);
         } catch (GeneralSecurityException e) {
             GSSException ge = new GSSException(GSSException.FAILURE, -1,
@@ -1467,26 +1368,6 @@ class CipherHelper {
             ge.initCause(e);
             throw ge;
         }
-
-        /*
-        Krb5Token.debug("\naes128Sha2Decrypt in: " +
-            Krb5Token.getHexBytes(ciphertext, cStart, cLen));
-        Krb5Token.debug("\naes128Sha2Decrypt plain: " +
-            Krb5Token.getHexBytes(ptext));
-        Krb5Token.debug("\naes128Sha2Decrypt ptext: " +
-            Krb5Token.getHexBytes(ptext));
-        */
-
-        // Strip out confounder and token header
-        int len = ptext.length - WrapToken_v2.CONFOUNDER_SIZE -
-                WrapToken_v2.TOKEN_HEADER_SIZE;
-        System.arraycopy(ptext, WrapToken_v2.CONFOUNDER_SIZE,
-                plaintext, pStart, len);
-
-        /*
-        Krb5Token.debug("\naes128Sha2Decrypt plaintext: " +
-            Krb5Token.getHexBytes(plaintext, pStart, len));
-        */
     }
 
     private byte[] aes256Encrypt(byte[] confounder, byte[] tokenHeader,
@@ -1553,13 +1434,11 @@ class CipherHelper {
         }
     }
 
-    private void aes256Decrypt(WrapToken_v2 token, byte[] ciphertext,
-        int cStart, int cLen, byte[] plaintext, int pStart, int key_usage)
-        throws GSSException {
+    private byte[] aes256Decrypt(byte[] ciphertext,
+            int cStart, int cLen, int key_usage) throws GSSException {
 
-        byte[] ptext;
         try {
-            ptext = Aes256.decryptRaw(keybytes, key_usage,
+            return Aes256.decryptRaw(keybytes, key_usage,
                         ZERO_IV_AES, ciphertext, cStart, cLen);
         } catch (GeneralSecurityException e) {
             GSSException ge = new GSSException(GSSException.FAILURE, -1,
@@ -1567,36 +1446,13 @@ class CipherHelper {
             ge.initCause(e);
             throw ge;
         }
-
-        /*
-        Krb5Token.debug("\naes256Decrypt in: " +
-            Krb5Token.getHexBytes(ciphertext, cStart, cLen));
-        Krb5Token.debug("\naes256Decrypt plain: " +
-            Krb5Token.getHexBytes(ptext));
-        Krb5Token.debug("\naes256Decrypt ptext: " +
-            Krb5Token.getHexBytes(ptext));
-        */
-
-        // Strip out confounder and token header
-        int len = ptext.length - WrapToken_v2.CONFOUNDER_SIZE -
-                        WrapToken_v2.TOKEN_HEADER_SIZE;
-        System.arraycopy(ptext, WrapToken_v2.CONFOUNDER_SIZE,
-                                plaintext, pStart, len);
-
-        /*
-        Krb5Token.debug("\naes128Decrypt plaintext: " +
-            Krb5Token.getHexBytes(plaintext, pStart, len));
-        */
-
     }
 
-    private void aes256Sha2Decrypt(WrapToken_v2 token, byte[] ciphertext,
-            int cStart, int cLen, byte[] plaintext, int pStart, int key_usage)
-            throws GSSException {
+    private byte[] aes256Sha2Decrypt(byte[] ciphertext,
+            int cStart, int cLen, int key_usage) throws GSSException {
 
-        byte[] ptext;
         try {
-            ptext = Aes256Sha2.decryptRaw(keybytes, key_usage,
+            return Aes256Sha2.decryptRaw(keybytes, key_usage,
                     ZERO_IV_AES, ciphertext, cStart, cLen);
         } catch (GeneralSecurityException e) {
             GSSException ge = new GSSException(GSSException.FAILURE, -1,
@@ -1604,27 +1460,6 @@ class CipherHelper {
             ge.initCause(e);
             throw ge;
         }
-
-        /*
-        Krb5Token.debug("\naes256Sha2Decrypt in: " +
-            Krb5Token.getHexBytes(ciphertext, cStart, cLen));
-        Krb5Token.debug("\naes256Sha2Decrypt plain: " +
-            Krb5Token.getHexBytes(ptext));
-        Krb5Token.debug("\naes256Sha2Decrypt ptext: " +
-            Krb5Token.getHexBytes(ptext));
-        */
-
-        // Strip out confounder and token header
-        int len = ptext.length - WrapToken_v2.CONFOUNDER_SIZE -
-                WrapToken_v2.TOKEN_HEADER_SIZE;
-        System.arraycopy(ptext, WrapToken_v2.CONFOUNDER_SIZE,
-                plaintext, pStart, len);
-
-        /*
-        Krb5Token.debug("\naes256Sha2Decrypt plaintext: " +
-            Krb5Token.getHexBytes(plaintext, pStart, len));
-        */
-
     }
 
     /**
@@ -1633,10 +1468,10 @@ class CipherHelper {
      * the CipherInputStream from treating the bytes of the following token
      * as part fo the ciphertext for this token.
      */
-    class WrapTokenInputStream extends InputStream {
+    static class WrapTokenInputStream extends InputStream {
 
-        private InputStream is;
-        private int length;
+        private final InputStream is;
+        private final int length;
         private int remaining;
 
         private int temp;

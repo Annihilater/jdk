@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@
  * @library /test/lib /test/hotspot/jtreg/runtime/cds/appcds /test/hotspot/jtreg/runtime/cds/appcds/test-classes
  * @requires vm.cds
  * @requires vm.jvmti
- * @build sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
  *        InstrumentationApp
  *        InstrumentationClassFileTransformer
  *        InstrumentationRegisterClassFileTransformer
@@ -53,7 +53,7 @@ public class InstrumentationTest {
     public static String bootClasses[] = {
         "InstrumentationApp$Intf",
         "InstrumentationApp$Bar",
-        "sun.hotspot.WhiteBox",
+        "jdk.test.whitebox.WhiteBox",
     };
     public static String appClasses[] = {
         "InstrumentationApp",
@@ -115,6 +115,7 @@ public class InstrumentationTest {
             .setXShareMode("off")
             .addSuffix(bootCP,
                        "-cp", appJar,
+                       "-XX:+EnableDynamicAgentLoading",
                        "-XX:+UnlockDiagnosticVMOptions",
                        "-XX:+WhiteBoxAPI",
                        "-Xshare:off",
@@ -152,6 +153,7 @@ public class InstrumentationTest {
         t = doAttach(attachAgent, flagFile, agentJar);
         out = TestCommon.execAuto("-cp", appJar,
                 bootCP,
+                "-XX:+EnableDynamicAgentLoading",
                 "-XX:+UnlockDiagnosticVMOptions",
                 "-XX:+WhiteBoxAPI",
                 agentCmdArg,

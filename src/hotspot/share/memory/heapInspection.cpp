@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "classfile/classLoaderData.inline.hpp"
 #include "classfile/classLoaderDataGraph.hpp"
 #include "classfile/moduleEntry.hpp"
@@ -33,10 +32,15 @@
 #include "memory/heapInspection.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
+#include "nmt/memTracker.hpp"
+#include "oops/fieldInfo.hpp"
+#include "oops/fieldStreams.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.hpp"
+#include "oops/valueKlass.inline.hpp"
+#include "runtime/atomicAccess.hpp"
+#include "runtime/fieldDescriptor.inline.hpp"
 #include "runtime/os.hpp"
-#include "services/memTracker.hpp"
+#include "services/diagnosticWorkers.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/stack.inline.hpp"
@@ -44,14 +48,14 @@
 // HeapInspection
 
 inline KlassInfoEntry::~KlassInfoEntry() {
-  if (_subclasses != NULL) {
+  if (_subclasses != nullptr) {
     delete _subclasses;
   }
 }
 
 inline void KlassInfoEntry::add_subclass(KlassInfoEntry* cie) {
-  if (_subclasses == NULL) {
-    _subclasses = new  (ResourceObj::C_HEAP, mtServiceability) GrowableArray<KlassInfoEntry*>(4, mtServiceability);
+  if (_subclasses == nullptr) {
+    _subclasses = new (mtServiceability) GrowableArray<KlassInfoEntry*>(4, mtServiceability);
   }
   _subclasses->append(cie);
 }
@@ -80,21 +84,40 @@ int KlassInfoEntry::compare(KlassInfoEntry* e1, KlassInfoEntry* e2) {
 
 const char* KlassInfoEntry::name() const {
   const char* name;
-  if (_klass->name() != NULL) {
+  if (_klass->name() != nullptr) {
     name = _klass->external_name();
   } else {
-    if (_klass == Universe::boolArrayKlassObj())         name = "<boolArrayKlass>";         else
-    if (_klass == Universe::charArrayKlassObj())         name = "<charArrayKlass>";         else
-    if (_klass == Universe::floatArrayKlassObj())        name = "<floatArrayKlass>";        else
-    if (_klass == Universe::doubleArrayKlassObj())       name = "<doubleArrayKlass>";       else
-    if (_klass == Universe::byteArrayKlassObj())         name = "<byteArrayKlass>";         else
-    if (_klass == Universe::shortArrayKlassObj())        name = "<shortArrayKlass>";        else
-    if (_klass == Universe::intArrayKlassObj())          name = "<intArrayKlass>";          else
-    if (_klass == Universe::longArrayKlassObj())         name = "<longArrayKlass>";         else
+    if (_klass == Universe::boolArrayKlass())         name = "<boolArrayKlass>";         else
+    if (_klass == Universe::charArrayKlass())         name = "<charArrayKlass>";         else
+    if (_klass == Universe::floatArrayKlass())        name = "<floatArrayKlass>";        else
+    if (_klass == Universe::doubleArrayKlass())       name = "<doubleArrayKlass>";       else
+    if (_klass == Universe::byteArrayKlass())         name = "<byteArrayKlass>";         else
+    if (_klass == Universe::shortArrayKlass())        name = "<shortArrayKlass>";        else
+    if (_klass == Universe::intArrayKlass())          name = "<intArrayKlass>";          else
+    if (_klass == Universe::longArrayKlass())         name = "<longArrayKlass>";         else
       name = "<no name>";
   }
   return name;
 }
+
+const char* KlassInfoEntry::layout() const {
+  if (_klass->is_flatArray_klass()) {
+    switch (FlatArrayKlass::cast(_klass)->layout_kind()) {
+    case LayoutKind::NULL_FREE_NON_ATOMIC_FLAT:
+      return " [flat, null-restricted, non-atomic]";
+    case LayoutKind::NULL_FREE_ATOMIC_FLAT:
+      return " [flat, null-restricted, atomic]";
+    case LayoutKind::NULLABLE_NON_ATOMIC_FLAT:
+      return " [flat, nullable, non-atomic]";
+    case LayoutKind::NULLABLE_ATOMIC_FLAT:
+      return " [flat, nullable, atomic]";
+    default:
+      return " [unknown layout]";
+    }
+  }
+  return "";
+}
+
 
 void KlassInfoEntry::print_on(outputStream* st) const {
   ResourceMark rm;
@@ -102,29 +125,31 @@ void KlassInfoEntry::print_on(outputStream* st) const {
   // simplify the formatting (ILP32 vs LP64) - always cast the numbers to 64-bit
   ModuleEntry* module = _klass->module();
   if (module->is_named()) {
-    st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s (%s%s%s)",
+    st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s%s (%s%s%s)",
                  (int64_t)_instance_count,
                  (uint64_t)_instance_words * HeapWordSize,
                  name(),
+                 layout(),
                  module->name()->as_C_string(),
-                 module->version() != NULL ? "@" : "",
-                 module->version() != NULL ? module->version()->as_C_string() : "");
+                 module->version() != nullptr ? "@" : "",
+                 module->version() != nullptr ? module->version()->as_C_string() : "");
   } else {
-    st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s",
+    st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s%s",
                  (int64_t)_instance_count,
                  (uint64_t)_instance_words * HeapWordSize,
-                 name());
+                 name(),
+                 layout());
   }
 }
 
 KlassInfoEntry* KlassInfoBucket::lookup(Klass* const k) {
   // Can happen if k is an archived class that we haven't loaded yet.
-  if (k->java_mirror_no_keepalive() == NULL) {
-    return NULL;
+  if (k->java_mirror_no_keepalive() == nullptr) {
+    return nullptr;
   }
 
   KlassInfoEntry* elt = _list;
-  while (elt != NULL) {
+  while (elt != nullptr) {
     if (elt->is_equal(k)) {
       return elt;
     }
@@ -132,7 +157,7 @@ KlassInfoEntry* KlassInfoBucket::lookup(Klass* const k) {
   }
   elt = new (std::nothrow) KlassInfoEntry(k, list());
   // We may be out of space to allocate the new entry.
-  if (elt != NULL) {
+  if (elt != nullptr) {
     set_list(elt);
   }
   return elt;
@@ -140,7 +165,7 @@ KlassInfoEntry* KlassInfoBucket::lookup(Klass* const k) {
 
 void KlassInfoBucket::iterate(KlassInfoClosure* cic) {
   KlassInfoEntry* elt = _list;
-  while (elt != NULL) {
+  while (elt != nullptr) {
     cic->do_cinfo(elt);
     elt = elt->next();
   }
@@ -148,8 +173,8 @@ void KlassInfoBucket::iterate(KlassInfoClosure* cic) {
 
 void KlassInfoBucket::empty() {
   KlassInfoEntry* elt = _list;
-  _list = NULL;
-  while (elt != NULL) {
+  _list = nullptr;
+  while (elt != nullptr) {
     KlassInfoEntry* next = elt->next();
     delete elt;
     elt = next;
@@ -170,11 +195,11 @@ public:
 
 KlassInfoTable::KlassInfoTable(bool add_all_classes) {
   _size_of_instances_in_words = 0;
-  _ref = (HeapWord*) Universe::boolArrayKlassObj();
+  _ref = (uintptr_t) Universe::boolArrayKlass();
   _buckets =
     (KlassInfoBucket*)  AllocateHeap(sizeof(KlassInfoBucket) * _num_buckets,
        mtInternal, CURRENT_PC, AllocFailStrategy::RETURN_NULL);
-  if (_buckets != NULL) {
+  if (_buckets != nullptr) {
     for (int index = 0; index < _num_buckets; index++) {
       _buckets[index].initialize();
     }
@@ -186,27 +211,27 @@ KlassInfoTable::KlassInfoTable(bool add_all_classes) {
 }
 
 KlassInfoTable::~KlassInfoTable() {
-  if (_buckets != NULL) {
+  if (_buckets != nullptr) {
     for (int index = 0; index < _num_buckets; index++) {
       _buckets[index].empty();
     }
-    FREE_C_HEAP_ARRAY(KlassInfoBucket, _buckets);
-    _buckets = NULL;
+    FREE_C_HEAP_ARRAY(_buckets);
+    _buckets = nullptr;
   }
 }
 
 uint KlassInfoTable::hash(const Klass* p) {
-  return (uint)(((uintptr_t)p - (uintptr_t)_ref) >> 2);
+  return (uint)(((uintptr_t)p - _ref) >> 2);
 }
 
 KlassInfoEntry* KlassInfoTable::lookup(Klass* k) {
   uint         idx = hash(k) % _num_buckets;
-  assert(_buckets != NULL, "Allocation failure should have been caught");
+  assert(_buckets != nullptr, "Allocation failure should have been caught");
   KlassInfoEntry*  e   = _buckets[idx].lookup(k);
   // Lookup may fail if this is a new klass for which we
   // could not allocate space for an new entry, or if it's
   // an archived class that we haven't loaded yet.
-  assert(e == NULL || k == e->klass(), "must be equal");
+  assert(e == nullptr || k == e->klass(), "must be equal");
   return e;
 }
 
@@ -215,9 +240,9 @@ KlassInfoEntry* KlassInfoTable::lookup(Klass* k) {
 bool KlassInfoTable::record_instance(const oop obj) {
   Klass*        k = obj->klass();
   KlassInfoEntry* elt = lookup(k);
-  // elt may be NULL if it's a new klass for which we
+  // elt may be null if it's a new klass for which we
   // could not allocate space for a new entry in the hashtable.
-  if (elt != NULL) {
+  if (elt != nullptr) {
     elt->set_count(elt->count() + 1);
     elt->set_words(elt->words() + obj->size());
     _size_of_instances_in_words += obj->size();
@@ -228,7 +253,7 @@ bool KlassInfoTable::record_instance(const oop obj) {
 }
 
 void KlassInfoTable::iterate(KlassInfoClosure* cic) {
-  assert(_buckets != NULL, "Allocation failure should have been caught");
+  assert(_buckets != nullptr, "Allocation failure should have been caught");
   for (int index = 0; index < _num_buckets; index++) {
     _buckets[index].iterate(cic);
   }
@@ -243,9 +268,9 @@ size_t KlassInfoTable::size_of_instances_in_words() const {
 bool KlassInfoTable::merge_entry(const KlassInfoEntry* cie) {
   Klass*          k = cie->klass();
   KlassInfoEntry* elt = lookup(k);
-  // elt may be NULL if it's a new klass for which we
+  // elt may be null if it's a new klass for which we
   // could not allocate space for a new entry in the hashtable.
-  if (elt != NULL) {
+  if (elt != nullptr) {
     elt->set_count(elt->count() + cie->count());
     elt->set_words(elt->words() + cie->words());
     _size_of_instances_in_words += cie->words();
@@ -279,7 +304,7 @@ int KlassInfoHisto::sort_helper(KlassInfoEntry** e1, KlassInfoEntry** e2) {
 
 KlassInfoHisto::KlassInfoHisto(KlassInfoTable* cit) :
   _cit(cit) {
-  _elements = new (ResourceObj::C_HEAP, mtServiceability) GrowableArray<KlassInfoEntry*>(_histo_initial_size, mtServiceability);
+  _elements = new (mtServiceability) GrowableArray<KlassInfoEntry*>(_histo_initial_size, mtServiceability);
 }
 
 KlassInfoHisto::~KlassInfoHisto() {
@@ -349,9 +374,9 @@ void KlassHierarchy::print_class_hierarchy(outputStream* st, bool print_interfac
     cie->set_index(i + 1);
 
     // Add the class to the subclass array of its superclass.
-    if (super != NULL) {
+    if (super != nullptr) {
       KlassInfoEntry* super_cie = cit.lookup(super);
-      assert(super_cie != NULL, "could not lookup superclass");
+      assert(super_cie != nullptr, "could not lookup superclass");
       super_cie->add_subclass(cie);
     }
   }
@@ -359,12 +384,13 @@ void KlassHierarchy::print_class_hierarchy(outputStream* st, bool print_interfac
   // Set the do_print flag for each class that should be printed.
   for(int i = 0; i < elements.length(); i++) {
     KlassInfoEntry* cie = elements.at(i);
-    if (classname == NULL) {
+    if (classname == nullptr) {
       // We are printing all classes.
       cie->set_do_print(true);
     } else {
       // We are only printing the hierarchy of a specific class.
       if (strcmp(classname, cie->klass()->external_name()) == 0) {
+        assert(cie->klass()->is_instance_klass(), "elements array contains only instance klasses");
         KlassHierarchy::set_do_print_for_class_hierarchy(cie, &cit, print_subclasses);
       }
     }
@@ -374,7 +400,7 @@ void KlassHierarchy::print_class_hierarchy(outputStream* st, bool print_interfac
   // maintain the list of classes we still need to process. Start things off
   // by priming it with java.lang.Object.
   KlassInfoEntry* jlo_cie = cit.lookup(vmClasses::Object_klass());
-  assert(jlo_cie != NULL, "could not lookup java.lang.Object");
+  assert(jlo_cie != nullptr, "could not lookup java.lang.Object");
   class_stack.push(jlo_cie);
 
   // Repeatedly pop the top item off the stack, print its class info,
@@ -384,7 +410,7 @@ void KlassHierarchy::print_class_hierarchy(outputStream* st, bool print_interfac
     KlassInfoEntry* curr_cie = class_stack.pop();
     if (curr_cie->do_print()) {
       print_class(st, curr_cie, print_interfaces);
-      if (curr_cie->subclasses() != NULL) {
+      if (curr_cie->subclasses() != nullptr) {
         // Current class has subclasses, so push all of them onto the stack.
         for (int i = 0; i < curr_cie->subclasses()->length(); i++) {
           KlassInfoEntry* cie = curr_cie->subclasses()->at(i);
@@ -403,8 +429,8 @@ void KlassHierarchy::print_class_hierarchy(outputStream* st, bool print_interfac
 void KlassHierarchy::set_do_print_for_class_hierarchy(KlassInfoEntry* cie, KlassInfoTable* cit,
                                                       bool print_subclasses) {
   // Set do_print for all superclasses of this class.
-  Klass* super = ((InstanceKlass*)cie->klass())->java_super();
-  while (super != NULL) {
+  InstanceKlass* super = InstanceKlass::cast(cie->klass())->super();
+  while (super != nullptr) {
     KlassInfoEntry* super_cie = cit->lookup(super);
     super_cie->set_do_print(true);
     super = super->super();
@@ -416,7 +442,7 @@ void KlassHierarchy::set_do_print_for_class_hierarchy(KlassInfoEntry* cie, Klass
   while (!class_stack.is_empty()) {
     KlassInfoEntry* curr_cie = class_stack.pop();
     curr_cie->set_do_print(true);
-    if (print_subclasses && curr_cie->subclasses() != NULL) {
+    if (print_subclasses && curr_cie->subclasses() != nullptr) {
       // Current class has subclasses, so push all of them onto the stack.
       for (int i = 0; i < curr_cie->subclasses()->length(); i++) {
         KlassInfoEntry* cie = curr_cie->subclasses()->at(i);
@@ -436,14 +462,14 @@ static void print_indent(outputStream* st, int indent) {
   }
 }
 
-// Print the class name and its unique ClassLoader identifer.
+// Print the class name and its unique ClassLoader identifier.
 static void print_classname(outputStream* st, Klass* klass) {
   oop loader_oop = klass->class_loader_data()->class_loader();
   st->print("%s/", klass->external_name());
-  if (loader_oop == NULL) {
+  if (loader_oop == nullptr) {
     st->print("null");
   } else {
-    st->print(INTPTR_FORMAT, p2i(klass->class_loader_data()));
+    st->print(PTR_FORMAT, p2i(klass->class_loader_data()));
   }
 }
 
@@ -461,14 +487,14 @@ void KlassHierarchy::print_class(outputStream* st, KlassInfoEntry* cie, bool pri
 
   // Print indentation with proper indicators of superclass.
   Klass* super = klass->super();
-  while (super != NULL) {
+  while (super != nullptr) {
     super = super->super();
     indent++;
   }
   print_indent(st, indent);
   if (indent != 0) st->print("--");
 
-  // Print the class name, its unique ClassLoader identifer, and if it is an interface.
+  // Print the class name, its unique ClassLoader identifier, and if it is an interface.
   print_classname(st, klass);
   if (klass->is_interface()) {
     st->print(" (intf)");
@@ -509,6 +535,131 @@ class HistoClosure : public KlassInfoClosure {
   }
 };
 
+class FindClassByNameClosure : public KlassInfoClosure {
+ private:
+  GrowableArray<Klass*>* _klasses;
+  Symbol* _classname;
+ public:
+  FindClassByNameClosure(GrowableArray<Klass*>* klasses, Symbol* classname) :
+    _klasses(klasses), _classname(classname) { }
+
+  void do_cinfo(KlassInfoEntry* cie) {
+    if (cie->klass()->name() == _classname) {
+      _klasses->append(cie->klass());
+    }
+  }
+};
+
+class FieldDesc {
+private:
+  Symbol* _name;
+  Symbol* _signature;
+  int _offset;
+  int _index;
+  InstanceKlass* _holder;
+  AccessFlags _access_flags;
+  FieldInfo::FieldFlags _field_flags;
+ public:
+  FieldDesc() : _name(nullptr), _signature(nullptr), _offset(-1), _index(-1), _holder(nullptr),
+                _access_flags(AccessFlags()), _field_flags(FieldInfo::FieldFlags((u4)0)) { }
+
+  FieldDesc(fieldDescriptor& fd) : _name(fd.name()), _signature(fd.signature()), _offset(fd.offset()),
+                                   _index(fd.index()), _holder(fd.field_holder()),
+                                   _access_flags(fd.access_flags()), _field_flags(fd.field_flags()) { }
+
+  const Symbol* name() { return _name;}
+  const Symbol* signature() { return _signature; }
+  int offset() const { return _offset; }
+  int index() const { return _index; }
+  const InstanceKlass* holder() { return _holder; }
+  const AccessFlags& access_flags() { return _access_flags; }
+  bool is_null_free_value_type() const { return _field_flags.is_null_free_value_type(); }
+};
+
+static int compare_offset(FieldDesc* f1, FieldDesc* f2) {
+   return f1->offset() > f2->offset() ? 1 : -1;
+}
+
+static void print_field(outputStream* st, int level, int offset, FieldDesc& fd, bool is_value_type, bool is_flat ) {
+  const char* flat_field_msg = is_flat ? "flat" : "";
+  st->print_cr("  @ %d %*s \"%s\" %s %s %s",
+      offset, level * 3, "",
+      fd.name()->as_C_string(),
+      fd.signature()->as_C_string(),
+      is_value_type ? " // value type " : "",
+      flat_field_msg);
+}
+
+static void print_flat_field(outputStream* st, int level, int offset, InstanceKlass* klass) {
+  assert(klass->is_value_klass(), "Only value types can be flat");
+  ValueKlass* vklass = ValueKlass::cast(klass);
+  GrowableArray<FieldDesc>* fields = new (mtServiceability) GrowableArray<FieldDesc>(100, mtServiceability);
+  for (AllFieldStream fd(klass); !fd.done(); fd.next()) {
+    if (!fd.access_flags().is_static()) {
+      fields->append(FieldDesc(fd.field_descriptor()));
+    }
+  }
+  fields->sort(compare_offset);
+  for(int i = 0; i < fields->length(); i++) {
+    FieldDesc fd = fields->at(i);
+    int offset2 = offset + fd.offset() - vklass->payload_offset();
+    print_field(st, level, offset2, fd,
+        fd.is_null_free_value_type(), fd.holder()->field_is_flat(fd.index()));
+    if (fd.holder()->field_is_flat(fd.index())) {
+      print_flat_field(st, level + 1, offset2 ,
+          InstanceKlass::cast(fd.holder()->get_value_type_field_klass(fd.index())));
+    }
+  }
+}
+
+void ClassPrintLayout::class_print_layout(outputStream* st, char* class_name) {
+  KlassInfoTable cit(true);
+  if (cit.allocation_failed()) {
+    st->print_cr("ERROR: Ran out of C-heap; hierarchy not generated");
+    return;
+  }
+
+  ResourceMark rm;
+  char* normalized_name = ResourceArea::strdup(class_name);
+  for (char* p = normalized_name; *p != '\0'; p++) {
+    if (*p == JVM_SIGNATURE_DOT) {
+      *p = JVM_SIGNATURE_SLASH;
+    }
+  }
+
+  Symbol* classname = SymbolTable::probe(normalized_name, (int)strlen(normalized_name));
+
+  GrowableArray<Klass*>* klasses = new (mtServiceability) GrowableArray<Klass*>(100, mtServiceability);
+
+  FindClassByNameClosure fbnc(klasses, classname);
+  cit.iterate(&fbnc);
+
+  for(int i = 0; i < klasses->length(); i++) {
+    Klass* klass = klasses->at(i);
+    if (!klass->is_instance_klass()) continue;  // Skip
+    InstanceKlass* ik = InstanceKlass::cast(klass);
+    ResourceMark rm;
+    st->print_cr("Class %s [@%s]:", klass->external_name(),
+                 klass->class_loader_data()->loader_name());
+    GrowableArray<FieldDesc>* fields = new (mtServiceability) GrowableArray<FieldDesc>(100, mtServiceability);
+    for (AllFieldStream fd(ik); !fd.done(); fd.next()) {
+      if (!fd.access_flags().is_static()) {
+        fields->append(FieldDesc(fd.field_descriptor()));
+      }
+    }
+    fields->sort(compare_offset);
+    for(int i = 0; i < fields->length(); i++) {
+      FieldDesc fd = fields->at(i);
+      print_field(st, 0, fd.offset(), fd, fd.is_null_free_value_type(), fd.holder()->field_is_flat(fd.index()));
+      if (fd.holder()->field_is_flat(fd.index())) {
+        print_flat_field(st, 1, fd.offset(),
+            InstanceKlass::cast(fd.holder()->get_value_type_field_klass(fd.index())));
+      }
+    }
+  }
+  st->cr();
+}
+
 class RecordInstanceClosure : public ObjectClosure {
  private:
   KlassInfoTable* _cit;
@@ -530,7 +681,7 @@ class RecordInstanceClosure : public ObjectClosure {
 
  private:
   bool should_visit(oop obj) {
-    return _filter == NULL || _filter->do_object_b(obj);
+    return _filter == nullptr || _filter->do_object_b(obj);
   }
 };
 
@@ -539,7 +690,7 @@ class RecordInstanceClosure : public ObjectClosure {
 void ParHeapInspectTask::work(uint worker_id) {
   uintx missed_count = 0;
   bool merge_success = true;
-  if (!Atomic::load(&_success)) {
+  if (!AtomicAccess::load(&_success)) {
     // other worker has failed on parallel iteration.
     return;
   }
@@ -547,7 +698,7 @@ void ParHeapInspectTask::work(uint worker_id) {
   KlassInfoTable cit(false);
   if (cit.allocation_failed()) {
     // fail to allocate memory, stop parallel mode
-    Atomic::store(&_success, false);
+    AtomicAccess::store(&_success, false);
     return;
   }
   RecordInstanceClosure ric(&cit, _filter);
@@ -558,33 +709,22 @@ void ParHeapInspectTask::work(uint worker_id) {
     merge_success = _shared_cit->merge(&cit);
   }
   if (merge_success) {
-    Atomic::add(&_missed_count, missed_count);
+    AtomicAccess::add(&_missed_count, missed_count);
   } else {
-    Atomic::store(&_success, false);
+    AtomicAccess::store(&_success, false);
   }
 }
 
-uintx HeapInspection::populate_table(KlassInfoTable* cit, BoolObjectClosure *filter, uint parallel_thread_num) {
-
+uintx HeapInspection::populate_table(KlassInfoTable* cit, BoolObjectClosure *filter, WorkerThreads* workers) {
   // Try parallel first.
-  if (parallel_thread_num > 1) {
+  if (workers != nullptr) {
     ResourceMark rm;
-
-    WorkerThreads* workers = Universe::heap()->safepoint_workers();
-    if (workers != NULL) {
-      // The GC provided a WorkerThreads to be used during a safepoint.
-
-      // Can't run with more threads than provided by the WorkerThreads.
-      const uint capped_parallel_thread_num = MIN2(parallel_thread_num, workers->max_workers());
-      WithActiveWorkers with_active_workers(workers, capped_parallel_thread_num);
-
-      ParallelObjectIterator poi(workers->active_workers());
-      ParHeapInspectTask task(&poi, cit, filter);
-      // Run task with the active workers.
-      workers->run_task(&task);
-      if (task.success()) {
-        return task.missed_count();
-      }
+    ParallelObjectIterator poi(workers->active_workers());
+    ParHeapInspectTask task(&poi, cit, filter);
+    // Run task with the active workers.
+    workers->run_task(&task);
+    if (task.success()) {
+      return task.missed_count();
     }
   }
 
@@ -595,15 +735,24 @@ uintx HeapInspection::populate_table(KlassInfoTable* cit, BoolObjectClosure *fil
   return ric.missed_count();
 }
 
-void HeapInspection::heap_inspection(outputStream* st, uint parallel_thread_num) {
+void HeapInspection::heap_inspection(outputStream* st, uint num_workers) {
   ResourceMark rm;
+
+  // Use parallel workers if we have enough active workers and parallel heap iteration is supported.
+  WorkerThreads* workers = nullptr;
+  if (Universe::heap()->supports_parallel_object_iteration() && num_workers > 1) {
+    const uint active_workers = DiagnosticWorkers::try_and_set_active_workers(num_workers);
+    if (active_workers > 1) {
+      workers = DiagnosticWorkers::workers();
+    }
+  }
 
   KlassInfoTable cit(false);
   if (!cit.allocation_failed()) {
     // populate table with object allocation info
-    uintx missed_count = populate_table(&cit, NULL, parallel_thread_num);
+    uintx missed_count = populate_table(&cit, nullptr, workers);
     if (missed_count != 0) {
-      log_info(gc, classhisto)("WARNING: Ran out of C-heap; undercounted " UINTX_FORMAT
+      log_info(gc, classhisto)("WARNING: Ran out of C-heap; undercounted %zu"
                                " total instances in data below",
                                missed_count);
     }
